@@ -15,12 +15,12 @@ import sys
 import uuid
 from datetime import datetime, timezone
 
-from openai import OpenAI
+import llm_client
+from llm_client import make_client
 
 from tool_executors import TOOL_REGISTRY, TOOL_SCHEMAS
 
 MAX_ITERATIONS = 5
-MODEL = "deepseek-chat"
 MAX_TOKENS = 1500
 
 GREETING_RE = re.compile(
@@ -66,27 +66,6 @@ def _get_ls_client():
     except Exception as err:
         sys.stderr.write(f"langsmith Client init failed: {err}\n")
         return None
-
-
-def make_client(api_key):
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-    ls_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")
-    if ls_key:
-        os.environ.setdefault("LANGCHAIN_API_KEY", ls_key)
-        os.environ.setdefault("LANGSMITH_API_KEY", ls_key)
-        os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
-        proj = os.environ.get("LANGSMITH_PROJECT") or os.environ.get("LANGCHAIN_PROJECT")
-        if proj:
-            os.environ.setdefault("LANGCHAIN_PROJECT", proj)
-        try:
-            from langsmith.wrappers import wrap_openai
-            sys.stderr.write(f"langsmith tracing enabled, project={proj or 'default'}\n")
-            return wrap_openai(client)
-        except ImportError:
-            sys.stderr.write("langsmith not installed; tracing disabled\n")
-    else:
-        sys.stderr.write("no LANGSMITH/LANGCHAIN_API_KEY in env; tracing disabled\n")
-    return client
 
 
 def _tool_call_to_message(tc):
@@ -147,12 +126,12 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS, thr
 
 def _run_loop(client, messages, max_iterations, ls_extra):
     for iteration in range(max_iterations):
-        resp = client.chat.completions.create(
-            model=MODEL,
+        resp = llm_client.complete(
+            client,
             messages=messages,
+            max_tokens=MAX_TOKENS,
             tools=TOOL_SCHEMAS,
             tool_choice="auto",
-            max_tokens=MAX_TOKENS,
             langsmith_extra=ls_extra,
         )
         msg = resp.choices[0].message
@@ -197,8 +176,8 @@ def _run_loop(client, messages, max_iterations, ls_extra):
         f"agentic_drafter hit MAX_ITERATIONS={max_iterations}; "
         "forcing final draft without further tool calls.\n"
     )
-    final = client.chat.completions.create(
-        model=MODEL,
+    final = llm_client.complete(
+        client,
         messages=messages + [{
             "role": "user",
             "content": "Stop calling tools. Write the final reply body now, plain text only.",

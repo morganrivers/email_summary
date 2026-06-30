@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 import requests
 
 import agentic_drafter
+import llm_client
 
 SCRIPT_DIR = Path(__file__).parent
 ENV_FILE = SCRIPT_DIR / ".env"
@@ -77,14 +78,14 @@ def classify(client, emails):
         f"[{i}] From: {e['from']}\nSubject: {e['subject']}\nBody: {e['body'][:1500]}"
         for i, e in enumerate(emails)
     )
-    resp = client.chat.completions.create(
-        model="deepseek-chat",
+    resp = llm_client.complete(
+        client,
         messages=[
             {"role": "system", "content": CLASSIFIER_PROMPT},
             {"role": "user", "content": listing},
         ],
-        response_format={"type": "json_object"},
         max_tokens=2000,
+        response_format={"type": "json_object"},
     )
     parsed = json.loads(resp.choices[0].message.content)
     return {d["index"]: d for d in parsed.get("decisions", [])}

@@ -28,7 +28,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 import requests
-from openai import OpenAI
+
+import llm_client
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).parent
@@ -62,7 +63,7 @@ def fetch_todays_emails_and_events() -> dict:
 
 def summarise(emails: list[dict], events: list[dict]) -> str:
     prompt = PROMPT_FILE.read_text().strip()
-    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    client = llm_client.make_client(DEEPSEEK_API_KEY)
 
     email_text = "\n\n".join(
         f"From: {e['from']}\nSubject: {e['subject']}\n{e['body']}"
@@ -80,8 +81,8 @@ def summarise(emails: list[dict], events: list[dict]) -> str:
     if events:
         user_content += f"\n\nHere are your calendar events for the next 24 hours:\n\n{event_text}"
 
-    resp = client.chat.completions.create(
-        model="deepseek-chat",
+    resp = llm_client.complete(
+        client,
         messages=[
             {"role": "system", "content": prompt},
             {"role": "user", "content": user_content},
