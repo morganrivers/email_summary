@@ -21,7 +21,7 @@ from llm_client import make_client
 from tool_executors import TOOL_REGISTRY, TOOL_SCHEMAS
 
 MAX_ITERATIONS = 5
-MAX_TOKENS = 1500
+MAX_TOKENS = 32000
 
 GREETING_RE = re.compile(
     r'^(Hi|Hello|Hey|Dear|Good\s+(morning|afternoon|evening))\b',
@@ -76,7 +76,8 @@ def _tool_call_to_message(tc):
     }
 
 
-def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS, thread_id=None):
+def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
+          thread_id=None, on_iteration=None):
     now = datetime.now(timezone.utc).isoformat()
     system_with_time = (
         f"{system_prompt}\n\n"
@@ -92,7 +93,10 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS, thr
         "no notes about why you wrote it that way. Just the email.\n\n"
         "PUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. "
         "Use commas, periods, parentheses, or restructured sentences instead. "
-        "Em-dashes will cause the draft to be rejected."
+        "Em-dashes will cause the draft to be rejected.\n\n"
+        "REASONING BUDGET: Keep your internal reasoning under 1000 words. "
+        "Do not exhaustively explore alternatives. Decide quickly, then write. "
+        "The final email content must fit in the response, so leave ample room for it."
     )
     messages = [
         {"role": "system", "content": system_with_time},
@@ -113,18 +117,49 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS, thr
             inputs={"system_prompt": system_prompt[:500], "user_prompt": user_prompt[:2000]},
             metadata={"session_id": session_id, "thread_id": session_id},
         ) as run:
-            body = _run_loop(client, messages, max_iterations, ls_extra)
+            body = _run_loop(client, messages, max_iterations, ls_extra,
+                             on_iteration=on_iteration)
         run_url = None
         try:
             run_url = ls_client.get_run_url(run=run, project_name=project)
         except Exception as err:
             sys.stderr.write(f"get_run_url failed: {err}\n")
         return body, run_url
-    body = _run_loop(client, messages, max_iterations, ls_extra)
+    body = _run_loop(client, messages, max_iterations, ls_extra,
+                     on_iteration=on_iteration)
     return body, None
 
 
-def _run_loop(client, messages, max_iterations, ls_extra):
+def _summarize_tool_result(result):
+    try:
+        s = result if isinstance(result, str) else json.dumps(result)
+    except Exception:
+        s = str(result)
+    return s[:120] + ("..." if len(s) > 120 else "")
+
+
+def _log_iter(iteration, msg, resp):
+    content_len = len(msg.content or "")
+    reasoning_len = len(getattr(msg, "reasoning_content", None) or "")
+    n_tools = len(msg.tool_calls or [])
+    sys.stderr.write(
+        f"drafter iter={iteration} content_len={content_len} "
+        f"reasoning_len={reasoning_len} tool_calls={n_tools} "
+        f"finish_reason={resp.choices[0].finish_reason}\n"
+    )
+
+
+def _safe_notify(on_iteration, *args):
+    if not on_iteration:
+        return
+    try:
+        on_iteration(*args)
+    except Exception as err:
+        sys.stderr.write(f"on_iteration failed: {err}\n")
+
+
+def _run_loop(client, messages, max_iterations, ls_extra, on_iteration=None):
+    tool_history = []
     for iteration in range(max_iterations):
         resp = llm_client.complete(
             client,
@@ -135,9 +170,11 @@ def _run_loop(client, messages, max_iterations, ls_extra):
             langsmith_extra=ls_extra,
         )
         msg = resp.choices[0].message
+        _log_iter(iteration + 1, msg, resp)
 
         if not msg.tool_calls:
             body = (msg.content or "").strip()
+            _safe_notify(on_iteration, iteration + 1, msg, tool_history, True)
             assert body, "drafter returned empty body"
             return _strip_preamble(body)
 
@@ -159,6 +196,7 @@ def _run_loop(client, messages, max_iterations, ls_extra):
             try:
                 fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
             except json.JSONDecodeError:
+                fn_args = {}
                 result = {"error": f"invalid JSON arguments: {tc.function.arguments[:200]}"}
             else:
                 executor = TOOL_REGISTRY.get(fn_name)
@@ -166,11 +204,19 @@ def _run_loop(client, messages, max_iterations, ls_extra):
                     result = {"error": f"unknown tool {fn_name}"}
                 else:
                     result = executor(fn_args)
+            tool_history.append({
+                "iteration": iteration + 1,
+                "name": fn_name,
+                "args": fn_args,
+                "result_summary": _summarize_tool_result(result),
+            })
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "content": json.dumps(result),
             })
+
+        _safe_notify(on_iteration, iteration + 1, msg, tool_history, False)
 
     sys.stderr.write(
         f"agentic_drafter hit MAX_ITERATIONS={max_iterations}; "
@@ -185,6 +231,9 @@ def _run_loop(client, messages, max_iterations, ls_extra):
         max_tokens=MAX_TOKENS,
         langsmith_extra=ls_extra,
     )
-    body = (final.choices[0].message.content or "").strip()
+    final_msg = final.choices[0].message
+    _log_iter(max_iterations + 1, final_msg, final)
+    body = (final_msg.content or "").strip()
+    _safe_notify(on_iteration, max_iterations + 1, final_msg, tool_history, True)
     assert body, "drafter returned empty body after force-stop"
     return _strip_preamble(body)

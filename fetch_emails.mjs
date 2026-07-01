@@ -3,6 +3,7 @@
 import {
     loadClient, ensureAuth, gmailClient, log,
     historyList, fetchMessage, getCurrentHistoryId,
+    listCalendarEvents,
 } from './gmail_lib.mjs';
 
 const MAX_EMAILS = 40;
@@ -59,7 +60,10 @@ function parseArgs(argv) {
             process.stdout.write(JSON.stringify(out));
         } else {
             const emails = await fetchUnread24h(client);
-            process.stdout.write(JSON.stringify(emails));
+            const nowIso = new Date().toISOString();
+            const endIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+            const events = await listCalendarEvents(client, nowIso, endIso, 50);
+            process.stdout.write(JSON.stringify({ emails, events }));
         }
     } catch (err) {
         log('Error: ' + err.message);

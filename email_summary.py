@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 import requests
 
 import llm_client
+from draft_replies import gmail_thread_link
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).parent
@@ -66,7 +67,9 @@ def summarise(emails: list[dict], events: list[dict]) -> str:
     client = llm_client.make_client(DEEPSEEK_API_KEY)
 
     email_text = "\n\n".join(
-        f"From: {e['from']}\nSubject: {e['subject']}\n{e['body']}"
+        f"From: {e['from']}\nSubject: {e['subject']}\n"
+        f"Link: {gmail_thread_link(e['threadId'])}\n"
+        f"{e['body']}"
         for e in emails
     )
 
@@ -77,9 +80,18 @@ def summarise(emails: list[dict], events: list[dict]) -> str:
         for e in events
     )
 
-    user_content = f"Here are today's emails:\n\n{email_text}"
+    today_iso = datetime.date.today().isoformat()
+    today_pretty = datetime.date.today().strftime("%A %d %b %Y")
+    user_content = (
+        f"Today's date: {today_iso} ({today_pretty}).\n\n"
+        f"Here are today's emails:\n\n{email_text}"
+    )
     if events:
-        user_content += f"\n\nHere are your calendar events for the next 24 hours:\n\n{event_text}"
+        user_content += (
+            "\n\nHere are your calendar events for the next 24 hours "
+            "(may span today into tomorrow morning):\n\n"
+            f"{event_text}"
+        )
 
     resp = llm_client.complete(
         client,
@@ -87,9 +99,16 @@ def summarise(emails: list[dict], events: list[dict]) -> str:
             {"role": "system", "content": prompt},
             {"role": "user", "content": user_content},
         ],
-        max_tokens=600,
+        max_tokens=16000,
     )
-    return resp.choices[0].message.content.strip()
+    msg = resp.choices[0].message
+    content = (msg.content or "").strip()
+    reasoning = getattr(msg, "reasoning_content", None) or ""
+    print(
+        f"model returned content_len={len(content)} reasoning_len={len(reasoning)} "
+        f"finish_reason={resp.choices[0].finish_reason}"
+    )
+    return content
 
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
@@ -118,6 +137,18 @@ def main():
 
     print(f"Found {len(emails)} email(s) and {len(events)} event(s). Summarising...")
     summary = summarise(emails, events)
+
+    if not summary:
+        email_line = (
+            "Nothing for today on email." if not emails
+            else "Nothing worth surfacing for today on email."
+        )
+        event_line = (
+            "Nothing for today on calendar." if not events
+            else "See calendar for today's events."
+        )
+        summary = f"{email_line}\n{event_line}"
+        print("empty model output; using fallback summary")
 
     today_str = datetime.date.today().strftime("%a %d %b")
     message = f"📬 <b>Daily summary for {today_str}</b>\n\n{summary}"

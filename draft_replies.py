@@ -126,7 +126,10 @@ def reply_references(email):
     return " ".join(p for p in parts if p)
 
 
-def submit_draft(payload):
+def submit_draft(payload, draft_id=None):
+    """Create or update a Gmail draft. If draft_id is given, updates in place."""
+    if draft_id:
+        payload = {**payload, "draftId": draft_id}
     result = subprocess.run(
         ["node", str(DRAFT_SCRIPT)],
         input=json.dumps(payload),
@@ -136,15 +139,58 @@ def submit_draft(payload):
     return json.loads(result.stdout)["draftId"]
 
 
-def create_draft(email, body_text):
-    payload = {
-        "to": reply_to_address(email["from"]),
-        "subject": reply_subject(email["subject"]),
-        "body": body_text,
-        "threadId": email["threadId"],
-        "inReplyTo": email.get("messageIdHeader", ""),
-        "references": reply_references(email),
+def gmail_thread_link(thread_id):
+    """Single source of truth for Gmail thread deep-links."""
+    return f"https://mail.google.com/mail/u/0/#all/{thread_id}" if thread_id else None
+
+
+def format_draft_line(sender, subject, thread_id=None, trace_url=None,
+                      reason=None, bullet=""):
+    """One shared render for draft-notification line items across Telegram messages."""
+    sender_e = html.escape(sender or "")
+    subject_e = html.escape(subject or "")
+    link = gmail_thread_link(thread_id)
+    if link:
+        head = f'<a href="{html.escape(link)}"><b>{sender_e}</b>: {subject_e}</a>'
+    else:
+        head = f'<b>{sender_e}</b>: {subject_e}'
+    lines = [f"{bullet}{head}"] if bullet else [head]
+    if reason:
+        lines.append(f"  <i>{html.escape(reason)}</i>")
+    if trace_url:
+        lines.append(f'  <a href="{html.escape(trace_url)}">trace</a>')
+    return "\n".join(lines)
+
+
+def build_draft_payload(*, to, subject, body, thread_id, in_reply_to, references,
+                        original_from, original_date, original_body):
+    """Single source of truth for the create_draft.mjs payload shape."""
+    assert to and subject and body, "to, subject, body are required"
+    return {
+        "to": to,
+        "subject": subject,
+        "body": body,
+        "threadId": thread_id,
+        "inReplyTo": in_reply_to or "",
+        "references": references or "",
+        "originalFrom": original_from or "",
+        "originalDate": original_date or "",
+        "originalBody": original_body or "",
     }
+
+
+def create_draft(email, body_text):
+    payload = build_draft_payload(
+        to=reply_to_address(email["from"]),
+        subject=reply_subject(email["subject"]),
+        body=body_text,
+        thread_id=email["threadId"],
+        in_reply_to=email.get("messageIdHeader", ""),
+        references=reply_references(email),
+        original_from=email.get("from", ""),
+        original_date=email.get("date", ""),
+        original_body=email.get("body", ""),
+    )
     return submit_draft(payload)
 
 
@@ -160,20 +206,25 @@ def send_telegram(message):
 def render_telegram(drafted):
     lines = [f"📝 <b>{len(drafted)} draft(s) created</b>", ""]
     for d in drafted:
-        lines.append(f"• <b>{html.escape(d['from'])}</b>: {html.escape(d['subject'])}")
-        if d["reason"]:
-            lines.append(f"  <i>{html.escape(d['reason'])}</i>")
-        if d.get("run_url"):
-            lines.append(f"  <a href=\"{html.escape(d['run_url'])}\">trace</a>")
+        lines.append(format_draft_line(
+            d["from"], d["subject"],
+            thread_id=d.get("thread_id"),
+            trace_url=d.get("run_url"),
+            reason=d.get("reason"),
+            bullet="• ",
+        ))
     return "\n".join(lines)
 
 
 def render_rejected_telegram(rejected):
     lines = [f"🚫 <b>{len(rejected)} draft(s) rejected (em-dash)</b>", ""]
     for r in rejected:
-        lines.append(f"• <b>{html.escape(r['from'])}</b>: {html.escape(r['subject'])}")
-        if r.get("run_url"):
-            lines.append(f"  <a href=\"{html.escape(r['run_url'])}\">trace</a>")
+        lines.append(format_draft_line(
+            r["from"], r["subject"],
+            thread_id=r.get("thread_id"),
+            trace_url=r.get("run_url"),
+            bullet="• ",
+        ))
     return "\n".join(lines)
 
 
@@ -199,6 +250,7 @@ def process_emails(emails):
                 "from": email["from"],
                 "subject": email["subject"],
                 "run_url": run_url,
+                "thread_id": email["threadId"],
             })
             continue
         draft_id = create_draft(email, body)
@@ -208,6 +260,7 @@ def process_emails(emails):
             "reason": d.get("reason", ""),
             "run_url": run_url,
             "draft_id": draft_id,
+            "thread_id": email["threadId"],
         })
 
     if drafted:
