@@ -30,6 +30,11 @@ GREETING_RE = re.compile(
 
 EM_DASH_RE = re.compile(r'[—–]')
 
+# Matches a lone `FINAL REPLY:` (or `FINAL REPLY`) marker line. Anchored to the
+# whole line so a mid-sentence mention of the phrase in the model's reasoning
+# does not count — only a marker on its own line does.
+FINAL_MARKER_RE = re.compile(r'^[ \t>]*FINAL REPLY:?[ \t]*$', re.MULTILINE)
+
 
 def contains_em_dash(text):
     return bool(EM_DASH_RE.search(text or ''))
@@ -48,6 +53,25 @@ def _strip_preamble(body):
         if GREETING_RE.match(line.strip()):
             return '\n'.join(lines[i:]).strip()
     return body.strip()
+
+
+def _extract_final_reply(body):
+    """Return the email body demarcated by the model's `FINAL REPLY:` marker.
+
+    The drafter is instructed to emit a lone `FINAL REPLY:` line once it is done
+    reasoning, then put the email on the following lines. Everything after the
+    LAST such marker is the reply; anything before it (reasoning, tool notes,
+    even an earlier stray mention of the marker) is discarded.
+
+    Falls back to the greeting heuristic when no marker line is present, so a
+    model that ignores the instruction still yields a usable draft.
+    """
+    if not body:
+        return body
+    matches = list(FINAL_MARKER_RE.finditer(body))
+    if not matches:
+        return _strip_preamble(body)
+    return body[matches[-1].end():].strip()
 
 
 _LS_CLIENT = None
@@ -87,10 +111,14 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
         "checking availability before proposing a time, recalling prior commitments, "
         "verifying claims). If no lookup is needed, just write the draft. Aim for the "
         "fewest tool calls necessary.\n\n"
-        "CRITICAL OUTPUT RULE: Your final response (after any tool calls) must contain "
-        "ONLY the email body. Begin with the greeting (Hi/Hello/Dear/Hey). "
-        "End with the sign-off and Morgan's name. No analysis, no reasoning, no preamble, "
-        "no notes about why you wrote it that way. Just the email.\n\n"
+        "FINAL ANSWER FORMAT: When you are ready to send the reply, output a line "
+        "containing exactly `FINAL REPLY:` on its own, then put the email body on "
+        "the following lines. Everything after that marker is sent verbatim as the "
+        "draft, so it must begin with the greeting (Hi/Hello/Dear/Hey) and end with "
+        "the sign-off and Morgan's name. Do all thinking, analysis, and notes BEFORE "
+        "the marker, never after it. Emit `FINAL REPLY:` exactly once, and let the "
+        "email be the last thing you write. You must include the marker in every "
+        "response that is not a tool call.\n\n"
         "PUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. "
         "Use commas, periods, parentheses, or restructured sentences instead. "
         "Em-dashes will cause the draft to be rejected.\n\n"
@@ -176,7 +204,9 @@ def _run_loop(client, messages, max_iterations, ls_extra, on_iteration=None):
             body = (msg.content or "").strip()
             _safe_notify(on_iteration, iteration + 1, msg, tool_history, True)
             assert body, "drafter returned empty body"
-            return _strip_preamble(body)
+            reply = _extract_final_reply(body)
+            assert reply, "drafter returned empty body after FINAL REPLY marker"
+            return reply
 
         messages.append({
             "role": "assistant",
@@ -226,7 +256,11 @@ def _run_loop(client, messages, max_iterations, ls_extra, on_iteration=None):
         client,
         messages=messages + [{
             "role": "user",
-            "content": "Stop calling tools. Write the final reply body now, plain text only.",
+            "content": (
+                "Stop calling tools. Output `FINAL REPLY:` on its own line, then the "
+                "email body on the following lines. Greeting first, sign-off and "
+                "Morgan's name last, nothing after the body."
+            ),
         }],
         max_tokens=MAX_TOKENS,
         langsmith_extra=ls_extra,
@@ -236,4 +270,6 @@ def _run_loop(client, messages, max_iterations, ls_extra, on_iteration=None):
     body = (final_msg.content or "").strip()
     _safe_notify(on_iteration, max_iterations + 1, final_msg, tool_history, True)
     assert body, "drafter returned empty body after force-stop"
-    return _strip_preamble(body)
+    reply = _extract_final_reply(body)
+    assert reply, "drafter returned empty body after force-stop FINAL REPLY marker"
+    return reply
