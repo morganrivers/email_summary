@@ -14,10 +14,14 @@ BASE_URL = "https://api.deepseek.com"
 REASONING_EFFORT = "max"
 THINKING = {"type": "enabled"}
 
+LANGSMITH_ENABLED = False
+
 
 def make_client(api_key):
     assert api_key, "DEEPSEEK_API_KEY is empty"
     client = OpenAI(api_key=api_key, base_url=BASE_URL)
+    if not LANGSMITH_ENABLED:
+        return client
     ls_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")
     if not ls_key:
         sys.stderr.write("no LANGSMITH/LANGCHAIN_API_KEY in env; tracing disabled\n")

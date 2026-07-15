@@ -16,7 +16,8 @@ import uuid
 from datetime import datetime, timezone
 
 import llm_client
-from llm_client import make_client
+import pseudonymizer
+from llm_client import make_client, LANGSMITH_ENABLED
 
 from tool_executors import TOOL_REGISTRY, TOOL_SCHEMAS
 
@@ -65,6 +66,8 @@ _LS_CLIENT = None
 
 def _get_ls_client():
     global _LS_CLIENT
+    if not LANGSMITH_ENABLED:
+        return None
     if _LS_CLIENT is not None:
         return _LS_CLIENT
     if not os.environ.get("LANGCHAIN_API_KEY"):
@@ -108,6 +111,8 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
         "Do not exhaustively explore alternatives. Decide quickly, then write. "
         "The final email content must fit in the response, so leave ample room for it."
     )
+    state = pseudonymizer.new_state()
+    user_prompt = pseudonymizer.pseudonymize(user_prompt, state)
     messages = [
         {"role": "system", "content": system_with_time},
         {"role": "user", "content": user_prompt},
@@ -128,7 +133,8 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
             metadata={"session_id": session_id, "thread_id": session_id},
         ) as run:
             body = _draft_with_em_dash_retry(client, messages, max_iterations,
-                                             ls_extra, on_iteration=on_iteration)
+                                             ls_extra, state, on_iteration=on_iteration)
+        body = pseudonymizer.restore(body, state)
         run_url = None
         try:
             run_url = ls_client.get_run_url(run=run, project_name=project)
@@ -136,7 +142,8 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
             sys.stderr.write(f"get_run_url failed: {err}\n")
         return body, run_url
     body = _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra,
-                                     on_iteration=on_iteration)
+                                     state, on_iteration=on_iteration)
+    body = pseudonymizer.restore(body, state)
     return body, None
 
 
@@ -168,9 +175,9 @@ def _safe_notify(on_iteration, *args):
         sys.stderr.write(f"on_iteration failed: {err}\n")
 
 
-def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra,
+def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra, state,
                               on_iteration=None):
-    body = _run_loop(client, messages, max_iterations, ls_extra,
+    body = _run_loop(client, messages, max_iterations, ls_extra, state,
                      on_iteration=on_iteration)
     for attempt in range(MAX_EM_DASH_RETRIES):
         if not contains_em_dash(body):
@@ -181,12 +188,12 @@ def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra,
         )
         messages.append({"role": "assistant", "content": body})
         messages.append({"role": "user", "content": EM_DASH_CORRECTION_PROMPT})
-        body = _run_loop(client, messages, max_iterations, ls_extra,
+        body = _run_loop(client, messages, max_iterations, ls_extra, state,
                          on_iteration=on_iteration)
     return body
 
 
-def _run_loop(client, messages, max_iterations, ls_extra, on_iteration=None):
+def _run_loop(client, messages, max_iterations, ls_extra, state, on_iteration=None):
     tool_history = []
     for iteration in range(max_iterations):
         resp = llm_client.complete(
@@ -221,11 +228,12 @@ def _run_loop(client, messages, max_iterations, ls_extra, on_iteration=None):
 
         for tc in msg.tool_calls:
             fn_name = tc.function.name
+            raw_args = pseudonymizer.restore(tc.function.arguments or "", state)
             try:
-                fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                fn_args = json.loads(raw_args) if raw_args else {}
             except json.JSONDecodeError:
                 fn_args = {}
-                result = {"error": f"invalid JSON arguments: {tc.function.arguments[:200]}"}
+                result = {"error": f"invalid JSON arguments: {raw_args[:200]}"}
             else:
                 executor = TOOL_REGISTRY.get(fn_name)
                 if executor is None:
@@ -241,7 +249,7 @@ def _run_loop(client, messages, max_iterations, ls_extra, on_iteration=None):
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": json.dumps(result),
+                "content": pseudonymizer.pseudonymize(json.dumps(result), state),
             })
 
         _safe_notify(on_iteration, iteration + 1, msg, tool_history, False)
