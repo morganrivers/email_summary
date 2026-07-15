@@ -10,6 +10,8 @@ import fs from 'fs';
 import os from 'os';
 import readline from 'readline';
 
+import { SCOPES } from './gmail_lib.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const requireBase = os.userInfo().username === 'dmrivers'
     ? path.join(os.homedir(), 'gmail-mcp-server', 'package.json')
@@ -29,11 +31,7 @@ async function manualAuth() {
 
     const authUrl = client.generateAuthUrl({
         access_type: 'offline',
-        scope: [
-            'https://www.googleapis.com/auth/gmail.modify',
-            'https://www.googleapis.com/auth/gmail.settings.basic',
-            'https://www.googleapis.com/auth/calendar.readonly',
-        ],
+        scope: SCOPES,
         prompt: 'consent',
     });
 

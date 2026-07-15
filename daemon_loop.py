@@ -28,6 +28,7 @@ load_dotenv(SCRIPT_DIR / ".env")
 
 import state
 import manual_draft
+import schedule_from_sent
 from draft_replies import process_emails
 
 import subprocess
@@ -71,9 +72,10 @@ def process_once():
         return
     payload = fetch_since(last)
     emails = payload.get("emails", [])
+    sent = payload.get("sent", [])
     new_history_id = payload.get("historyId")
     stale = payload.get("stale", False)
-    log(f"fetched {len(emails)} email(s) since historyId={last}")
+    log(f"fetched {len(emails)} email(s), {len(sent)} sent since historyId={last}")
     if stale:
         log(f"history.list 404 (startHistoryId={last} too old); bootstrapping to {new_history_id}")
     bot_requests = [e for e in emails if manual_draft.is_bot_request(e)]
@@ -89,6 +91,12 @@ def process_once():
             process_emails(auto_emails)
         except Exception as err:
             log(f"process_emails failed: {err}")
+            traceback.print_exc(file=sys.stdout)
+    if sent:
+        try:
+            schedule_from_sent.run(sent)
+        except Exception as err:
+            log(f"schedule_from_sent failed: {err}")
             traceback.print_exc(file=sys.stdout)
     if new_history_id:
         state.update(lastHistoryId=str(new_history_id))

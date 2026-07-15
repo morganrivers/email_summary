@@ -19,6 +19,7 @@ os.umask(0)
 
 import state
 import manual_draft
+import schedule_from_sent
 from draft_replies import process_emails
 
 SCRIPT_DIR = Path(__file__).parent
@@ -48,9 +49,10 @@ def main():
 
     payload = fetch_since(last)
     emails = payload.get("emails", [])
+    sent = payload.get("sent", [])
     new_history_id = payload.get("historyId")
     stale = payload.get("stale", False)
-    sys.stderr.write(f"fetched {len(emails)} email(s) since historyId={last}\n")
+    sys.stderr.write(f"fetched {len(emails)} email(s), {len(sent)} sent since historyId={last}\n")
 
     if stale:
         sys.stderr.write(
@@ -69,6 +71,12 @@ def main():
 
     if auto_emails:
         process_emails(auto_emails)
+
+    if sent:
+        try:
+            schedule_from_sent.run(sent)
+        except Exception as err:
+            sys.stderr.write(f"schedule_from_sent failed: {err}\n")
 
     if new_history_id:
         state.update(lastHistoryId=str(new_history_id))

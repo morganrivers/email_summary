@@ -27,10 +27,10 @@ import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-import requests
 
 import llm_client
 from draft_replies import gmail_thread_link
+from notify import send_telegram
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).parent
@@ -40,8 +40,6 @@ PROMPT_FILE = Path.home() / ".system_files" / "prompt_for_email"
 
 load_dotenv(ENV_FILE)
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
 
 
@@ -62,7 +60,16 @@ def fetch_todays_emails_and_events() -> dict:
 
 # ── DeepSeek ─────────────────────────────────────────────────────────────────
 
-def summarise(emails: list[dict], events: list[dict]) -> str:
+def _format_events(events: list[dict]) -> str:
+    return "\n\n".join(
+        f"Event: {e['summary']}\nStart: {e['start']}\nEnd: {e['end']}" +
+        (f"\nLocation: {e['location']}" if e['location'] else "") +
+        (f"\nDescription: {e['description']}" if e['description'] else "")
+        for e in events
+    )
+
+
+def summarise(emails: list[dict], events: list[dict], community_events: list[dict]) -> str:
     prompt = PROMPT_FILE.read_text().strip()
     client = llm_client.make_client(DEEPSEEK_API_KEY)
 
@@ -71,13 +78,6 @@ def summarise(emails: list[dict], events: list[dict]) -> str:
         f"Link: {gmail_thread_link(e['threadId'])}\n"
         f"{e['body']}"
         for e in emails
-    )
-
-    event_text = "\n\n".join(
-        f"Event: {e['summary']}\nStart: {e['start']}\nEnd: {e['end']}" +
-        (f"\nLocation: {e['location']}" if e['location'] else "") +
-        (f"\nDescription: {e['description']}" if e['description'] else "")
-        for e in events
     )
 
     today_iso = datetime.date.today().isoformat()
@@ -90,7 +90,12 @@ def summarise(emails: list[dict], events: list[dict]) -> str:
         user_content += (
             "\n\nHere are your calendar events for the next 24 hours "
             "(may span today into tomorrow morning):\n\n"
-            f"{event_text}"
+            f"{_format_events(events)}"
+        )
+    if community_events:
+        user_content += (
+            "\n\nHere are xHain community calendar events for the next 24 hours. \n\n"
+            f"{_format_events(community_events)}"
         )
 
     resp = llm_client.complete(
@@ -111,17 +116,6 @@ def summarise(emails: list[dict], events: list[dict]) -> str:
     return content
 
 
-# ── Telegram ─────────────────────────────────────────────────────────────────
-
-def send_telegram(message: str) -> None:
-    resp = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
-        timeout=10,
-    )
-    resp.raise_for_status()
-
-
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -129,14 +123,18 @@ def main():
     data = fetch_todays_emails_and_events()
     emails = data.get("emails", [])
     events = data.get("events", [])
+    community_events = data.get("community_events", [])
 
-    if not emails and not events:
+    if not emails and not events and not community_events:
         send_telegram("No new emails or calendar events for the next 24 hours.")
         print("No emails or events — sent notification.")
         return
 
-    print(f"Found {len(emails)} email(s) and {len(events)} event(s). Summarising...")
-    summary = summarise(emails, events)
+    print(
+        f"Found {len(emails)} email(s), {len(events)} personal event(s), "
+        f"{len(community_events)} community event(s). Summarising..."
+    )
+    summary = summarise(emails, events, community_events)
 
     if not summary:
         email_line = (

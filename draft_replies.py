@@ -17,10 +17,10 @@ import subprocess
 from pathlib import Path
 
 from dotenv import load_dotenv
-import requests
 
 import agentic_drafter
 import llm_client
+from notify import send_telegram
 
 SCRIPT_DIR = Path(__file__).parent
 ENV_FILE = SCRIPT_DIR / ".env"
@@ -30,8 +30,6 @@ VOICE_PROFILE = Path.home() / ".system_files" / "voice-dna-email.md"
 
 load_dotenv(ENV_FILE)
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
 
 CLASSIFIER_PROMPT = (
@@ -192,15 +190,6 @@ def create_draft(email, body_text):
         original_body=email.get("body", ""),
     )
     return submit_draft(payload)
-
-
-def send_telegram(message):
-    resp = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
-        timeout=10,
-    )
-    resp.raise_for_status()
 
 
 def render_telegram(drafted):

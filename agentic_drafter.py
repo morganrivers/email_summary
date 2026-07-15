@@ -22,6 +22,7 @@ from tool_executors import TOOL_REGISTRY, TOOL_SCHEMAS
 
 MAX_ITERATIONS = 5
 MAX_TOKENS = 32000
+MAX_EM_DASH_RETRIES = 4
 
 GREETING_RE = re.compile(
     r'^(Hi|Hello|Hey|Dear|Good\s+(morning|afternoon|evening))\b',
@@ -29,6 +30,15 @@ GREETING_RE = re.compile(
 )
 
 EM_DASH_RE = re.compile(r'[—–]')
+
+EM_DASH_CORRECTION_PROMPT = (
+    "Your previous draft contained an em-dash (—) or en-dash (–). "
+    "These characters cause the draft to be rejected. "
+    "Rewrite the reply body, replacing every em-dash and en-dash with "
+    "commas, periods, parentheses, or restructured sentences. "
+    "Output only the corrected email body, beginning with the greeting. "
+    "Do not call any tools."
+)
 
 
 def contains_em_dash(text):
@@ -117,16 +127,16 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
             inputs={"system_prompt": system_prompt[:500], "user_prompt": user_prompt[:2000]},
             metadata={"session_id": session_id, "thread_id": session_id},
         ) as run:
-            body = _run_loop(client, messages, max_iterations, ls_extra,
-                             on_iteration=on_iteration)
+            body = _draft_with_em_dash_retry(client, messages, max_iterations,
+                                             ls_extra, on_iteration=on_iteration)
         run_url = None
         try:
             run_url = ls_client.get_run_url(run=run, project_name=project)
         except Exception as err:
             sys.stderr.write(f"get_run_url failed: {err}\n")
         return body, run_url
-    body = _run_loop(client, messages, max_iterations, ls_extra,
-                     on_iteration=on_iteration)
+    body = _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra,
+                                     on_iteration=on_iteration)
     return body, None
 
 
@@ -156,6 +166,24 @@ def _safe_notify(on_iteration, *args):
         on_iteration(*args)
     except Exception as err:
         sys.stderr.write(f"on_iteration failed: {err}\n")
+
+
+def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra,
+                              on_iteration=None):
+    body = _run_loop(client, messages, max_iterations, ls_extra,
+                     on_iteration=on_iteration)
+    for attempt in range(MAX_EM_DASH_RETRIES):
+        if not contains_em_dash(body):
+            return body
+        sys.stderr.write(
+            f"em-dash detected in draft, retrying "
+            f"({attempt + 1}/{MAX_EM_DASH_RETRIES})\n"
+        )
+        messages.append({"role": "assistant", "content": body})
+        messages.append({"role": "user", "content": EM_DASH_CORRECTION_PROMPT})
+        body = _run_loop(client, messages, max_iterations, ls_extra,
+                         on_iteration=on_iteration)
+    return body
 
 
 def _run_loop(client, messages, max_iterations, ls_extra, on_iteration=None):

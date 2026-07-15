@@ -18,6 +18,12 @@ const CONFIG_DIR = process.env.GMAIL_MCP_DIR || path.join(os.homedir(), '.gmail-
 const OAUTH_PATH = path.join(CONFIG_DIR, 'gcp-oauth.keys.json');
 const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'credentials.json');
 
+export const SCOPES = [
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.settings.basic',
+    'https://www.googleapis.com/auth/calendar.events',
+];
+
 export function log(msg) {
     process.stderr.write(msg + '\n');
 }
@@ -52,11 +58,7 @@ async function browserAuth(client) {
     return new Promise((resolve, reject) => {
         const authUrl = client.generateAuthUrl({
             access_type: 'offline',
-            scope: [
-                'https://www.googleapis.com/auth/gmail.modify',
-                'https://www.googleapis.com/auth/gmail.settings.basic',
-                'https://www.googleapis.com/auth/calendar.readonly',
-            ],
+            scope: SCOPES,
             prompt: 'consent',
         });
         log('Tokens expired. Opening browser for re-auth...');
@@ -164,10 +166,10 @@ export async function getThread(client, threadId) {
     return { threadId, messages };
 }
 
-export async function listCalendarEvents(client, startIso, endIso, maxResults = 50) {
+export async function listCalendarEvents(client, startIso, endIso, maxResults = 50, calendarId = 'primary') {
     const cal = calendarClient(client);
     const res = await cal.events.list({
-        calendarId: 'primary',
+        calendarId,
         timeMin: startIso,
         timeMax: endIso,
         singleEvents: true,
@@ -183,6 +185,29 @@ export async function listCalendarEvents(client, startIso, endIso, maxResults = 
         description: (e.description || '').slice(0, 500),
         attendees: (e.attendees || []).map(a => a.email),
     }));
+}
+
+export async function createCalendarEvent(client, {
+    summary, startIso, endIso, timeZone = 'Europe/Berlin',
+    location = '', description = '', calendarId = 'primary',
+}) {
+    if (!summary || !startIso || !endIso) {
+        throw new Error('createCalendarEvent requires summary, startIso, endIso');
+    }
+    const cal = calendarClient(client);
+    const requestBody = {
+        summary,
+        start: { dateTime: startIso, timeZone },
+        end: { dateTime: endIso, timeZone },
+    };
+    if (location) requestBody.location = location;
+    if (description) requestBody.description = description;
+    const res = await cal.events.insert({
+        calendarId,
+        requestBody,
+        sendUpdates: 'none',
+    });
+    return { id: res.data.id, htmlLink: res.data.htmlLink || '' };
 }
 
 export async function findThreadByFromSubject(client, fromEmail, subject) {
@@ -215,6 +240,7 @@ export async function findThreadByFromSubject(client, fromEmail, subject) {
 export async function historyList(client, startHistoryId) {
     const gmail = gmailClient(client);
     const added = [];
+    const sent = [];
     let pageToken;
     let latestHistoryId = startHistoryId;
     do {
@@ -228,22 +254,30 @@ export async function historyList(client, startHistoryId) {
             });
         } catch (err) {
             if (err.code === 404) {
-                return { addedMessageIds: [], historyId: null, stale: true };
+                return { addedMessageIds: [], sentMessageIds: [], historyId: null, stale: true };
             }
             throw err;
         }
         for (const h of res.data.history || []) {
             for (const ma of h.messagesAdded || []) {
                 const m = ma.message;
-                if ((m.labelIds || []).includes('INBOX')) {
+                const labels = m.labelIds || [];
+                if (labels.includes('INBOX')) {
                     added.push(m.id);
+                } else if (labels.includes('SENT')) {
+                    sent.push(m.id);
                 }
             }
         }
         if (res.data.historyId) latestHistoryId = res.data.historyId;
         pageToken = res.data.nextPageToken;
     } while (pageToken);
-    return { addedMessageIds: [...new Set(added)], historyId: latestHistoryId, stale: false };
+    return {
+        addedMessageIds: [...new Set(added)],
+        sentMessageIds: [...new Set(sent)],
+        historyId: latestHistoryId,
+        stale: false,
+    };
 }
 
 export async function getCurrentHistoryId(client) {
