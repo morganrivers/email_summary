@@ -14,12 +14,13 @@ BASE_URL = "https://api.deepseek.com"
 REASONING_EFFORT = "max"
 THINKING = {"type": "enabled"}
 
-LANGSMITH_ENABLED = False
+LANGSMITH_ENABLED = True
 
 
 def make_client(api_key):
     assert api_key, "DEEPSEEK_API_KEY is empty"
     client = OpenAI(api_key=api_key, base_url=BASE_URL)
+    client._ls_wrapped = False
     if not LANGSMITH_ENABLED:
         return client
     ls_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")
@@ -38,11 +39,15 @@ def make_client(api_key):
         sys.stderr.write("langsmith not installed; tracing disabled\n")
         return client
     sys.stderr.write(f"langsmith tracing enabled, project={proj or 'default'}\n")
-    return wrap_openai(client)
+    wrapped = wrap_openai(client)
+    wrapped._ls_wrapped = True
+    return wrapped
 
 
 def complete(client, messages, max_tokens, **kwargs):
     assert messages, "messages must be non-empty"
+    if not getattr(client, "_ls_wrapped", False):
+        kwargs.pop("langsmith_extra", None)
     extra_body = kwargs.pop("extra_body", {}) or {}
     extra_body.setdefault("thinking", THINKING)
     return client.chat.completions.create(

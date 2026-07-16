@@ -112,6 +112,7 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
         "The final email content must fit in the response, so leave ample room for it."
     )
     state = pseudonymizer.new_state()
+    system_with_time = pseudonymizer.pseudonymize(system_with_time, state)
     user_prompt = pseudonymizer.pseudonymize(user_prompt, state)
     messages = [
         {"role": "system", "content": system_with_time},
@@ -129,7 +130,7 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
             name="draft_email",
             run_type="chain",
             project_name=project,
-            inputs={"system_prompt": system_prompt[:500], "user_prompt": user_prompt[:2000]},
+            inputs={"system_prompt": system_with_time[:500], "user_prompt": user_prompt[:2000]},
             metadata={"session_id": session_id, "thread_id": session_id},
         ) as run:
             body = _draft_with_em_dash_retry(client, messages, max_iterations,
