@@ -22,7 +22,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import llm_client
-from notify import send_telegram
+from notify import send_telegram, notify_error
 
 SCRIPT_DIR = Path(__file__).parent
 ENV_FILE = SCRIPT_DIR / ".env"
@@ -156,6 +156,7 @@ def run(sent_emails):
             events = extract_events(client, email)
         except Exception as err:
             _log(f"extract failed for {email.get('id')}: {err}")
+            notify_error(f"schedule_from_sent: event extraction failed for sent email {email.get('id')}", err)
             continue
         for raw in events:
             event = _normalize(raw)
@@ -165,6 +166,7 @@ def run(sent_emails):
                 res = create_event(event)
             except Exception as err:
                 _log(f"create failed for {event['summary']!r}: {err}")
+                notify_error(f"schedule_from_sent: calendar event creation failed for {event['summary']!r}", err)
                 continue
             created.append({**event, "htmlLink": res.get("htmlLink")})
     if created:

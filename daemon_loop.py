@@ -30,6 +30,7 @@ import state
 import manual_draft
 import schedule_from_sent
 from draft_replies import process_emails
+from notify import notify_error
 
 import subprocess
 import json
@@ -86,18 +87,21 @@ def process_once():
         except Exception as err:
             log(f"manual_draft failed for {req.get('id')}: {err}")
             traceback.print_exc(file=sys.stdout)
+            notify_error(f"manual_draft failed for email {req.get('id')}", err)
     if auto_emails:
         try:
             process_emails(auto_emails)
         except Exception as err:
             log(f"process_emails failed: {err}")
             traceback.print_exc(file=sys.stdout)
+            notify_error("process_emails failed", err)
     if sent:
         try:
             schedule_from_sent.run(sent)
         except Exception as err:
             log(f"schedule_from_sent failed: {err}")
             traceback.print_exc(file=sys.stdout)
+            notify_error("schedule_from_sent failed", err)
     if new_history_id:
         state.update(lastHistoryId=str(new_history_id))
 
@@ -130,6 +134,7 @@ def main():
     except Exception as err:
         log(f"startup process_once failed: {err}")
         traceback.print_exc(file=sys.stdout)
+        notify_error("startup process_once failed", err)
     while True:
         try:
             drain_fifo()
@@ -147,6 +152,7 @@ def main():
         except Exception as err:
             log(f"loop error: {err}")
             traceback.print_exc(file=sys.stdout)
+            notify_error("daemon loop error", err)
             time.sleep(1)
 
 

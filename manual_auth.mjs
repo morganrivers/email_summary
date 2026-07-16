@@ -10,7 +10,7 @@ import fs from 'fs';
 import os from 'os';
 import readline from 'readline';
 
-import { SCOPES } from './gmail_lib.mjs';
+import { SCOPES, CONFIG_DIR, OAUTH_PATH, CREDENTIALS_PATH } from './gmail_lib.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const requireBase = os.userInfo().username === 'dmrivers'
@@ -19,10 +19,6 @@ const requireBase = os.userInfo().username === 'dmrivers'
 const require = createRequire(requireBase);
 
 const { OAuth2Client } = require('google-auth-library');
-
-const CONFIG_DIR = path.join(os.homedir(), '.gmail-mcp');
-const OAUTH_PATH = path.join(CONFIG_DIR, 'gcp-oauth.keys.json');
-const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'credentials.json');
 
 async function manualAuth() {
     const keys = JSON.parse(fs.readFileSync(OAUTH_PATH, 'utf8'));

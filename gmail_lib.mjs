@@ -14,9 +14,9 @@ const { OAuth2Client } = require('google-auth-library');
 const { google } = require('googleapis');
 const open = require('open');
 
-const CONFIG_DIR = process.env.GMAIL_MCP_DIR || path.join(os.homedir(), '.gmail-mcp');
-const OAUTH_PATH = path.join(CONFIG_DIR, 'gcp-oauth.keys.json');
-const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'credentials.json');
+export const CONFIG_DIR = process.env.GMAIL_MCP_DIR || path.join(os.homedir(), '.gmail-mcp');
+export const OAUTH_PATH = path.join(CONFIG_DIR, 'gcp-oauth.keys.json');
+export const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'credentials.json');
 
 export const SCOPES = [
     'https://www.googleapis.com/auth/gmail.modify',

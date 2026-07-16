@@ -34,7 +34,11 @@ The typical loop: edit → commit → `./deploy.sh`.
 - `.gmail-mcp/` — Gmail OAuth tokens.
 
 If `package.json` changes, `ssh` in and run `npm install` in
-`/opt/email_summary/` manually. Python deps live in `venv/`.
+`/opt/email_summary/` manually. Python deps are declared in
+`requirements.txt` (source of truth) and installed into `venv/`; if it
+changes, `ssh` in and run `venv/bin/pip install -r requirements.txt`
+(the spaCy model `en_core_web_lg` is a separate one-time install, see the
+comment in `requirements.txt`).
 
 ## Runtime paths
 
