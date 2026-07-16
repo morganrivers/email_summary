@@ -201,6 +201,7 @@ def _run_loop(client, messages, max_iterations, ls_extra, state, on_iteration=No
             client,
             messages=messages,
             max_tokens=MAX_TOKENS,
+            pseudonymize=False,
             tools=TOOL_SCHEMAS,
             tool_choice="auto",
             langsmith_extra=ls_extra,
@@ -266,6 +267,7 @@ def _run_loop(client, messages, max_iterations, ls_extra, state, on_iteration=No
             "content": "Stop calling tools. Write the final reply body now, plain text only.",
         }],
         max_tokens=MAX_TOKENS,
+        pseudonymize=False,
         langsmith_extra=ls_extra,
     )
     final_msg = final.choices[0].message

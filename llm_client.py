@@ -9,6 +9,8 @@ import sys
 
 from openai import OpenAI
 
+import pseudonymizer
+
 MODEL = "deepseek-v4-pro"
 BASE_URL = "https://api.deepseek.com"
 REASONING_EFFORT = "max"
@@ -44,13 +46,37 @@ def make_client(api_key):
     return wrapped
 
 
-def complete(client, messages, max_tokens, **kwargs):
+def _mask_messages(messages, state):
+    masked = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            m = {**m, "content": pseudonymizer.pseudonymize(content, state)}
+        masked.append(m)
+    return masked
+
+
+def _restore_response(resp, state):
+    for choice in resp.choices:
+        msg = getattr(choice, "message", None)
+        if msg is not None and getattr(msg, "content", None):
+            msg.content = pseudonymizer.restore(msg.content, state)
+
+
+def complete(client, messages, max_tokens, pseudonymize=True, **kwargs):
+    """Single LLM boundary. By default, PII is masked out of every message
+    before the call (so external traces carry only tags) and restored in the
+    response afterward. Multi-turn callers that manage their own pseudonymizer
+    state (agentic_drafter) pass pseudonymize=False."""
     assert messages, "messages must be non-empty"
     if not getattr(client, "_ls_wrapped", False):
         kwargs.pop("langsmith_extra", None)
     extra_body = kwargs.pop("extra_body", {}) or {}
     extra_body.setdefault("thinking", THINKING)
-    return client.chat.completions.create(
+    state = pseudonymizer.new_state() if pseudonymize else None
+    if state is not None:
+        messages = _mask_messages(messages, state)
+    resp = client.chat.completions.create(
         model=MODEL,
         messages=messages,
         max_tokens=max_tokens,
@@ -58,3 +84,6 @@ def complete(client, messages, max_tokens, **kwargs):
         extra_body=extra_body,
         **kwargs,
     )
+    if state is not None:
+        _restore_response(resp, state)
+    return resp
