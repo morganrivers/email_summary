@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily email summary -> Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/email_summary
+ExecStart=/opt/email_summary/venv/bin/python /opt/email_summary/email_summary.py
+Environment=PATH=/opt/email_summary/venv/bin:/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=email-summary
