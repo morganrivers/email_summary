@@ -34,6 +34,9 @@ def fetch_since(account, history_id):
 
 
 def process_account(account, *, log, notify_err):
+    assert account.identity.account_id == account.id, (
+        f"account {account.id!r} carries identity for {account.identity.account_id!r}"
+    )
     s = account.state.load()
     last = s.get("lastHistoryId")
     if not last:

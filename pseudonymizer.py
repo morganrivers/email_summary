@@ -26,10 +26,25 @@ USER_FIRST = "Morgan"
 USER_LAST = "Rivers"
 USER_FIRST_ALIASES = ["Daniel"]
 USER_EMAILS = ["danielmorganrivers@gmail.com"]
+# Placeholders the multi-tenant account store (B1) fills from the OAuth
+# profile + address book. Empty in single-tenant so DEFAULT_IDENTITY is unchanged.
+USER_PHONES = []
+USER_CONTACTS = []
 
 USER_FIRST_TAG = "[USER_FIRST]"
 USER_LAST_TAG = "[USER_LAST]"
 USER_EMAIL_TAG = "[USER_EMAIL]"
+USER_PHONE_TAG = "[USER_PHONE]"
+
+# A phone-like run: a digit, then 5+ of digit/space/()-.+, then a digit, not
+# glued to word characters. Candidates are digit-normalized before comparison so
+# spacing, dashes, dots, parens, and +country-code all match one configured number.
+_PHONE_RUN = re.compile(r"(?<!\w)\+?\d[\d\s().\-]{5,}\d(?!\w)")
+_MIN_PHONE_DIGITS = 7
+
+
+def _digits(s):
+    return re.sub(r"\D", "", s)
 
 STOPWORDS = frozenset({
     "will", "hope", "grace", "mark", "may", "june", "april", "august",
@@ -52,12 +67,20 @@ class UserIdentity:
     person-numbering. Compiled once per identity; passed into new_state so a
     shared process can hold one identity per user without global coupling."""
 
-    def __init__(self, first, last, first_aliases=(), emails=()):
+    def __init__(self, first, last, first_aliases=(), emails=(), phones=(), contacts=(), account_id="default"):
         assert first and last, "identity requires first and last name"
+        assert account_id, "identity requires an account_id"
+        self.account_id = account_id
         self.first = first
         self.last = last
         self.first_aliases = list(first_aliases)
         self.emails = list(emails)
+        self.contacts = [" ".join(c.split()) for c in contacts if c.strip()]
+        self._phone_digits = []
+        for p in phones:
+            d = _digits(p)
+            assert len(d) >= _MIN_PHONE_DIGITS, f"phone {p!r} has too few digits to mask safely"
+            self._phone_digits.append(d)
         self._rules = self._build_rules()
 
     def _build_rules(self):
@@ -78,16 +101,35 @@ class UserIdentity:
     def mask_user(self, text):
         for rx, repl in self._rules:
             text = rx.sub(repl, text)
-        return text
+        return self._mask_phones(text)
+
+    def _mask_phones(self, text):
+        if not self._phone_digits:
+            return text
+
+        def repl(m):
+            cand = _digits(m.group(0))
+            if len(cand) < _MIN_PHONE_DIGITS:
+                return m.group(0)
+            for pd in self._phone_digits:
+                if cand == pd or cand.endswith(pd) or pd.endswith(cand):
+                    return USER_PHONE_TAG
+            return m.group(0)
+
+        return _PHONE_RUN.sub(repl, text)
 
     def seed_mapping(self):
         mapping = {USER_FIRST_TAG: self.first, USER_LAST_TAG: self.last}
         if self.emails:
             mapping[USER_EMAIL_TAG] = self.emails[0]
+        if self._phone_digits:
+            mapping[USER_PHONE_TAG] = self._phone_digits[0]
         return mapping
 
 
-DEFAULT_IDENTITY = UserIdentity(USER_FIRST, USER_LAST, USER_FIRST_ALIASES, USER_EMAILS)
+DEFAULT_IDENTITY = UserIdentity(
+    USER_FIRST, USER_LAST, USER_FIRST_ALIASES, USER_EMAILS, USER_PHONES, USER_CONTACTS
+)
 
 # Presidio-detected PII (spaCy NER + built-in recognizers).
 NER_ENTITIES = ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD", "IBAN_CODE"]
@@ -182,6 +224,7 @@ def new_state(identity=None):
         return None
     identity = identity or DEFAULT_IDENTITY
     return {
+        "account_id": identity.account_id,
         "identity": identity,
         "counters": defaultdict(int),
         "seen": {},
@@ -270,6 +313,32 @@ def _resolve_persons(state, results, text):
             _resolve_single(state, s)
 
 
+def _scrub_contacts(text, state):
+    """Deterministically tag known contact names before Presidio, so the
+    finite set of the owner's contacts is masked even when NER misses them.
+
+    Formatting-variant tolerant (case + internal whitespace). Each contact is
+    routed through the same person machinery as NER-detected names, so a contact
+    and its later NER mentions collapse to one person id. Single-token contacts
+    that collide with a stopword are left alone to avoid nuking common words."""
+    for surface in state["identity"].contacts:
+        tokens = surface.split()
+        if not tokens:
+            continue
+        pat = re.compile(r"\b" + r"\s+".join(re.escape(t) for t in tokens) + r"\b", re.IGNORECASE)
+        if not pat.search(text):
+            continue
+        if surface.lower() not in state["pindex"]:
+            if len(tokens) >= 2:
+                _resolve_full(state, surface)
+            elif not _stop(surface):
+                _resolve_single(state, surface)
+        comp = state["pindex"].get(surface.lower())
+        if comp:
+            text = pat.sub(comp, text)
+    return text
+
+
 def _mask_names(text, state):
     names = state["names"]
     for surface in sorted(names, key=len, reverse=True):
@@ -280,8 +349,11 @@ def _mask_names(text, state):
 def pseudonymize(text, state):
     """Replace PII in text with numbered tags, growing the shared state.
 
-    Known names are masked deterministically before Presidio so a name seen
-    earlier in the draft cannot be split or drift to a new tag. Presidio then
+    The owner's own name/email/phone and known contact names are scrubbed
+    deterministically before Presidio (literal match, formatting-variant
+    tolerant), so the finite highest-stakes set is masked regardless of what NER
+    catches. Names seen earlier in the draft are re-masked so a name cannot drift
+    to a new tag. Presidio then
     detects any new PII; _resolve_persons groups co-referent name fragments
     under one person id and decomposes each into first/last role tags, so the
     model sees [PERSON1_FIRST] / [PERSON1_LAST] as the same identity.
@@ -293,6 +365,7 @@ def pseudonymize(text, state):
     from presidio_anonymizer.entities import OperatorConfig
 
     text = state["identity"].mask_user(text)
+    text = _scrub_contacts(text, state)
     text = _mask_names(text, state)
     analyzer, anonymizer = _engines()
     results = analyzer.analyze(text=text, language="en", entities=ENTITIES)

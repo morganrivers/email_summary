@@ -263,6 +263,24 @@ def test_pseudonymize_roundtrip():
     assert "Priya" in restored and "Sharma" in restored
 
 
+def test_literal_scrub_owner_phone_and_contacts():
+    import pseudonymizer
+    ident = pseudonymizer.UserIdentity(
+        "Morgan", "Rivers", ["Daniel"], ["danielmorganrivers@gmail.com"],
+        phones=["+1 (415) 555-0142"], contacts=["Priya Sharma", "Bob"],
+    )
+    st = pseudonymizer.new_state(ident)
+    text = ("Morgan here. Cell 415.555.0142 or +14155550142. "
+            "Ping priya sharma and Bob. Ref number 12.")
+    masked = pseudonymizer.pseudonymize(text, st)
+    for leak in ["415", "0142", "Priya", "Sharma", "Morgan", "Rivers"]:
+        assert leak not in masked, leak
+    assert masked.count("[USER_PHONE]") == 2
+    assert "Ref number 12." in masked
+    restored = pseudonymizer.restore(masked, st)
+    assert "Priya Sharma" in restored and "Bob" in restored
+
+
 # --- top-level integration -----------------------------------------------
 
 def test_process_once_end_to_end(wire):
