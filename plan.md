@@ -371,9 +371,9 @@ platform spike, and all research/procurement have **no code dependency on the
 spine and start immediately**. Critical path is **B → F3 → G**.
 
 **Status legend:** `[DONE]` merged to `main` · `[TODO]` not started.
-**Progress so far (on `main`, commits c42b069…03045d0):** Track A done, Track B
-done, Track R researched (human follow-up actions outstanding). Everything else
-not started.
+**Progress so far (on `main`, commits c42b069…ee8852e):** Track A done, Track B
+done, Track E done, Track R researched (human follow-up actions outstanding).
+Everything else not started.
 
 ### Track A — Masking hardening (no deps; start now)  — **[DONE]**
 Pure `pseudonymizer.py` work on the current single-tenant box. Sources: WS1.
@@ -404,18 +404,29 @@ Pure `pseudonymizer.py` work on the current single-tenant box. Sources: WS1.
 - **D1. Port Polar `webhook.py` / `poller.py` / `polar_api.py`.** `[TODO]`
 - **D2. Plan-gating on Gmail processing (active ↔ inactive).** `[TODO]`
 
-### Track E — Reproducible-build packaging (no deps; start now; source: WS5)  — **[TODO]**
-Branch `feat/reproduciblebuilds` exists but is 0 commits ahead of `main` — no
-work landed.
-- **E1. Phase-1 binary transparency: hash-pinned image + published hash.** `[TODO]`
-- **E2. Phase-2 Nix source reproducibility (fast-follow).** `[TODO]`
+### Track E — Reproducible-build packaging (no deps; start now; source: WS5)  — **[DONE]**
+Built the Nix source-reproducible path directly (skips E1's throwaway
+Dockerfile; a source rebuild subsumes binary transparency). `deploy/phala/`:
+uv2nix Python env (hashed `uv.lock` incl. spaCy `en_core_web_lg`),
+`importNpmLock` node deps, `dockerTools.buildLayeredImage`, `docker-compose.yml`
+(dstack socket + post-attestation secrets), `build_and_publish.sh` (`--verify`
+rebuilds twice), `IMAGE_HASH.txt`.
+- **E1. Phase-1 binary transparency: hash-pinned image + published hash.**
+  `[DONE]` ee8852e — subsumed by the Nix build; published hash in
+  `deploy/phala/IMAGE_HASH.txt`.
+- **E2. Phase-2 Nix source reproducibility (fast-follow).** `[DONE]` ee8852e —
+  `flake.nix` + pinned `flake.lock`. Verified same-machine bit-for-bit; a
+  cross-machine rebuild from a clean commit is still unverified. Caveat: the
+  tarball sha256 is not yet the dstack CVM measurement — wiring the published
+  hash to the attested measurement is F3/G.
 
 ### Track F — TEE platform spike (infra spike has no deps; start now; source: WS4)  — **[TODO]**
 - **F1. dstack deploy spike: KMS unseal + RA-TLS mechanics (hello-world).** `[TODO]`
 - **F2. Empirical wrong-measurement KMS-refusal test.** `[TODO]` *(also KMS
   checklist R2)*
 - **F3. Package the app into one measured image.** `[TODO]` *(needs B complete
-  [done] + E1)*
+  [done] + E1 [done]; the E image is built, F3 is deploying it as the attested
+  CVM measurement)*
 
 ### Track G — Attestation-verification surface (endpoint code parallel; live proof needs F; source: WS6)  — **[TODO]**
 - **G1. On-demand attestation endpoint + signature-chain verification.** `[TODO]`
