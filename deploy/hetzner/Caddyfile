@@ -2,6 +2,15 @@ hezner.morganrivers.com {
 	handle /polar/webhook {
 		reverse_proxy 127.0.0.1:8788
 	}
+	handle /onboard* {
+		reverse_proxy 127.0.0.1:8789
+	}
+	handle /oauth/* {
+		reverse_proxy 127.0.0.1:8789
+	}
+	# Catch-all keeps the Gmail Pub/Sub push (POST /) on the webhook. Moving the
+	# landing page to the site root would require repointing the Pub/Sub push
+	# subscription off "/" first.
 	handle {
 		reverse_proxy 127.0.0.1:8787
 	}
