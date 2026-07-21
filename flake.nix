@@ -1,0 +1,136 @@
+{
+  description = "TEE email bot: reproducible OCI image for Phala dstack deployment";
+
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-24.11";
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    pyproject-build-systems = {
+      url = "github:pyproject-nix/build-system-pkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.uv2nix.follows = "uv2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs =
+    { self, nixpkgs, pyproject-nix, uv2nix, pyproject-build-systems, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+      lib = nixpkgs.lib;
+      python = pkgs.python311;
+
+      workspace = uv2nix.lib.workspace.loadWorkspace {
+        workspaceRoot = ./deploy/phala;
+      };
+
+      pyprojectOverlay = workspace.mkPyprojectOverlay {
+        sourcePreference = "wheel";
+      };
+
+      pyprojectOverrides = _final: _prev: { };
+
+      pythonSet =
+        (pkgs.callPackage pyproject-nix.build.packages { inherit python; }).overrideScope
+          (lib.composeManyExtensions [
+            pyproject-build-systems.overlays.default
+            pyprojectOverlay
+            pyprojectOverrides
+          ]);
+
+      venv = pythonSet.mkVirtualEnv "email-bot-env" workspace.deps.default;
+
+      nodejs = pkgs.nodejs_20;
+
+      nodeModules = pkgs.importNpmLock.buildNodeModules {
+        npmRoot = ./.;
+        inherit nodejs;
+      };
+
+      appCode = builtins.path {
+        name = "email-bot-app";
+        path = ./.;
+        filter =
+          path: type:
+          if type == "directory" then
+            false
+          else
+            let
+              base = baseNameOf path;
+            in
+            (lib.hasSuffix ".py" base && !(lib.hasPrefix "test_" base))
+            || lib.hasSuffix ".mjs" base
+            || base == "package.json"
+            || base == "package-lock.json";
+      };
+
+      crontab = pkgs.writeText "email-bot-crontab" ''
+        0 5 * * * cd /app && python email_summary.py
+        0 4 * * 1 cd /app && node watch_register.mjs
+      '';
+
+      entrypoint = pkgs.writeShellApplication {
+        name = "email-bot-entrypoint";
+        runtimeInputs = [ venv nodejs pkgs.supercronic pkgs.coreutils ];
+        text = ''
+          cd /app
+          export GMAIL_MCP_DIR=/app/.gmail-mcp
+          mkdir -p /app/.gmail-mcp /app/accounts
+          python daemon_loop.py &
+          d=$!
+          python gmail_hook_server.py &
+          w=$!
+          supercronic /app/crontab &
+          c=$!
+          trap 'kill "$d" "$w" "$c" 2>/dev/null || true' TERM INT
+          wait -n
+          kill "$d" "$w" "$c" 2>/dev/null || true
+          exit 1
+        '';
+      };
+
+      image = pkgs.dockerTools.buildLayeredImage {
+        name = "tee-email-bot";
+        tag = "latest";
+        contents = [ pkgs.cacert pkgs.coreutils pkgs.bashInteractive ];
+        enableFakechroot = true;
+        fakeRootCommands = ''
+          mkdir -p ./app
+          cp -R ${appCode}/. ./app/
+          cp ${crontab} ./app/crontab
+          ln -s ${nodeModules}/node_modules ./app/node_modules
+          chmod -R u+w ./app
+        '';
+        config = {
+          WorkingDir = "/app";
+          Entrypoint = [ "${entrypoint}/bin/email-bot-entrypoint" ];
+          ExposedPorts = {
+            "8787/tcp" = { };
+          };
+          Env = [
+            "PATH=${venv}/bin:${nodejs}/bin:${pkgs.supercronic}/bin:${pkgs.coreutils}/bin:${pkgs.bashInteractive}/bin"
+            "SHELL=${pkgs.bashInteractive}/bin/bash"
+            "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+            "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-bundle.crt"
+            "GMAIL_MCP_DIR=/app/.gmail-mcp"
+            "LANG=C.UTF-8"
+            "TZ=UTC"
+          ];
+        };
+      };
+    in
+    {
+      packages.${system} = {
+        inherit image venv nodeModules;
+        default = image;
+      };
+    };
+}

@@ -1,0 +1,29 @@
+services:
+  email:
+    # Pin by digest from deploy/phala/IMAGE_HASH.txt after publishing.
+    # The bare tag is a build-time convenience; production must use the digest so
+    # the running measurement equals the published, source-reproducible hash.
+    image: tee-email-bot:latest
+    restart: always
+    ports:
+      - "8787:8787"
+    environment:
+      WEBHOOK_HOST: "0.0.0.0"
+      WEBHOOK_PORT: "8787"
+      WEBHOOK_AUD: "${WEBHOOK_AUD}"
+      PUBSUB_SERVICE_ACCOUNT: "${PUBSUB_SERVICE_ACCOUNT}"
+    # Secrets (OAuth tokens, LLM key) are injected post-attestation by the dstack
+    # KMS, never baked into the measured image. dstack renders encrypted env into
+    # the guest; this file is the mount point the app reads.
+    env_file:
+      - path: /app/.env
+        required: false
+    volumes:
+      - accounts:/app/accounts
+      - gmail_tokens:/app/.gmail-mcp
+      # dstack guest-agent socket: in-enclave KMS unseal + on-demand attestation.
+      - /var/run/dstack.sock:/var/run/dstack.sock
+
+volumes:
+  accounts:
+  gmail_tokens:

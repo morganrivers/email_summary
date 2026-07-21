@@ -1,0 +1,5 @@
+# Published image hash for Track E1 binary transparency.
+# Auditors compare this against the running enclave measurement.
+# Regenerate with: deploy/phala/build_and_publish.sh --verify
+nix-store-path: /nix/store/2i49zl6cxp8rj2frbwbk7q5nml7f9m4a-tee-email-bot.tar.gz
+sha256:         57dd0f6f15744e7d447d2960fed2e82eefb75d649a32aeeb4d7f575fd554e8f4
