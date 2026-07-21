@@ -19,7 +19,8 @@ Store schema (accounts/accounts.json), one object per user:
       "creds_dir": "accounts/user@example.com/.gmail-mcp",
       "state_file": "accounts/user@example.com/state.json",
       "telegram": {"chat_id": "...", "token": "<optional; env fallback>"},
-      "plan_status": "active"
+      "plan_status": "active",
+      "polar_customer_id": "<optional; set at checkout for exact billing link>"
     }
 Relative creds_dir/state_file paths resolve against this script's directory.
 The manifest holds per-user PII and tokens, so it is git-ignored and lives only
@@ -46,7 +47,8 @@ class TelegramTarget:
 
 
 class Account:
-    def __init__(self, id, identity, state, telegram, creds_dir=None, plan_status="active"):
+    def __init__(self, id, identity, state, telegram, creds_dir=None,
+                 plan_status="active", polar_customer_id=None):
         assert id and identity and state and telegram, "account requires id, identity, state, telegram"
         assert identity.account_id == id, (
             f"identity account_id {identity.account_id!r} does not match account id {id!r}"
@@ -57,6 +59,7 @@ class Account:
         self.telegram = telegram
         self.creds_dir = creds_dir
         self.plan_status = plan_status
+        self.polar_customer_id = polar_customer_id
 
 
 def _resolve(path):
@@ -102,19 +105,46 @@ def _account_from_entry(entry):
         telegram=telegram,
         creds_dir=str(_resolve(creds_dir)) if creds_dir else None,
         plan_status=entry.get("plan_status", "active"),
+        polar_customer_id=entry.get("polar_customer_id"),
     )
+
+
+def _read_manifest():
+    """Raw manifest dict, or None when no store exists (single-tenant box)."""
+    if not MANIFEST.exists():
+        return None
+    return json.loads(MANIFEST.read_text())
+
+
+def all_accounts():
+    """Every registered account regardless of plan status. Billing needs to see
+    inactive accounts to reactivate a lapsed subscriber; routing must not, so it
+    goes through load_accounts() instead. Falls back to the single-tenant default
+    when no manifest exists. The sealed-store swap (Track F) replaces this body."""
+    data = _read_manifest()
+    if data is None:
+        return [default_account()]
+    accounts = [_account_from_entry(e) for e in data["accounts"]]
+    ids = [a.id for a in accounts]
+    assert len(ids) == len(set(ids)), f"duplicate account ids in manifest: {ids}"
+    return accounts
 
 
 def load_accounts():
     """Every registered, active account. The sole entry point for enumerating
-    users; the sealed-store swap (Track F) replaces this body alone."""
-    if not MANIFEST.exists():
-        return [default_account()]
-    data = json.loads(MANIFEST.read_text())
-    accounts = [_account_from_entry(e) for e in data["accounts"]]
-    ids = [a.id for a in accounts]
-    assert len(ids) == len(set(ids)), f"duplicate account ids in manifest: {ids}"
-    return [a for a in accounts if a.plan_status != "inactive"]
+    users the pipeline may act on; inactive (unpaid) accounts are filtered here,
+    which is the Gmail-processing gate (D2)."""
+    return [a for a in all_accounts() if a.plan_status != "inactive"]
+
+
+def _match(pool, email):
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    for a in pool:
+        if a.id.lower() == email or any(e.lower() == email for e in a.identity.emails):
+            return a
+    return None
 
 
 def get_account(email):
@@ -124,11 +154,45 @@ def get_account(email):
 
     The sole targeted accessor: routing (webhook, daemon) looks up users only
     through here, so callers never construct a creds/token path themselves and
-    the sealed-store swap stays contained to this module."""
-    email = (email or "").strip().lower()
-    if not email:
+    the sealed-store swap stays contained to this module. Inactive accounts are
+    excluded (they are absent from load_accounts), so an unpaid user is
+    unroutable end to end."""
+    return _match(load_accounts(), email)
+
+
+def account_for_email(email, include_inactive=True):
+    """The account whose id or masking-identity address matches `email`. Billing
+    resolves Polar customers to local accounts through here and, unlike
+    get_account(), includes inactive accounts so a lapsed subscriber can be
+    reactivated on their next payment."""
+    return _match(all_accounts() if include_inactive else load_accounts(), email)
+
+
+def account_for_customer_id(customer_id):
+    """The account linked to a Polar customer id via its stored polar_customer_id,
+    or None. Onboarding stores this at checkout so billing has an exact link that
+    does not depend on the pay-email matching the Gmail address."""
+    customer_id = (customer_id or "").strip()
+    if not customer_id:
         return None
-    for a in load_accounts():
-        if a.id.lower() == email or any(e.lower() == email for e in a.identity.emails):
+    for a in all_accounts():
+        if a.polar_customer_id and a.polar_customer_id == customer_id:
             return a
     return None
+
+
+def set_plan_status(account_id, status):
+    """Persist `status` ('active'|'inactive') for account_id and return the prior
+    status. The sole writer of plan gating: billing flips entitlement only through
+    here, so the sealed-store swap stays contained to this module."""
+    assert status in ("active", "inactive"), f"invalid plan_status {status!r}"
+    data = _read_manifest()
+    assert data is not None, "cannot set plan_status without an accounts manifest"
+    aid = (account_id or "").strip().lower()
+    for entry in data["accounts"]:
+        if entry["id"].strip().lower() == aid:
+            prior = entry.get("plan_status", "active")
+            entry["plan_status"] = status
+            MANIFEST.write_text(json.dumps(data, indent=2))
+            return prior
+    raise KeyError(f"no account with id {account_id!r}")
