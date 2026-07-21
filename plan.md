@@ -420,13 +420,26 @@ rebuilds twice), `IMAGE_HASH.txt`.
   tarball sha256 is not yet the dstack CVM measurement — wiring the published
   hash to the attested measurement is F3/G.
 
-### Track F — TEE platform spike (infra spike has no deps; start now; source: WS4)  — **[TODO]**
-- **F1. dstack deploy spike: KMS unseal + RA-TLS mechanics (hello-world).** `[TODO]`
-- **F2. Empirical wrong-measurement KMS-refusal test.** `[TODO]` *(also KMS
-  checklist R2)*
-- **F3. Package the app into one measured image.** `[TODO]` *(needs B complete
-  [done] + E1 [done]; the E image is built, F3 is deploying it as the attested
-  CVM measurement)*
+### Track F — TEE platform spike (infra spike has no deps; start now; source: WS4)  — **[CODE DONE; live deploy outstanding]**
+Code + deploy artifacts landed; the empirical halves need a Phala Cloud account
++ `phala` CLI + an AppAuth contract we own (R2 outstanding action). SSOT socket
+client `dstack_client.py` (stdlib http-over-unixsocket: Info/GetKey/GetQuote/
+GetTlsKey). Boot module `tee_boot.py` is both the F1 spike and the F3 gate.
+- **F1. dstack deploy spike: KMS unseal + RA-TLS mechanics (hello-world).**
+  `[CODE DONE]` — `tee_boot.py --selftest` exercises GetKey (unseal) + GetTlsKey
+  (RA-TLS keypair, quote-bound cert) + GetQuote; deploy via
+  `deploy/phala/f1-selftest-compose.yml`. *Outstanding:* run on a live CVM,
+  confirm `[f1] SUCCESS`.
+- **F2. Empirical wrong-measurement KMS-refusal test.** `[CODE DONE]` *(also KMS
+  checklist R2)* — `deploy/phala/f2_wrong_measurement_test.sh` auto-verifies the
+  local mechanic (one-byte source change ⇒ different reproducible measurement)
+  and drives the live refusal proof behind `RUN_LIVE=1`. *Outstanding:* authorize
+  H1 only, deploy H2, confirm KMS refuses (fail-closed).
+- **F3. Package the app into one measured image.** `[CODE DONE]` *(needs B
+  complete [done] + E1 [done])* — attest-before-run gate wired into the Nix
+  entrypoint (`flake.nix`), `TEE_REQUIRED=1` + tmpfs RA-TLS material + encrypted-
+  env secret injection in `deploy/phala/docker-compose.yml`. *Outstanding:* pin
+  the published image digest into the compose files and deploy the attested CVM.
 
 ### Track G — Attestation-verification surface (endpoint code parallel; live proof needs F; source: WS6)  — **[TODO]**
 - **G1. On-demand attestation endpoint + signature-chain verification.** `[TODO]`

@@ -84,6 +84,13 @@
           cd /app
           export GMAIL_MCP_DIR=/app/.gmail-mcp
           mkdir -p /app/.gmail-mcp /app/accounts
+          # Track F3 attest-before-run gate. Under TEE_REQUIRED it fails closed
+          # (exit -> Restart=always retries) rather than touching mailboxes
+          # without proof the CVM runs the published, attested measurement.
+          if ! python tee_boot.py; then
+            echo "tee_boot gate failed; refusing to start services" >&2
+            exit 1
+          fi
           python daemon_loop.py &
           d=$!
           python gmail_hook_server.py &

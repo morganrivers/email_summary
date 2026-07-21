@@ -12,15 +12,27 @@ services:
       WEBHOOK_PORT: "8787"
       WEBHOOK_AUD: "${WEBHOOK_AUD}"
       PUBSUB_SERVICE_ACCOUNT: "${PUBSUB_SERVICE_ACCOUNT}"
-    # Secrets (OAuth tokens, LLM key) are injected post-attestation by the dstack
-    # KMS, never baked into the measured image. dstack renders encrypted env into
-    # the guest; this file is the mount point the app reads.
+      # Track F3: make the attest-before-run gate fail closed. tee_boot aborts
+      # unless the CVM is attested and the KMS released keys + secrets.
+      TEE_REQUIRED: "1"
+      # Optional belt-and-suspenders: the compose_hash the guest agent must
+      # report. The KMS is the real enforcer; this catches config drift early.
+      EXPECTED_COMPOSE_HASH: "${EXPECTED_COMPOSE_HASH:-}"
+    # Secrets (OAuth tokens, LLM key, Telegram creds) are injected
+    # post-attestation via dstack encrypted environment variables: encrypted to
+    # the app KMS key, decrypted only inside the attested CVM, never baked into
+    # the measured image. Encrypt them with the phala CLI at deploy time; the
+    # guest sees them as env once the measurement is authorized.
     env_file:
       - path: /app/.env
         required: false
     volumes:
       - accounts:/app/accounts
       - gmail_tokens:/app/.gmail-mcp
+      # RA-TLS material + boot attestation record written by tee_boot; tmpfs so
+      # the enclave-held private key never lands on the encrypted volume at rest.
+      - type: tmpfs
+        target: /app/attestation
       # dstack guest-agent socket: in-enclave KMS unseal + on-demand attestation.
       - /var/run/dstack.sock:/var/run/dstack.sock
 
