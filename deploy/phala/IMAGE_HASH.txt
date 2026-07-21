@@ -5,6 +5,11 @@
 #   Regenerate/verify with: deploy/phala/build_and_publish.sh --verify
 # registry-ref:   what the Phala CVM pulls; pinned into docker-compose.yml.
 #   Populated by --push. Empty until first push.
-nix-store-path: /nix/store/h602cnsns789fjsr1vmg2cvsigm6mhj2-tee-email-bot.tar.gz
-tarball-sha256: 46f415ea764e6aa5a11732f48f8cb9446c2f2098c17129c1a2b459dee44ec441
+#
+# STALE after feat/teespike merge: the merged tree combines main's Track C/D
+# code with Track F's tee_boot.py/dstack_client.py, so the previously recorded
+# hashes (main 46f415ea..., teespike c4641fd4...) no longer describe this
+# source. Regenerate before any push. See plan.md "Track F" disk-space caveat.
+nix-store-path: <regenerate: build_and_publish.sh on merged tree>
+tarball-sha256: <regenerate: build_and_publish.sh on merged tree>
 registry-ref:   <not pushed>
