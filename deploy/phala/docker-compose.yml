@@ -1,8 +1,11 @@
 services:
   email:
-    # Pin by digest from deploy/phala/IMAGE_HASH.txt after publishing.
-    # The bare tag is a build-time convenience; production must use the digest so
-    # the running measurement equals the published, source-reproducible hash.
+    # This line is rewritten to a pinned registry digest by
+    #   REGISTRY=<repo> deploy/phala/build_and_publish.sh --push
+    # It must carry a literal @sha256 digest in production (not a tag): the
+    # compose file is measured into the dstack attestation, so a mutable tag or
+    # a ${VAR} would let the operator swap the image and break the trust story.
+    # The bare tag below is only a pre-publish placeholder.
     image: tee-email-bot:latest
     restart: always
     ports:

@@ -1,5 +1,10 @@
-# Published image hash for Track E1 binary transparency.
-# Auditors compare this against the running enclave measurement.
-# Regenerate with: deploy/phala/build_and_publish.sh --verify
-nix-store-path: /nix/store/2i49zl6cxp8rj2frbwbk7q5nml7f9m4a-tee-email-bot.tar.gz
-sha256:         57dd0f6f15744e7d447d2960fed2e82eefb75d649a32aeeb4d7f575fd554e8f4
+# Published hashes for Track E reproducible builds.
+#
+# tarball-sha256: hash of the Nix build output; proves the build is
+#   source-reproducible (rebuild from this repo -> identical value).
+#   Regenerate/verify with: deploy/phala/build_and_publish.sh --verify
+# registry-ref:   what the Phala CVM pulls; pinned into docker-compose.yml.
+#   Populated by --push. Empty until first push.
+nix-store-path: /nix/store/h602cnsns789fjsr1vmg2cvsigm6mhj2-tee-email-bot.tar.gz
+tarball-sha256: 46f415ea764e6aa5a11732f48f8cb9446c2f2098c17129c1a2b459dee44ec441
+registry-ref:   <not pushed>
