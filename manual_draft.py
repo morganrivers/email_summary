@@ -14,6 +14,7 @@ from pathlib import Path
 
 import agentic_drafter
 import draft_replies
+from node_runner import node_env
 
 SCRIPT_DIR = Path(__file__).parent
 FIND_THREAD = SCRIPT_DIR / "find_thread.mjs"
@@ -73,25 +74,27 @@ def parse_forward(body):
     }
 
 
-def find_thread(from_email, subject):
+def find_thread(account, from_email, subject):
     result = subprocess.run(
         ["node", str(FIND_THREAD), "--from", from_email, "--subject", subject or ""],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+        env=node_env(account.creds_dir),
     )
     assert result.returncode == 0, f"find_thread.mjs failed: {result.stderr.decode()}"
     return json.loads(result.stdout)
 
 
-def get_thread(thread_id):
+def get_thread(account, thread_id):
     result = subprocess.run(
         ["node", str(GET_THREAD), "--thread-id", thread_id],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+        env=node_env(account.creds_dir),
     )
     assert result.returncode == 0, f"get_thread.mjs failed: {result.stderr.decode()}"
     return json.loads(result.stdout)
 
 
-def parse_from_thread(forwarded_email):
+def parse_from_thread(account, forwarded_email):
     """Fallback when body has no forward marker.
 
     Treats the +bot@ message as a reply within an existing thread: fetch the
@@ -102,7 +105,7 @@ def parse_from_thread(forwarded_email):
     self_id = forwarded_email.get("id")
     if not tid:
         return None
-    thread = get_thread(tid)
+    thread = get_thread(account, tid)
     messages = thread.get("messages") or []
     if len(messages) < 2:
         return None
@@ -141,7 +144,7 @@ def reply_subject(subj):
     return f"Re: {s}" if s else "Re:"
 
 
-def draft_with_context(client, voice, parsed, thread_id=None, on_iteration=None):
+def draft_with_context(client, voice, parsed, account, thread_id=None, on_iteration=None):
     sys_prompt = voice + DRAFTER_WITH_CONTEXT
     context_section = (
         f"Morgan's context for this reply:\n{parsed['context']}\n\n"
@@ -158,7 +161,8 @@ def draft_with_context(client, voice, parsed, thread_id=None, on_iteration=None)
         "Draft the reply."
     )
     return agentic_drafter.draft(client, sys_prompt, user_prompt,
-                                 thread_id=thread_id, on_iteration=on_iteration)
+                                 thread_id=thread_id, on_iteration=on_iteration,
+                                 identity=account.identity, creds_dir=account.creds_dir)
 
 
 def render_progress_body(iter_num, msg, tool_history, final):
@@ -194,18 +198,20 @@ def render_progress_body(iter_num, msg, tool_history, final):
     return "\n".join(lines)
 
 
-def process_draft_request(forwarded_email):
+def process_draft_request(account, forwarded_email):
     parsed = parse_forward(forwarded_email.get("body", ""))
     if not parsed:
-        parsed = parse_from_thread(forwarded_email)
+        parsed = parse_from_thread(account, forwarded_email)
     if not parsed:
         draft_replies.send_telegram(
-            f"⚠️ Couldn't parse forwarded email: {html.escape(forwarded_email.get('subject', ''))}"
+            f"⚠️ Couldn't parse forwarded email: {html.escape(forwarded_email.get('subject', ''))}",
+            account.telegram,
         )
         return None
     if not parsed["original_email"]:
         draft_replies.send_telegram(
-            "⚠️ Forwarded email had no parseable 'From' header."
+            "⚠️ Forwarded email had no parseable 'From' header.",
+            account.telegram,
         )
         return None
 
@@ -213,7 +219,7 @@ def process_draft_request(forwarded_email):
         f"Voice profile not found at {draft_replies.VOICE_PROFILE}"
     voice = draft_replies.VOICE_PROFILE.read_text()
 
-    thread_info = find_thread(parsed["original_email"], parsed["original_subject"])
+    thread_info = find_thread(account, parsed["original_email"], parsed["original_subject"])
     client = agentic_drafter.make_client(draft_replies.DEEPSEEK_API_KEY)
     found = thread_info.get("found")
     thread_id = thread_info.get("threadId") if found else None
@@ -235,45 +241,47 @@ def process_draft_request(forwarded_email):
         "⏳ Drafting your reply, please wait...\n\n"
         "The AI is thinking. This draft will be overwritten as work progresses."
     )
-    draft_id = draft_replies.submit_draft(make_payload(placeholder))
+    draft_id = draft_replies.submit_draft(account, make_payload(placeholder))
 
     def on_iteration(iter_num, msg, tool_history, final):
         body_text = render_progress_body(iter_num, msg, tool_history, final)
-        draft_replies.submit_draft(make_payload(body_text), draft_id=draft_id)
+        draft_replies.submit_draft(account, make_payload(body_text), draft_id=draft_id)
 
     try:
         body, run_url = draft_with_context(
-            client, voice, parsed,
+            client, voice, parsed, account,
             thread_id=f"manual-{forwarded_email.get('id', '')}",
             on_iteration=on_iteration,
         )
     except AssertionError as err:
         err_body = f"⚠️ Drafter failed: {err}"
-        draft_replies.submit_draft(make_payload(err_body), draft_id=draft_id)
+        draft_replies.submit_draft(account, make_payload(err_body), draft_id=draft_id)
         draft_replies.send_telegram(
             "⚠️ <b>Contextual draft failed</b>\n"
             + draft_replies.format_draft_line(
                 parsed["original_from"], parsed["original_subject"],
                 thread_id=thread_id,
                 reason=str(err),
-            )
+            ),
+            account.telegram,
         )
         return None
 
     if agentic_drafter.contains_em_dash(body):
         rejection_body = f"🚫 Draft rejected (em-dash detected):\n\n{body}"
-        draft_replies.submit_draft(make_payload(rejection_body), draft_id=draft_id)
+        draft_replies.submit_draft(account, make_payload(rejection_body), draft_id=draft_id)
         draft_replies.send_telegram(
             "🚫 <b>Contextual draft rejected (em-dash)</b>\n"
             + draft_replies.format_draft_line(
                 parsed["original_from"], parsed["original_subject"],
                 thread_id=thread_id,
                 trace_url=run_url,
-            )
+            ),
+            account.telegram,
         )
         return None
 
-    draft_replies.submit_draft(make_payload(body), draft_id=draft_id)
+    draft_replies.submit_draft(account, make_payload(body), draft_id=draft_id)
 
     header = "📝 <b>Contextual draft created</b>" if found else \
         "📝 <b>Contextual draft created (no matching thread)</b>"
@@ -283,6 +291,7 @@ def process_draft_request(forwarded_email):
             parsed["original_from"], parsed["original_subject"],
             thread_id=thread_id,
             trace_url=run_url,
-        )
+        ),
+        account.telegram,
     )
     return draft_id

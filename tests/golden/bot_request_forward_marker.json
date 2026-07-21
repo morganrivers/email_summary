@@ -1,0 +1,165 @@
+{
+  "llm_calls": [
+    {
+      "model": "deepseek-v4-pro",
+      "max_tokens": 32000,
+      "response_format": null,
+      "has_tools": true,
+      "tool_choice": "auto",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Voice profile for [USER_FIRST] [USER_LAST].\n\nWrite warmly and concisely. Be direct. Prefer short sentences.\nOpen with a friendly greeting. Sign off as [USER_FIRST].\n\n\nWrite a reply email that follows the voice profile above. [USER_FIRST] has supplied his own context for how to respond — let that guide tone and content, while staying true to the voice profile. Output the email body only, including the greeting and sign-off as the profile dictates. No subject line. No commentary. No markdown fences. Plain text only.\n\nCurrent UTC time: 2026-07-21T12:00:00+00:00\n\nYou have access to tools to look up [USER_FIRST]'s email history and calendar. Use them when relevant context would materially improve the draft (e.g., checking availability before proposing a time, recalling prior commitments, verifying claims). If no lookup is needed, just write the draft. Aim for the fewest tool calls necessary.\n\nCRITICAL OUTPUT RULE: Your final response (after any tool calls) must contain ONLY the email body. Begin with the greeting (Hi/Hello/Dear/Hey). End with the sign-off and [USER_FIRST]'s name. No analysis, no reasoning, no preamble, no notes about why you wrote it that way. Just the email.\n\nPUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. Use commas, periods, parentheses, or restructured sentences instead. Em-dashes will cause the draft to be rejected.\n\nREASONING BUDGET: Keep your internal reasoning under 1000 words. Do not exhaustively explore alternatives. Decide quickly, then write. The final email content must fit in the response, so leave ample room for it."
+        },
+        {
+          "role": "user",
+          "content": "Original email [USER_FIRST] received:\nFrom: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 08:00:00 +0000\nSubject: Project sync\n\nHi [USER_FIRST], can we sync on the project this week?\n\n[USER_FIRST]'s context for this reply:\nPlease say yes and propose Friday.\n\nDraft the reply."
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "call_0",
+              "type": "function",
+              "function": {
+                "name": "get_calendar_events",
+                "arguments": "{\"start_iso\": \"2026-07-24T00:00:00Z\", \"end_iso\": \"2026-07-25T00:00:00Z\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_0",
+          "content": "{\"events\": [], \"count\": 0}"
+        }
+      ]
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "max_tokens": 32000,
+      "response_format": null,
+      "has_tools": true,
+      "tool_choice": "auto",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Voice profile for [USER_FIRST] [USER_LAST].\n\nWrite warmly and concisely. Be direct. Prefer short sentences.\nOpen with a friendly greeting. Sign off as [USER_FIRST].\n\n\nWrite a reply email that follows the voice profile above. [USER_FIRST] has supplied his own context for how to respond — let that guide tone and content, while staying true to the voice profile. Output the email body only, including the greeting and sign-off as the profile dictates. No subject line. No commentary. No markdown fences. Plain text only.\n\nCurrent UTC time: 2026-07-21T12:00:00+00:00\n\nYou have access to tools to look up [USER_FIRST]'s email history and calendar. Use them when relevant context would materially improve the draft (e.g., checking availability before proposing a time, recalling prior commitments, verifying claims). If no lookup is needed, just write the draft. Aim for the fewest tool calls necessary.\n\nCRITICAL OUTPUT RULE: Your final response (after any tool calls) must contain ONLY the email body. Begin with the greeting (Hi/Hello/Dear/Hey). End with the sign-off and [USER_FIRST]'s name. No analysis, no reasoning, no preamble, no notes about why you wrote it that way. Just the email.\n\nPUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. Use commas, periods, parentheses, or restructured sentences instead. Em-dashes will cause the draft to be rejected.\n\nREASONING BUDGET: Keep your internal reasoning under 1000 words. Do not exhaustively explore alternatives. Decide quickly, then write. The final email content must fit in the response, so leave ample room for it."
+        },
+        {
+          "role": "user",
+          "content": "Original email [USER_FIRST] received:\nFrom: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 08:00:00 +0000\nSubject: Project sync\n\nHi [USER_FIRST], can we sync on the project this week?\n\n[USER_FIRST]'s context for this reply:\nPlease say yes and propose Friday.\n\nDraft the reply."
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "call_0",
+              "type": "function",
+              "function": {
+                "name": "get_calendar_events",
+                "arguments": "{\"start_iso\": \"2026-07-24T00:00:00Z\", \"end_iso\": \"2026-07-25T00:00:00Z\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_0",
+          "content": "{\"events\": [], \"count\": 0}"
+        }
+      ]
+    }
+  ],
+  "node_calls": [
+    {
+      "script": "find_thread.mjs",
+      "args": [
+        "--from",
+        "bob@contoso.com",
+        "--subject",
+        "Project sync"
+      ],
+      "stdin": null
+    },
+    {
+      "script": "create_draft.mjs",
+      "args": [],
+      "stdin": {
+        "to": "bob@contoso.com",
+        "subject": "Re: Project sync",
+        "body": "⏳ Drafting your reply, please wait...\n\nThe AI is thinking. This draft will be overwritten as work progresses.",
+        "threadId": "t9",
+        "inReplyTo": "<mid-t9@mail>",
+        "references": "<mid-t9@mail>",
+        "originalFrom": "Bob Baker <bob@contoso.com>",
+        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+        "originalBody": "Hi Morgan, can we sync on the project this week?"
+      }
+    },
+    {
+      "script": "list_calendar.mjs",
+      "args": [
+        "--start",
+        "2026-07-24T00:00:00Z",
+        "--end",
+        "2026-07-25T00:00:00Z"
+      ],
+      "stdin": null
+    },
+    {
+      "script": "create_draft.mjs",
+      "args": [],
+      "stdin": {
+        "to": "bob@contoso.com",
+        "subject": "Re: Project sync",
+        "body": "⏳ Drafting — iteration 1\n\nTools called so far:\n• get_calendar_events({\"start_iso\": \"2026-07-24T00:00:00Z\", \"end_iso\": \"2026-07-25T00:00:00Z\"})\n    ↳ {\"events\": [], \"count\": 0}\n\nQueued next: 1 tool call(s)\n• get_calendar_events\n\n(This draft will be replaced when the final reply is ready.)",
+        "threadId": "t9",
+        "inReplyTo": "<mid-t9@mail>",
+        "references": "<mid-t9@mail>",
+        "originalFrom": "Bob Baker <bob@contoso.com>",
+        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+        "originalBody": "Hi Morgan, can we sync on the project this week?",
+        "draftId": "draft-5"
+      }
+    },
+    {
+      "script": "create_draft.mjs",
+      "args": [],
+      "stdin": {
+        "to": "bob@contoso.com",
+        "subject": "Re: Project sync",
+        "body": "⏳ Finalizing reply (iteration 2)...\n\nTools called so far:\n• get_calendar_events({\"start_iso\": \"2026-07-24T00:00:00Z\", \"end_iso\": \"2026-07-25T00:00:00Z\"})\n    ↳ {\"events\": [], \"count\": 0}\n\nModel's current output:\nHi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan\n\n(This draft will be replaced when the final reply is ready.)",
+        "threadId": "t9",
+        "inReplyTo": "<mid-t9@mail>",
+        "references": "<mid-t9@mail>",
+        "originalFrom": "Bob Baker <bob@contoso.com>",
+        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+        "originalBody": "Hi Morgan, can we sync on the project this week?",
+        "draftId": "draft-5"
+      }
+    },
+    {
+      "script": "create_draft.mjs",
+      "args": [],
+      "stdin": {
+        "to": "bob@contoso.com",
+        "subject": "Re: Project sync",
+        "body": "Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan",
+        "threadId": "t9",
+        "inReplyTo": "<mid-t9@mail>",
+        "references": "<mid-t9@mail>",
+        "originalFrom": "Bob Baker <bob@contoso.com>",
+        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+        "originalBody": "Hi Morgan, can we sync on the project this week?",
+        "draftId": "draft-5"
+      }
+    }
+  ],
+  "telegram": [
+    "📝 <b>Contextual draft created</b>\n<a href=\"https://mail.google.com/mail/u/0/#all/t9\"><b>Bob Baker &lt;bob@contoso.com&gt;</b>: Project sync</a>"
+  ],
+  "returned": "draft-5"
+}

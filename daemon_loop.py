@@ -26,16 +26,10 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from dotenv import load_dotenv
 load_dotenv(SCRIPT_DIR / ".env")
 
-import state
-import manual_draft
-import schedule_from_sent
-from draft_replies import process_emails
+import account as account_mod
+import pipeline
 from notify import notify_error
 
-import subprocess
-import json
-
-FETCH_SCRIPT = SCRIPT_DIR / "fetch_emails.mjs"
 FIFO_PATH = SCRIPT_DIR / "wake.fifo"
 RESTART_FLAG = SCRIPT_DIR / "restart.flag"
 
@@ -54,56 +48,13 @@ def ensure_fifo():
     os.chmod(str(FIFO_PATH), 0o666)
 
 
-def fetch_since(history_id):
-    result = subprocess.run(
-        ["node", str(FETCH_SCRIPT), "--since-history", str(history_id)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
-    )
-    assert result.returncode == 0, (
-        f"fetch_emails.mjs exited {result.returncode}: {result.stderr.decode()}"
-    )
-    return json.loads(result.stdout)
-
-
 def process_once():
-    s = state.load()
-    last = s.get("lastHistoryId")
-    if not last:
-        log("No lastHistoryId in state; run watch_register.mjs first.")
-        return
-    payload = fetch_since(last)
-    emails = payload.get("emails", [])
-    sent = payload.get("sent", [])
-    new_history_id = payload.get("historyId")
-    stale = payload.get("stale", False)
-    log(f"fetched {len(emails)} email(s), {len(sent)} sent since historyId={last}")
-    if stale:
-        log(f"history.list 404 (startHistoryId={last} too old); bootstrapping to {new_history_id}")
-    bot_requests = [e for e in emails if manual_draft.is_bot_request(e)]
-    auto_emails = [e for e in emails if not manual_draft.is_bot_request(e)]
-    for req in bot_requests:
-        try:
-            manual_draft.process_draft_request(req)
-        except Exception as err:
-            log(f"manual_draft failed for {req.get('id')}: {err}")
-            traceback.print_exc(file=sys.stdout)
-            notify_error(f"manual_draft failed for email {req.get('id')}", err)
-    if auto_emails:
-        try:
-            process_emails(auto_emails)
-        except Exception as err:
-            log(f"process_emails failed: {err}")
-            traceback.print_exc(file=sys.stdout)
-            notify_error("process_emails failed", err)
-    if sent:
-        try:
-            schedule_from_sent.run(sent)
-        except Exception as err:
-            log(f"schedule_from_sent failed: {err}")
-            traceback.print_exc(file=sys.stdout)
-            notify_error("schedule_from_sent failed", err)
-    if new_history_id:
-        state.update(lastHistoryId=str(new_history_id))
+    for acct in account_mod.load_accounts():
+        pipeline.process_account(
+            acct,
+            log=log,
+            notify_err=lambda ctx, err, a=acct: notify_error(ctx, err, a.telegram),
+        )
 
 
 def drain_fifo():

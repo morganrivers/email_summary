@@ -9,6 +9,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from node_runner import node_env
+
 SCRIPT_DIR = Path(__file__).parent
 SEARCH_GMAIL = SCRIPT_DIR / "search_gmail.mjs"
 LIST_CALENDAR = SCRIPT_DIR / "list_calendar.mjs"
@@ -17,12 +19,12 @@ GET_THREAD = SCRIPT_DIR / "get_thread.mjs"
 NODE_TIMEOUT = 60
 
 
-def _run_node(script, args):
+def _run_node(script, args, creds_dir=None):
     cmd = ["node", str(script)] + args
     try:
         result = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=NODE_TIMEOUT,
+            timeout=NODE_TIMEOUT, env=node_env(creds_dir),
         )
     except subprocess.TimeoutExpired:
         return {"error": f"{script.name} timed out after {NODE_TIMEOUT}s"}
@@ -34,33 +36,33 @@ def _run_node(script, args):
         return {"error": f"{script.name} returned invalid JSON: {e}"}
 
 
-def search_emails(args):
+def search_emails(args, creds_dir=None):
     query = args.get("query")
     if not query:
         return {"error": "query is required"}
     max_results = min(int(args.get("max_results", 5)), 10)
-    out = _run_node(SEARCH_GMAIL, ["--query", query, "--max", str(max_results)])
+    out = _run_node(SEARCH_GMAIL, ["--query", query, "--max", str(max_results)], creds_dir)
     if isinstance(out, dict) and "error" in out:
         return out
     return {"results": out, "count": len(out)}
 
 
-def get_calendar_events(args):
+def get_calendar_events(args, creds_dir=None):
     start_iso = args.get("start_iso")
     end_iso = args.get("end_iso")
     if not start_iso or not end_iso:
         return {"error": "start_iso and end_iso are required (ISO 8601)"}
-    out = _run_node(LIST_CALENDAR, ["--start", start_iso, "--end", end_iso])
+    out = _run_node(LIST_CALENDAR, ["--start", start_iso, "--end", end_iso], creds_dir)
     if isinstance(out, dict) and "error" in out:
         return out
     return {"events": out, "count": len(out)}
 
 
-def get_email_thread(args):
+def get_email_thread(args, creds_dir=None):
     thread_id = args.get("thread_id")
     if not thread_id:
         return {"error": "thread_id is required"}
-    out = _run_node(GET_THREAD, ["--thread-id", thread_id])
+    out = _run_node(GET_THREAD, ["--thread-id", thread_id], creds_dir)
     if isinstance(out, dict) and "error" in out:
         return out
     return out

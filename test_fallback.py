@@ -4,8 +4,10 @@ load_dotenv(".env")
 import json, subprocess, sys
 from pathlib import Path
 
+import account
 import manual_draft
 
+acct = account.default_account()
 email_id = "19f198a5b20434e0"
 result = subprocess.run(
     ["node", "fetch_emails.mjs", "--since-history", "2854017"],
@@ -24,6 +26,6 @@ print()
 print("parse_forward result:", manual_draft.parse_forward(target.get("body", "")))
 print()
 
-parsed = manual_draft.parse_from_thread(target)
+parsed = manual_draft.parse_from_thread(acct, target)
 print("parse_from_thread result:")
 print(json.dumps(parsed, indent=2)[:1500])

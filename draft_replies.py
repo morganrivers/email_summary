@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 import agentic_drafter
 import llm_client
+from node_runner import node_env
 from notify import send_telegram
 
 SCRIPT_DIR = Path(__file__).parent
@@ -71,7 +72,7 @@ def fetch_emails():
     return json.loads(result.stdout)
 
 
-def classify(client, emails):
+def classify(client, emails, identity=None):
     listing = "\n\n".join(
         f"[{i}] From: {e['from']}\nSubject: {e['subject']}\nBody: {e['body'][:1500]}"
         for i, e in enumerate(emails)
@@ -84,12 +85,13 @@ def classify(client, emails):
         ],
         max_tokens=2000,
         response_format={"type": "json_object"},
+        identity=identity,
     )
     parsed = json.loads(resp.choices[0].message.content)
     return {d["index"]: d for d in parsed.get("decisions", [])}
 
 
-def draft_body(client, voice, email):
+def draft_body(client, voice, email, account):
     sys_prompt = voice + DRAFTER_INSTRUCTION
     user_prompt = (
         f"Original email:\n"
@@ -102,6 +104,7 @@ def draft_body(client, voice, email):
     return agentic_drafter.draft(
         client, sys_prompt, user_prompt,
         thread_id=f"auto-{email['id']}",
+        identity=account.identity, creds_dir=account.creds_dir,
     )  # returns (body, run_url)
 
 
@@ -124,14 +127,16 @@ def reply_references(email):
     return " ".join(p for p in parts if p)
 
 
-def submit_draft(payload, draft_id=None):
-    """Create or update a Gmail draft. If draft_id is given, updates in place."""
+def submit_draft(account, payload, draft_id=None):
+    """Create or update a Gmail draft. If draft_id is given, updates in place.
+    Sole subprocess boundary to create_draft.mjs; routes to account's mailbox."""
     if draft_id:
         payload = {**payload, "draftId": draft_id}
     result = subprocess.run(
         ["node", str(DRAFT_SCRIPT)],
         input=json.dumps(payload),
         capture_output=True, text=True, timeout=60,
+        env=node_env(account.creds_dir),
     )
     assert result.returncode == 0, f"create_draft.mjs failed: {result.stderr}"
     return json.loads(result.stdout)["draftId"]
@@ -177,7 +182,7 @@ def build_draft_payload(*, to, subject, body, thread_id, in_reply_to, references
     }
 
 
-def create_draft(email, body_text):
+def create_draft(account, email, body_text):
     payload = build_draft_payload(
         to=reply_to_address(email["from"]),
         subject=reply_subject(email["subject"]),
@@ -189,7 +194,7 @@ def create_draft(email, body_text):
         original_date=email.get("date", ""),
         original_body=email.get("body", ""),
     )
-    return submit_draft(payload)
+    return submit_draft(account, payload)
 
 
 def render_telegram(drafted):
@@ -217,7 +222,7 @@ def render_rejected_telegram(rejected):
     return "\n".join(lines)
 
 
-def process_emails(emails):
+def process_emails(account, emails):
     assert isinstance(emails, list), "emails must be a list"
     if not emails:
         return []
@@ -225,7 +230,7 @@ def process_emails(emails):
     voice = VOICE_PROFILE.read_text()
 
     client = agentic_drafter.make_client(DEEPSEEK_API_KEY)
-    decisions = classify(client, emails)
+    decisions = classify(client, emails, account.identity)
 
     drafted = []
     rejected = []
@@ -233,7 +238,7 @@ def process_emails(emails):
         d = decisions.get(i)
         if not d or not d.get("needs_reply"):
             continue
-        body, run_url = draft_body(client, voice, email)
+        body, run_url = draft_body(client, voice, email, account)
         if agentic_drafter.contains_em_dash(body):
             rejected.append({
                 "from": email["from"],
@@ -242,7 +247,7 @@ def process_emails(emails):
                 "thread_id": email["threadId"],
             })
             continue
-        draft_id = create_draft(email, body)
+        draft_id = create_draft(account, email, body)
         drafted.append({
             "from": email["from"],
             "subject": email["subject"],
@@ -253,15 +258,17 @@ def process_emails(emails):
         })
 
     if drafted:
-        send_telegram(render_telegram(drafted))
+        send_telegram(render_telegram(drafted), account.telegram)
     if rejected:
-        send_telegram(render_rejected_telegram(rejected))
+        send_telegram(render_rejected_telegram(rejected), account.telegram)
     return drafted
 
 
 def main():
+    import account as account_mod
+    acct = account_mod.default_account()
     emails = fetch_emails()
-    process_emails(emails)
+    process_emails(acct, emails)
 
 
 if __name__ == "__main__":

@@ -90,7 +90,7 @@ def _tool_call_to_message(tc):
 
 
 def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
-          thread_id=None, on_iteration=None):
+          thread_id=None, on_iteration=None, identity=None, creds_dir=None):
     now = datetime.now(timezone.utc).isoformat()
     system_with_time = (
         f"{system_prompt}\n\n"
@@ -111,7 +111,7 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
         "Do not exhaustively explore alternatives. Decide quickly, then write. "
         "The final email content must fit in the response, so leave ample room for it."
     )
-    state = pseudonymizer.new_state()
+    state = pseudonymizer.new_state(identity)
     system_with_time = pseudonymizer.pseudonymize(system_with_time, state)
     user_prompt = pseudonymizer.pseudonymize(user_prompt, state)
     messages = [
@@ -134,7 +134,8 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
             metadata={"session_id": session_id, "thread_id": session_id},
         ) as run:
             body = _draft_with_em_dash_retry(client, messages, max_iterations,
-                                             ls_extra, state, on_iteration=on_iteration)
+                                             ls_extra, state, on_iteration=on_iteration,
+                                             creds_dir=creds_dir)
         body = pseudonymizer.restore(body, state)
         run_url = None
         try:
@@ -143,7 +144,7 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
             sys.stderr.write(f"get_run_url failed: {err}\n")
         return body, run_url
     body = _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra,
-                                     state, on_iteration=on_iteration)
+                                     state, on_iteration=on_iteration, creds_dir=creds_dir)
     body = pseudonymizer.restore(body, state)
     return body, None
 
@@ -177,9 +178,9 @@ def _safe_notify(on_iteration, *args):
 
 
 def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra, state,
-                              on_iteration=None):
+                              on_iteration=None, creds_dir=None):
     body = _run_loop(client, messages, max_iterations, ls_extra, state,
-                     on_iteration=on_iteration)
+                     on_iteration=on_iteration, creds_dir=creds_dir)
     for attempt in range(MAX_EM_DASH_RETRIES):
         if not contains_em_dash(body):
             return body
@@ -190,11 +191,12 @@ def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra, state,
         messages.append({"role": "assistant", "content": body})
         messages.append({"role": "user", "content": EM_DASH_CORRECTION_PROMPT})
         body = _run_loop(client, messages, max_iterations, ls_extra, state,
-                         on_iteration=on_iteration)
+                         on_iteration=on_iteration, creds_dir=creds_dir)
     return body
 
 
-def _run_loop(client, messages, max_iterations, ls_extra, state, on_iteration=None):
+def _run_loop(client, messages, max_iterations, ls_extra, state, on_iteration=None,
+              creds_dir=None):
     tool_history = []
     for iteration in range(max_iterations):
         resp = llm_client.complete(
@@ -241,7 +243,7 @@ def _run_loop(client, messages, max_iterations, ls_extra, state, on_iteration=No
                 if executor is None:
                     result = {"error": f"unknown tool {fn_name}"}
                 else:
-                    result = executor(fn_args)
+                    result = executor(fn_args, creds_dir)
             tool_history.append({
                 "iteration": iteration + 1,
                 "name": fn_name,

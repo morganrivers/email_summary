@@ -63,17 +63,18 @@ def _restore_response(resp, state):
             msg.content = pseudonymizer.restore(msg.content, state)
 
 
-def complete(client, messages, max_tokens, pseudonymize=True, **kwargs):
+def complete(client, messages, max_tokens, pseudonymize=True, identity=None, **kwargs):
     """Single LLM boundary. By default, PII is masked out of every message
     before the call (so external traces carry only tags) and restored in the
-    response afterward. Multi-turn callers that manage their own pseudonymizer
-    state (agentic_drafter) pass pseudonymize=False."""
+    response afterward. identity is the account owner whose own name/email get
+    fixed tags; defaults to the single-tenant identity. Multi-turn callers that
+    manage their own pseudonymizer state (agentic_drafter) pass pseudonymize=False."""
     assert messages, "messages must be non-empty"
     if not getattr(client, "_ls_wrapped", False):
         kwargs.pop("langsmith_extra", None)
     extra_body = kwargs.pop("extra_body", {}) or {}
     extra_body.setdefault("thinking", THINKING)
-    state = pseudonymizer.new_state() if pseudonymize else None
+    state = pseudonymizer.new_state(identity) if pseudonymize else None
     if state is not None:
         messages = _mask_messages(messages, state)
     resp = client.chat.completions.create(

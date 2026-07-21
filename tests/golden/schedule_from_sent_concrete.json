@@ -1,0 +1,50 @@
+{
+  "llm_calls": [
+    {
+      "model": "deepseek-v4-pro",
+      "max_tokens": 2000,
+      "response_format": {
+        "type": "json_object"
+      },
+      "has_tools": false,
+      "tool_choice": null,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You extract calendar events from an email the user ([USER_FIRST]) has SENT.\n\nExtract an event ONLY when the email commits to a specific calendar item with a CONCRETE date AND clock time (e.g. 'Tuesday July 21 at 3pm', 'tomorrow 10:00', 'the 20th at 14:30'). Resolve relative dates using the provided 'Today' date.\n\nDo NOT extract when:\n- the time is vague ('next week', 'sometime', 'soon', 'let me know when works')\n- only a date with no clock time is given\n- it merely references a past or already-scheduled event\n- it is a deadline or reminder rather than a meeting/appointment\nWhen unsure, extract nothing.\n\nOutput JSON: {\"events\": [{\"summary\": str, \"start\": \"YYYY-MM-DDTHH:MM:SS\", \"end\": \"YYYY-MM-DDTHH:MM:SS\", \"location\": str, \"description\": str}]}.\nUse local wall-clock time with NO timezone offset. Omit 'end' if no end time is stated. 'location' and 'description' may be empty strings. Keep 'summary' short. If there are no concrete events, output {\"events\": []}."
+        },
+        {
+          "role": "user",
+          "content": "Today: 2026-07-21 (Tuesday). Timezone: Europe/Berlin.\n\nSent email:\nTo: [EMAIL_ADDRESS1]\nSubject: Confirming Tuesday\nDate: Tue, 21 Jul 2026 09:00:00 +0000\n\nHi [PERSON1_FIRST], confirming our meeting Tuesday July 21 at 3pm. [USER_FIRST]"
+        }
+      ]
+    }
+  ],
+  "node_calls": [
+    {
+      "script": "create_event.mjs",
+      "args": [],
+      "stdin": {
+        "summary": "Meeting with Dave",
+        "startIso": "2026-07-21T15:00:00",
+        "endIso": "2026-07-21T16:00:00",
+        "timeZone": "Europe/Berlin",
+        "location": "",
+        "description": ""
+      }
+    }
+  ],
+  "telegram": [
+    "📅 <b>1 event(s) scheduled from your sent mail</b>\n\n• <a href=\"https://cal/evt1\"><b>Meeting with Dave</b></a>\n  <i>2026-07-21T15:00:00</i>"
+  ],
+  "returned": [
+    {
+      "summary": "Meeting with Dave",
+      "start": "2026-07-21T15:00:00",
+      "end": "2026-07-21T16:00:00",
+      "location": "",
+      "description": "",
+      "htmlLink": "https://cal/evt1"
+    }
+  ]
+}

@@ -46,29 +46,48 @@ def _stop(token):
     return token.lower() in STOPWORDS
 
 
-def _build_user_rules():
-    firsts = [USER_FIRST] + USER_FIRST_ALIASES
-    rules = []
-    for f in firsts:
-        rules.append((
-            re.compile(rf"\b{re.escape(f)}\s+{re.escape(USER_LAST)}\b", re.IGNORECASE),
-            f"{USER_FIRST_TAG} {USER_LAST_TAG}",
-        ))
-    for e in USER_EMAILS:
-        rules.append((re.compile(re.escape(e), re.IGNORECASE), USER_EMAIL_TAG))
-    rules.append((re.compile(rf"\b{re.escape(USER_LAST)}\b"), USER_LAST_TAG))
-    for f in firsts:
-        rules.append((re.compile(rf"\b{re.escape(f)}\b"), USER_FIRST_TAG))
-    return rules
+class UserIdentity:
+    """Per-user masking identity: the account owner's own name/email, which
+    are deterministically tagged before Presidio so the owner never varies by
+    person-numbering. Compiled once per identity; passed into new_state so a
+    shared process can hold one identity per user without global coupling."""
+
+    def __init__(self, first, last, first_aliases=(), emails=()):
+        assert first and last, "identity requires first and last name"
+        self.first = first
+        self.last = last
+        self.first_aliases = list(first_aliases)
+        self.emails = list(emails)
+        self._rules = self._build_rules()
+
+    def _build_rules(self):
+        firsts = [self.first] + self.first_aliases
+        rules = []
+        for f in firsts:
+            rules.append((
+                re.compile(rf"\b{re.escape(f)}\s+{re.escape(self.last)}\b", re.IGNORECASE),
+                f"{USER_FIRST_TAG} {USER_LAST_TAG}",
+            ))
+        for e in self.emails:
+            rules.append((re.compile(re.escape(e), re.IGNORECASE), USER_EMAIL_TAG))
+        rules.append((re.compile(rf"\b{re.escape(self.last)}\b"), USER_LAST_TAG))
+        for f in firsts:
+            rules.append((re.compile(rf"\b{re.escape(f)}\b"), USER_FIRST_TAG))
+        return rules
+
+    def mask_user(self, text):
+        for rx, repl in self._rules:
+            text = rx.sub(repl, text)
+        return text
+
+    def seed_mapping(self):
+        mapping = {USER_FIRST_TAG: self.first, USER_LAST_TAG: self.last}
+        if self.emails:
+            mapping[USER_EMAIL_TAG] = self.emails[0]
+        return mapping
 
 
-_USER_RULES = _build_user_rules()
-
-
-def _mask_user(text):
-    for rx, repl in _USER_RULES:
-        text = rx.sub(repl, text)
-    return text
+DEFAULT_IDENTITY = UserIdentity(USER_FIRST, USER_LAST, USER_FIRST_ALIASES, USER_EMAILS)
 
 # Presidio-detected PII (spaCy NER + built-in recognizers).
 NER_ENTITIES = ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD", "IBAN_CODE"]
@@ -154,20 +173,19 @@ def _engines():
     return _ANALYZER, _ANONYMIZER
 
 
-def new_state():
-    """Fresh shared mapping for one draft, or None when disabled."""
+def new_state(identity=None):
+    """Fresh shared mapping for one draft, or None when disabled.
+
+    identity is the account owner whose own name/email get fixed tags; defaults
+    to DEFAULT_IDENTITY so single-tenant callers need pass nothing."""
     if not PSEUDONYMIZE_ENABLED:
         return None
-    mapping = {
-        USER_FIRST_TAG: USER_FIRST,
-        USER_LAST_TAG: USER_LAST,
-    }
-    if USER_EMAILS:
-        mapping[USER_EMAIL_TAG] = USER_EMAILS[0]
+    identity = identity or DEFAULT_IDENTITY
     return {
+        "identity": identity,
         "counters": defaultdict(int),
         "seen": {},
-        "mapping": mapping,
+        "mapping": identity.seed_mapping(),
         "names": {},
         "pindex": {},
         "persons": {},
@@ -274,7 +292,7 @@ def pseudonymize(text, state):
         return text
     from presidio_anonymizer.entities import OperatorConfig
 
-    text = _mask_user(text)
+    text = state["identity"].mask_user(text)
     text = _mask_names(text, state)
     analyzer, anonymizer = _engines()
     results = analyzer.analyze(text=text, language="en", entities=ENTITIES)

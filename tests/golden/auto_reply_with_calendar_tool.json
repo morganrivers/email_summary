@@ -1,0 +1,135 @@
+{
+  "llm_calls": [
+    {
+      "model": "deepseek-v4-pro",
+      "max_tokens": 2000,
+      "response_format": {
+        "type": "json_object"
+      },
+      "has_tools": false,
+      "tool_choice": null,
+      "messages": [
+        {
+          "role": "system",
+          "content": "Decide for each email whether [USER_FIRST] (the recipient) should personally reply.\n\nReply 'yes' ONLY when a specific human contact is personally writing to [USER_FIRST] and clearly expects a direct personal response from him. The email should read like it was hand-written and sent to him individually (not as part of a list).\n\nReply 'no' for ALL of the following, even if they contain a call to action, an interesting opportunity, or a deadline:\n- Newsletters, Substack posts, blog digests (even ones soliciting pitches or submissions)\n- Marketing, promotional, sales, or fundraising emails\n- Automated notifications, alerts, confirmations, and digests\n- Anything from no-reply, noreply, donotreply, jobalerts, notifications, marketing, or similar senders\n- Calendar invites without explicit personal questions directed at [USER_FIRST]\n- Receipts, invoices, shipping updates, package notifications, order confirmations\n- Mass-mailed announcements, event invitations, conference CFPs\n- Job alerts and recruitment broadcasts (even from real recruiters using mass tools)\n- Security alerts, account notifications, system messages\n- Bulk emails identifiable by 'List-Unsubscribe' style cues, generic greetings, or 'view in browser' links\n\nWhen unsure, prefer 'no'. False positives create draft noise; missed emails are recoverable via the daily summary.\n\nOutput JSON: {\"decisions\": [{\"index\": int, \"needs_reply\": bool, \"reason\": str}, ...]}. Include one entry per input email. Keep each reason to one short sentence."
+        },
+        {
+          "role": "user",
+          "content": "[0] From: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nSubject: Lunch next week?\nBody: Hi [USER_FIRST], want to grab lunch next week? Best, [PERSON1_FIRST] [PERSON1_LAST]"
+        }
+      ]
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "max_tokens": 32000,
+      "response_format": null,
+      "has_tools": true,
+      "tool_choice": "auto",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Voice profile for [USER_FIRST] [USER_LAST].\n\nWrite warmly and concisely. Be direct. Prefer short sentences.\nOpen with a friendly greeting. Sign off as [USER_FIRST].\n\n\nWrite a reply email that follows the voice profile above. Output the email body only, including the greeting and sign-off as the profile dictates. No subject line. No commentary. No markdown fences. Plain text only.\n\nCurrent UTC time: 2026-07-21T12:00:00+00:00\n\nYou have access to tools to look up [USER_FIRST]'s email history and calendar. Use them when relevant context would materially improve the draft (e.g., checking availability before proposing a time, recalling prior commitments, verifying claims). If no lookup is needed, just write the draft. Aim for the fewest tool calls necessary.\n\nCRITICAL OUTPUT RULE: Your final response (after any tool calls) must contain ONLY the email body. Begin with the greeting (Hi/Hello/Dear/Hey). End with the sign-off and [USER_FIRST]'s name. No analysis, no reasoning, no preamble, no notes about why you wrote it that way. Just the email.\n\nPUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. Use commas, periods, parentheses, or restructured sentences instead. Em-dashes will cause the draft to be rejected.\n\nREASONING BUDGET: Keep your internal reasoning under 1000 words. Do not exhaustively explore alternatives. Decide quickly, then write. The final email content must fit in the response, so leave ample room for it."
+        },
+        {
+          "role": "user",
+          "content": "Original email:\nFrom: [PERSON1_FIRST] [PERSON1_MID1] <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 09:00:00 +0000\nSubject: Lunch next week?\n\nHi [USER_FIRST], want to grab lunch next week? Best, [PERSON1_FIRST] [PERSON1_MID1] [PERSON1_LAST] a reply."
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "call_0",
+              "type": "function",
+              "function": {
+                "name": "get_calendar_events",
+                "arguments": "{\"start_iso\": \"2026-07-23T00:00:00Z\", \"end_iso\": \"2026-07-24T00:00:00Z\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_0",
+          "content": "{\"events\": [], \"count\": 0}"
+        }
+      ]
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "max_tokens": 32000,
+      "response_format": null,
+      "has_tools": true,
+      "tool_choice": "auto",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Voice profile for [USER_FIRST] [USER_LAST].\n\nWrite warmly and concisely. Be direct. Prefer short sentences.\nOpen with a friendly greeting. Sign off as [USER_FIRST].\n\n\nWrite a reply email that follows the voice profile above. Output the email body only, including the greeting and sign-off as the profile dictates. No subject line. No commentary. No markdown fences. Plain text only.\n\nCurrent UTC time: 2026-07-21T12:00:00+00:00\n\nYou have access to tools to look up [USER_FIRST]'s email history and calendar. Use them when relevant context would materially improve the draft (e.g., checking availability before proposing a time, recalling prior commitments, verifying claims). If no lookup is needed, just write the draft. Aim for the fewest tool calls necessary.\n\nCRITICAL OUTPUT RULE: Your final response (after any tool calls) must contain ONLY the email body. Begin with the greeting (Hi/Hello/Dear/Hey). End with the sign-off and [USER_FIRST]'s name. No analysis, no reasoning, no preamble, no notes about why you wrote it that way. Just the email.\n\nPUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. Use commas, periods, parentheses, or restructured sentences instead. Em-dashes will cause the draft to be rejected.\n\nREASONING BUDGET: Keep your internal reasoning under 1000 words. Do not exhaustively explore alternatives. Decide quickly, then write. The final email content must fit in the response, so leave ample room for it."
+        },
+        {
+          "role": "user",
+          "content": "Original email:\nFrom: [PERSON1_FIRST] [PERSON1_MID1] <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 09:00:00 +0000\nSubject: Lunch next week?\n\nHi [USER_FIRST], want to grab lunch next week? Best, [PERSON1_FIRST] [PERSON1_MID1] [PERSON1_LAST] a reply."
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "call_0",
+              "type": "function",
+              "function": {
+                "name": "get_calendar_events",
+                "arguments": "{\"start_iso\": \"2026-07-23T00:00:00Z\", \"end_iso\": \"2026-07-24T00:00:00Z\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_0",
+          "content": "{\"events\": [], \"count\": 0}"
+        }
+      ]
+    }
+  ],
+  "node_calls": [
+    {
+      "script": "list_calendar.mjs",
+      "args": [
+        "--start",
+        "2026-07-23T00:00:00Z",
+        "--end",
+        "2026-07-24T00:00:00Z"
+      ],
+      "stdin": null
+    },
+    {
+      "script": "create_draft.mjs",
+      "args": [],
+      "stdin": {
+        "to": "alice@contoso.com",
+        "subject": "Re: Lunch next week?",
+        "body": "Hi Alice,\n\nThursday afternoon works. Say 3pm?\n\nBest,\nMorgan",
+        "threadId": "t1",
+        "inReplyTo": "<msg-e1@mail>",
+        "references": "<msg-e1@mail>",
+        "originalFrom": "Alice Adams <alice@contoso.com>",
+        "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
+        "originalBody": "Hi Morgan, want to grab lunch next week? Best, Alice Adams"
+      }
+    }
+  ],
+  "telegram": [
+    "📝 <b>1 draft(s) created</b>\n\n• <a href=\"https://mail.google.com/mail/u/0/#all/t1\"><b>Alice Adams &lt;alice@contoso.com&gt;</b>: Lunch next week?</a>\n  <i>Asks about meeting</i>"
+  ],
+  "returned": [
+    {
+      "from": "Alice Adams <alice@contoso.com>",
+      "subject": "Lunch next week?",
+      "reason": "Asks about meeting",
+      "run_url": null,
+      "draft_id": "draft-1",
+      "thread_id": "t1"
+    }
+  ]
+}

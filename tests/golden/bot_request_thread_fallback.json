@@ -1,0 +1,92 @@
+{
+  "llm_calls": [
+    {
+      "model": "deepseek-v4-pro",
+      "max_tokens": 32000,
+      "response_format": null,
+      "has_tools": true,
+      "tool_choice": "auto",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Voice profile for [USER_FIRST] [USER_LAST].\n\nWrite warmly and concisely. Be direct. Prefer short sentences.\nOpen with a friendly greeting. Sign off as [USER_FIRST].\n\n\nWrite a reply email that follows the voice profile above. [USER_FIRST] has supplied his own context for how to respond — let that guide tone and content, while staying true to the voice profile. Output the email body only, including the greeting and sign-off as the profile dictates. No subject line. No commentary. No markdown fences. Plain text only.\n\nCurrent UTC time: 2026-07-21T12:00:00+00:00\n\nYou have access to tools to look up [USER_FIRST]'s email history and calendar. Use them when relevant context would materially improve the draft (e.g., checking availability before proposing a time, recalling prior commitments, verifying claims). If no lookup is needed, just write the draft. Aim for the fewest tool calls necessary.\n\nCRITICAL OUTPUT RULE: Your final response (after any tool calls) must contain ONLY the email body. Begin with the greeting (Hi/Hello/Dear/Hey). End with the sign-off and [USER_FIRST]'s name. No analysis, no reasoning, no preamble, no notes about why you wrote it that way. Just the email.\n\nPUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. Use commas, periods, parentheses, or restructured sentences instead. Em-dashes will cause the draft to be rejected.\n\nREASONING BUDGET: Keep your internal reasoning under 1000 words. Do not exhaustively explore alternatives. Decide quickly, then write. The final email content must fit in the response, so leave ample room for it."
+        },
+        {
+          "role": "user",
+          "content": "Original email [USER_FIRST] received:\nFrom: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 07:00:00 +0000\nSubject: Budget\n\nHi [USER_FIRST], thoughts on the budget?\n\n[USER_FIRST]'s context for this reply:\nCan you reply to this thread for me?\n\nDraft the reply."
+        }
+      ]
+    }
+  ],
+  "node_calls": [
+    {
+      "script": "get_thread.mjs",
+      "args": [
+        "--thread-id",
+        "t8"
+      ],
+      "stdin": null
+    },
+    {
+      "script": "find_thread.mjs",
+      "args": [
+        "--from",
+        "carol@contoso.com",
+        "--subject",
+        "Budget"
+      ],
+      "stdin": null
+    },
+    {
+      "script": "create_draft.mjs",
+      "args": [],
+      "stdin": {
+        "to": "carol@contoso.com",
+        "subject": "Re: Budget",
+        "body": "⏳ Drafting your reply, please wait...\n\nThe AI is thinking. This draft will be overwritten as work progresses.",
+        "threadId": "t8",
+        "inReplyTo": "<mid-t8@mail>",
+        "references": "<mid-t8@mail>",
+        "originalFrom": "Carol Clark <carol@contoso.com>",
+        "originalDate": "Mon, 20 Jul 2026 07:00:00 +0000",
+        "originalBody": "Hi Morgan, thoughts on the budget?"
+      }
+    },
+    {
+      "script": "create_draft.mjs",
+      "args": [],
+      "stdin": {
+        "to": "carol@contoso.com",
+        "subject": "Re: Budget",
+        "body": "⏳ Finalizing reply (iteration 1)...\n\nModel's current output:\nHi Carol,\n\nThe budget looks good to me.\n\nBest,\nMorgan\n\n(This draft will be replaced when the final reply is ready.)",
+        "threadId": "t8",
+        "inReplyTo": "<mid-t8@mail>",
+        "references": "<mid-t8@mail>",
+        "originalFrom": "Carol Clark <carol@contoso.com>",
+        "originalDate": "Mon, 20 Jul 2026 07:00:00 +0000",
+        "originalBody": "Hi Morgan, thoughts on the budget?",
+        "draftId": "draft-6"
+      }
+    },
+    {
+      "script": "create_draft.mjs",
+      "args": [],
+      "stdin": {
+        "to": "carol@contoso.com",
+        "subject": "Re: Budget",
+        "body": "Hi Carol,\n\nThe budget looks good to me.\n\nBest,\nMorgan",
+        "threadId": "t8",
+        "inReplyTo": "<mid-t8@mail>",
+        "references": "<mid-t8@mail>",
+        "originalFrom": "Carol Clark <carol@contoso.com>",
+        "originalDate": "Mon, 20 Jul 2026 07:00:00 +0000",
+        "originalBody": "Hi Morgan, thoughts on the budget?",
+        "draftId": "draft-6"
+      }
+    }
+  ],
+  "telegram": [
+    "📝 <b>Contextual draft created</b>\n<a href=\"https://mail.google.com/mail/u/0/#all/t8\"><b>Carol Clark &lt;carol@contoso.com&gt;</b>: Budget</a>"
+  ],
+  "returned": "draft-6"
+}

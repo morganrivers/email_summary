@@ -2,7 +2,10 @@
 """Manual end-to-end test of the draft pipeline."""
 
 import sys
+import account
 import draft_replies
+
+acct = account.default_account()
 
 print("=== Fetching emails ===", flush=True)
 emails = draft_replies.fetch_emails()
@@ -17,7 +20,7 @@ if not emails:
     sys.exit(0)
 
 print("\n=== Running process_emails (classify + draft + telegram) ===", flush=True)
-drafted = draft_replies.process_emails(emails)
+drafted = draft_replies.process_emails(acct, emails)
 print(f"\nDrafted {len(drafted)} reply/replies:", flush=True)
 for d in drafted:
     print(f"  - to: {d['from']}", flush=True)

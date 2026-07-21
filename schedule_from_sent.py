@@ -22,6 +22,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import llm_client
+from node_runner import node_env
 from notify import send_telegram, notify_error
 
 SCRIPT_DIR = Path(__file__).parent
@@ -61,7 +62,7 @@ def _log(msg):
     sys.stderr.write(f"[schedule_from_sent] {msg}\n")
 
 
-def extract_events(client, email):
+def extract_events(client, email, identity=None):
     today = datetime.date.today()
     user_content = (
         f"Today: {today.isoformat()} ({today.strftime('%A')}). "
@@ -80,6 +81,7 @@ def extract_events(client, email):
         ],
         max_tokens=2000,
         response_format={"type": "json_object"},
+        identity=identity,
     )
     parsed = json.loads(resp.choices[0].message.content)
     return parsed.get("events", [])
@@ -113,7 +115,7 @@ def _normalize(event):
     }
 
 
-def create_event(event):
+def create_event(account, event):
     payload = {
         "summary": event["summary"],
         "startIso": event["start"],
@@ -126,6 +128,7 @@ def create_event(event):
         ["node", str(CREATE_EVENT_SCRIPT)],
         input=json.dumps(payload),
         capture_output=True, text=True, timeout=60,
+        env=node_env(account.creds_dir),
     )
     assert result.returncode == 0, f"create_event.mjs failed: {result.stderr}"
     return json.loads(result.stdout)
@@ -145,7 +148,7 @@ def render_telegram(created):
     return "\n".join(lines)
 
 
-def run(sent_emails):
+def run(account, sent_emails):
     assert isinstance(sent_emails, list), "sent_emails must be a list"
     if not sent_emails:
         return []
@@ -153,22 +156,22 @@ def run(sent_emails):
     created = []
     for email in sent_emails:
         try:
-            events = extract_events(client, email)
+            events = extract_events(client, email, account.identity)
         except Exception as err:
             _log(f"extract failed for {email.get('id')}: {err}")
-            notify_error(f"schedule_from_sent: event extraction failed for sent email {email.get('id')}", err)
+            notify_error(f"schedule_from_sent: event extraction failed for sent email {email.get('id')}", err, account.telegram)
             continue
         for raw in events:
             event = _normalize(raw)
             if not event:
                 continue
             try:
-                res = create_event(event)
+                res = create_event(account, event)
             except Exception as err:
                 _log(f"create failed for {event['summary']!r}: {err}")
-                notify_error(f"schedule_from_sent: calendar event creation failed for {event['summary']!r}", err)
+                notify_error(f"schedule_from_sent: calendar event creation failed for {event['summary']!r}", err, account.telegram)
                 continue
             created.append({**event, "htmlLink": res.get("htmlLink")})
     if created:
-        send_telegram(render_telegram(created))
+        send_telegram(render_telegram(created), account.telegram)
     return created

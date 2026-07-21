@@ -1,7 +1,8 @@
 """Single source of truth for Telegram notifications.
 
-Env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID) is read at call time, so callers
-only need to have loaded .env before invoking send_telegram.
+A target (TelegramTarget: token + chat_id) routes the message to one account's
+chat. When target is None the bot token / chat id are read from the environment
+at call time, the historical single-tenant behavior.
 """
 
 import html
@@ -12,9 +13,12 @@ import traceback
 import requests
 
 
-def send_telegram(message):
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
-    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+def send_telegram(message, target=None):
+    if target is not None:
+        token, chat_id = target.token, target.chat_id
+    else:
+        token = os.environ["TELEGRAM_BOT_TOKEN"]
+        chat_id = os.environ["TELEGRAM_CHAT_ID"]
     resp = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
@@ -23,7 +27,7 @@ def send_telegram(message):
     resp.raise_for_status()
 
 
-def notify_error(context, err=None):
+def notify_error(context, err=None, target=None):
     """Surface a failure to Telegram. Never raises: a broken notification
     must not crash the caller's except block."""
     try:
@@ -33,6 +37,6 @@ def notify_error(context, err=None):
                 traceback.format_exception(type(err), err, err.__traceback__)
             )
             text += f"\n<pre>{html.escape(detail[-3000:])}</pre>"
-        send_telegram(text)
+        send_telegram(text, target)
     except Exception as notify_err:
         sys.stderr.write(f"notify_error failed to send: {notify_err}\n")

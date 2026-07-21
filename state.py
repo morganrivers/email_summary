@@ -1,27 +1,33 @@
-"""Persistent state for Gmail push pipeline.
+"""Persistent per-account state for the Gmail push pipeline.
 
 Schema: {lastHistoryId: str|None, watchExpiration: str|None}
-File lives alongside scripts so deployment is self-contained.
+
+StateStore is keyed by file path, one per account, so a shared process holds
+independent cursors per user. The backend is a plain JSON file today; a sealed
+store can subclass without touching callers. The default account keeps the
+historical `state.json` path so the deployed box's existing cursor is reused.
 """
 
 import json
 from pathlib import Path
 
-STATE_FILE = Path(__file__).parent / "state.json"
+DEFAULT_STATE_FILE = Path(__file__).parent / "state.json"
 
 
-def load():
-    if not STATE_FILE.exists():
-        return {"lastHistoryId": None, "watchExpiration": None}
-    return json.loads(STATE_FILE.read_text())
+class StateStore:
+    def __init__(self, path):
+        self.path = Path(path)
 
+    def load(self):
+        if not self.path.exists():
+            return {"lastHistoryId": None, "watchExpiration": None}
+        return json.loads(self.path.read_text())
 
-def save(state):
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    def save(self, data):
+        self.path.write_text(json.dumps(data, indent=2))
 
-
-def update(**kwargs):
-    s = load()
-    s.update(kwargs)
-    save(s)
-    return s
+    def update(self, **kwargs):
+        s = self.load()
+        s.update(kwargs)
+        self.save(s)
+        return s
