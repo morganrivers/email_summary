@@ -14,20 +14,28 @@ auditable.
 
 ## Decisions already made
 
-- **Substrate: support BOTH Phala and Scaleway, no preference.** Product code is
-  substrate-independent (deploy target is a packaging/config choice, not a code
-  change), so both are first-class deployment options the operator/customer can
-  choose:
-  - *Phala* (Intel TDX, dstack): ~1-day path to attestation + sealed secrets via
-    CLI.
-  - *Scaleway* (France, EU): EU jurisdiction for raw-email processing.
-  - **Verify (parity check, not a tiebreaker):** does Scaleway provide
-    confidential computing + hardware attestation? This determines whether both
-    deployments carry the same "provably runs the published code" guarantee, or
-    whether they are two distinct trust postures — Phala = hardware-attested;
-    Scaleway = EU-jurisdiction + open-source trust without a hardware quote.
-    Either outcome is acceptable; the marketing for each deployment must match
-    what that substrate actually provides.
+- **Substrate: Phala is the attested substrate; Scaleway is a non-attested
+  EU-jurisdiction option only.** Product code is substrate-independent (deploy
+  target is a packaging/config choice, not a code change), so both remain
+  deployable, but they are **not** equivalent trust postures. The parity check
+  is resolved (R1, `docs/R_results.txt`):
+  - *Phala* (Intel TDX, dstack): hardware-attested — carries the "provably runs
+    the published code" guarantee. ~1-day path to attestation + sealed secrets
+    via CLI. This is the substrate the core promise depends on.
+  - *Scaleway* (France, EU): **fails the confidential-compute/attestation parity
+    check.** No SEV-SNP/TDX/confidential-GPU instance product, no
+    customer-facing remote attestation, no attestation-gated KMS ("Protected
+    Instance" is halt/delete protection, not memory encryption; KMS/Secret
+    Manager are IAM-gated only). So Scaleway = EU-jurisdiction +
+    *trusted-operator*, no hardware quote. It cannot make the "provably runs
+    published code" claim.
+  - **Consequence for marketing:** the two deployments must be described
+    differently — attested (Phala) vs. EU-jurisdiction-and-trust-us (Scaleway).
+    Do not advertise Scaleway as provably-secure. Open action: one-line
+    confirmation from Scaleway sales that no attestation product exists.
+  - Note: Scaleway remains first-class as the **managed LLM provider** (EU-clean,
+    OpenAI-compatible) — that role is unaffected; only its use as the *attested
+    processing substrate* is downgraded.
 - **Tenancy: shared.** One TEE instance holds all users' tokens and state.
   Cheaper and simpler; the cost is that per-user isolation becomes a
   correctness property we own in code (attestation says nothing about it).
@@ -362,54 +370,79 @@ independently. Masking hardening, reproducible-build packaging, the TEE
 platform spike, and all research/procurement have **no code dependency on the
 spine and start immediately**. Critical path is **B → F3 → G**.
 
-### Track A — Masking hardening (no deps; start now)
+**Status legend:** `[DONE]` merged to `main` · `[TODO]` not started.
+**Progress so far (on `main`, commits c42b069…03045d0):** Track A done, Track B
+done, Track R researched (human follow-up actions outstanding). Everything else
+not started.
+
+### Track A — Masking hardening (no deps; start now)  — **[DONE]**
 Pure `pseudonymizer.py` work on the current single-tenant box. Sources: WS1.
-- **A1. Literal-scrub of known identifiers in the scrubber.**
-- **A2. Public masking test corpus + recall metrics.**
+- **A1. Literal-scrub of known identifiers in the scrubber.** `[DONE]` 7d74fc6
+  (deterministic phone + contact scrub).
+- **A2. Public masking test corpus + recall metrics.** `[DONE]` 7d74fc6 —
+  `masking_eval/` (corpus.jsonl, evaluator, `python -m masking_eval.run`).
 
-### Track B — Multi-tenant core (the spine; blocks C, D, F3; source: WS1)
-- **B1. Account store schema + per-user context object.** *(unblocks C, D, and
-  the rest of B)*
+### Track B — Multi-tenant core (the spine; blocks C, D, F3; source: WS1)  — **[DONE]**
+- **B1. Account store schema + per-user context object.** `[DONE]` c42b069
+  (`account.py`; `default_account()` migration path).
 - **B2. De-hardcode `pseudonymizer.py` USER_* constants → per-user config.**
+  `[DONE]` c42b069 (identity threaded per account; module constants are just the
+  single-tenant default, PHONES/CONTACTS empty so `DEFAULT_IDENTITY` unchanged).
 - **B3. Per-user state + per-user notification target (replace global
-  `state.json`).**
-- **B4. Pub/Sub single-topic routing by `emailAddress`.**
-- **B5. Per-user isolation asserts at every mapping/state boundary.**
+  `state.json`).** `[DONE]` c42b069.
+- **B4. Pub/Sub single-topic routing by `emailAddress`.** `[DONE]` 0a10865
+  (`wake_queue.py` spool; webhook enqueues, daemon drains; unparseable → sweep).
+- **B5. Per-user isolation asserts at every mapping/state boundary.** `[DONE]`
+  c42b069 (`identity.account_id == id`, duplicate-id manifest guard, per-account
+  assert in `pipeline.process_account`).
 
-### Track C — Identity + onboarding OAuth (needs B1; source: WS2)
-- **C1. Sign-in-with-Google + redirect-URI token exchange.**
-- **C2. Per-user `users.watch` registration + weekly renewal.**
+### Track C — Identity + onboarding OAuth (needs B1; source: WS2)  — **[TODO]**
+- **C1. Sign-in-with-Google + redirect-URI token exchange.** `[TODO]`
+- **C2. Per-user `users.watch` registration + weekly renewal.** `[TODO]`
 
-### Track D — Billing (needs only B1 plan-status field; ported code; source: WS3)
-- **D1. Port Polar `webhook.py` / `poller.py` / `polar_api.py`.**
-- **D2. Plan-gating on Gmail processing (active ↔ inactive).**
+### Track D — Billing (needs only B1 plan-status field; ported code; source: WS3)  — **[TODO]**
+- **D1. Port Polar `webhook.py` / `poller.py` / `polar_api.py`.** `[TODO]`
+- **D2. Plan-gating on Gmail processing (active ↔ inactive).** `[TODO]`
 
-### Track E — Reproducible-build packaging (no deps; start now; source: WS5)
-- **E1. Phase-1 binary transparency: hash-pinned image + published hash.**
-- **E2. Phase-2 Nix source reproducibility (fast-follow).**
+### Track E — Reproducible-build packaging (no deps; start now; source: WS5)  — **[TODO]**
+Branch `feat/reproduciblebuilds` exists but is 0 commits ahead of `main` — no
+work landed.
+- **E1. Phase-1 binary transparency: hash-pinned image + published hash.** `[TODO]`
+- **E2. Phase-2 Nix source reproducibility (fast-follow).** `[TODO]`
 
-### Track F — TEE platform spike (infra spike has no deps; start now; source: WS4)
-- **F1. dstack deploy spike: KMS unseal + RA-TLS mechanics (hello-world).**
-- **F2. Empirical wrong-measurement KMS-refusal test.** *(also KMS checklist R2)*
-- **F3. Package the app into one measured image.** *(needs B complete + E1)*
+### Track F — TEE platform spike (infra spike has no deps; start now; source: WS4)  — **[TODO]**
+- **F1. dstack deploy spike: KMS unseal + RA-TLS mechanics (hello-world).** `[TODO]`
+- **F2. Empirical wrong-measurement KMS-refusal test.** `[TODO]` *(also KMS
+  checklist R2)*
+- **F3. Package the app into one measured image.** `[TODO]` *(needs B complete
+  [done] + E1)*
 
-### Track G — Attestation-verification surface (endpoint code parallel; live proof needs F; source: WS6)
-- **G1. On-demand attestation endpoint + signature-chain verification.**
-- **G2. Dashboard green-check.**
+### Track G — Attestation-verification surface (endpoint code parallel; live proof needs F; source: WS6)  — **[TODO]**
+- **G1. On-demand attestation endpoint + signature-chain verification.** `[TODO]`
+- **G2. Dashboard green-check.** `[TODO]`
 
-### Track H — Voice DNA (needs A masking + C identity for in-product flow; source: WS7)
-- **H1. Vendor MIT template + LLM synthesis prompt → `voice-dna.md`.**
-- **H2. In-product paste/sample voice onboarding + deferred-voice safeguard.**
+### Track H — Voice DNA (needs A masking [done] + C identity for in-product flow; source: WS7)  — **[TODO]**
+- **H1. Vendor MIT template + LLM synthesis prompt → `voice-dna.md`.** `[TODO]`
+- **H2. In-product paste/sample voice onboarding + deferred-voice safeguard.** `[TODO]`
 
-### Track R — Research / procurement (no code; long lead time; start immediately)
-These gate launch but not development, and some have multi-week external
-latency — kick off in parallel from day one.
+### Track R — Research / procurement (no code; long lead time; start immediately)  — **[DONE] (research); follow-up actions outstanding**
+Research complete (`docs/R_results.txt`). Each item leaves a human
+procurement/empirical action that is NOT done.
 - **R1. Scaleway confidential-computing + hardware-attestation parity check.**
+  `[DONE]` — **FAILS parity** (no TDX/SEV-SNP, no attestation). Reflected in the
+  substrate decision. *Outstanding:* one-line Scaleway-sales confirmation.
   *(Decisions: substrate)*
-- **R2. KMS 5-step validation checklist.** *(Decisions: KMS)*
-- **R3. Gmail restricted-scope verification / CASA kickoff.** *(longest lead;
-  Open questions)*
-- **R4. dstack LUKS2-fix version + KMS app-identity binding verify.** *(Open
-  questions: sealed token storage)*
-- **R5. Scaleway DPA acceptance + sub-processor list.** *(Decisions:
+- **R2. KMS 5-step validation checklist.** `[DONE]` — mostly pass; gap: dstack
+  KMS itself is unaudited (only zkSecurity May–Jun 2025, KMS flows skipped).
+  *Outstanding:* hold AppAuth owner keys; empirical test = F2. *(Decisions: KMS)*
+- **R3. Gmail restricted-scope verification / CASA kickoff.** `[DONE]` (researched)
+  — **longest lead, not yet kicked off.** *Outstanding:* start Google brand
+  verification + pick CASA assessor ASAP; 100-user cap until verified.
+  *(Open questions)*
+- **R4. dstack LUKS2-fix version + KMS app-identity binding verify.** `[DONE]` —
+  run dstack ≥ v0.5.4; key-binding confirmed. *Outstanding:* confirm deployed
+  version at TEE-deploy time. *(Open questions: sealed token storage)*
+- **R5. Scaleway DPA acceptance + sub-processor list.** `[DONE]` — standard Art.
+  28 DPA auto-accepted; ZDR by default. *Outstanding:* sign Google/Polar/Phala
+  DPAs; publish sub-processor list (include **Telegram**). *(Decisions:
   data-protection posture)*
