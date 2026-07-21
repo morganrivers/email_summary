@@ -56,8 +56,14 @@ comment in `requirements.txt`).
   JWT and wakes the daemon via the FIFO.
 - `email_summary.py` — daily summary run by the `email-summary.timer`
   (05:00 UTC): fetches unread + calendar, summarises, sends Telegram.
-- `watch_register.mjs` — weekly Gmail `users.watch` renewal run by the
-  `gmail-watch.timer`.
+- `watch_renew.py` — weekly per-account Gmail `users.watch` renewal run by the
+  `gmail-watch.timer`; iterates every active account and drives the per-account
+  `watch_register.mjs` worker under each account's creds dir.
+- `onboarding_server.py` — sign-in-with-Google onboarding web flow run by the
+  `onboarding` systemd service, behind Caddy (`127.0.0.1:8789`, `/onboard*` +
+  `/oauth/*`). Exchanges the OAuth code via `oauth_helper.mjs`, registers the
+  account (`inactive` until Polar `order.paid`), registers its watch, then
+  redirects to Polar checkout.
 
 Code changes take effect when the systemd services restart, which `deploy.sh`
 does via `systemctl restart`. The daemon also honors `restart.flag` (it exits

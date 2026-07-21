@@ -372,8 +372,8 @@ spine and start immediately**. Critical path is **B → F3 → G**.
 
 **Status legend:** `[DONE]` merged to `main` · `[TODO]` not started.
 **Progress so far (on `main`, commits c42b069…ee8852e):** Track A done, Track B
-done, Track E done, Track R researched (human follow-up actions outstanding).
-Everything else not started.
+done, Track C done (feat/identityonboarding), Track E done, Track R researched
+(human follow-up actions outstanding). Everything else not started.
 
 ### Track A — Masking hardening (no deps; start now)  — **[DONE]**
 Pure `pseudonymizer.py` work on the current single-tenant box. Sources: WS1.
@@ -396,9 +396,24 @@ Pure `pseudonymizer.py` work on the current single-tenant box. Sources: WS1.
   c42b069 (`identity.account_id == id`, duplicate-id manifest guard, per-account
   assert in `pipeline.process_account`).
 
-### Track C — Identity + onboarding OAuth (needs B1; source: WS2)  — **[TODO]**
-- **C1. Sign-in-with-Google + redirect-URI token exchange.** `[TODO]`
-- **C2. Per-user `users.watch` registration + weekly renewal.** `[TODO]`
+### Track C — Identity + onboarding OAuth (needs B1; source: WS2)  — **[DONE]**
+- **C1. Sign-in-with-Google + redirect-URI token exchange.** `[DONE]` —
+  `onboarding_server.py` (loopback web flow: landing -> `/oauth/start` CSRF
+  state cookie -> `/oauth/callback`) drives `oauth_helper.mjs` (auth-url +
+  code exchange, single-sourced on `gmail_lib` scopes/keys/redirect), writes the
+  per-user creds dir, `account.register_account` (sole store writer; new signups
+  `inactive` until Polar `order.paid`), then redirects to Polar checkout.
+  Deployed as `onboarding.service` behind Caddy `/onboard*` + `/oauth/*`.
+  *Outstanding:* register the public redirect URI + restricted scopes in the
+  Google console (R3); the per-user notification target is still the operator's
+  Telegram env fallback (hosted in-inbox target = WS7 step 6, not built).
+- **C2. Per-user `users.watch` registration + weekly renewal.** `[DONE]` —
+  `gmail_lib.registerWatch` is the sole watch call; `watch_register.mjs` is now a
+  per-account stdout worker (creds via `GMAIL_MCP_DIR`); `watch_renew.py` renews
+  every active account (`gmail-watch.timer` runs it now, not the old single
+  worker) and also registers the freshly onboarded account. Cursor is set once on
+  first registration and never rewound on renewal; only `watchExpiration`
+  refreshes.
 
 ### Track D — Billing (needs only B1 plan-status field; ported code; source: WS3)  — **[TODO]**
 - **D1. Port Polar `webhook.py` / `poller.py` / `polar_api.py`.** `[TODO]`
