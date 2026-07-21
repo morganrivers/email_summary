@@ -1,0 +1,101 @@
+● Track R done. All five items were web-researchable; the
+  procurement/empirical actions within them are flagged as     
+  needing you (they require accounts/credentials/a live deploy 
+  I can't do). Findings:                                       
+                                                               
+  R1 — Scaleway confidential-computing parity: FAILS parity    
+                                                               
+  No confidential-compute instance product (no                 
+  SEV-SNP/TDX/confidential GPU), no customer-facing remote   
+  attestation, no attestation-gated KMS. "Protected Instance"  
+  is just halt/delete protection, not memory encryption.       
+  Scaleway KMS/Secret Manager are IAM-gated only.              
+  - Consequence: the two substrates are NOT equivalent. Phala =
+   hardware-attested ("provably runs published code"). Scaleway
+   = EU-jurisdiction + trusted-operator, no hardware quote.    
+  Marketing must differ per the plan's own fallback wording    
+  (plan.md:26-30 anticipated this). Close it contractually with
+   a one-line Scaleway-sales confirmation.                     
+                                                               
+  R2 — dstack KMS 5-point checklist: mostly PASS, one gap      
+                                                               
+  1. KMS runs in its own TEE, anchored on-chain in KmsAuth,    
+  independently attestable. ✅                                 
+  2. You control the allowlist via your per-app AppAuth        
+  contract (permissible compose-hashes, upgrade rules); changes
+   are on-chain, observable, operator cannot silently override
+  — only if you hold the AppAuth owner keys and deploy under a 
+  contract-owned KMS. KmsAuth-level items (OS/KMS measurements)
+   stay under Phala multisig, not yours. ✅ with custody caveat
+  3. Docs claim no admin master key/escrow/backdoor;
+  open-source, design-claim not audit-verified. ✅ (verify     
+  yourself)
+  4. Gap: only one audit (zkSecurity, May–June 2025, 12        
+  findings, top = OVMF trusting VMM, fixed via Config B). The  
+  audit explicitly skipped some KMS flows and recommended a
+  dedicated dstack-kms audit that hasn't happened. So the KMS  
+  specifically is unaudited.                                 
+  5. Byte-swap refusal is documented as expected behavior;
+  empirical test needs a live deploy (that's F2).              
+  - Irreducible residual confirmed: still trust Intel TDX
+  hardware + that published KMS code is what runs.             
+                                                             
+  R3 — Gmail restricted-scope / CASA: longest lead, start now  
+                                                               
+  - Your scopes (gmail.readonly + gmail.compose/gmail.modify)  
+  are all restricted (highest tier). Draft-based design does   
+  NOT dodge restricted status.                                 
+  - Process: brand verification (domain, consent screen,     
+  privacy policy on same domain) → scope justification →       
+  unlisted demo video → Google review → annual CASA security
+  assessment (OWASP ASVS, App Defense Alliance assessor,       
+  ~$500–4,500/yr, ~2–3 weeks for Tier 2/AL2, renew every 12  
+  months).
+  - 100-user lifetime cap while unverified (authorizations,
+  non-resettable); users see the "unverified app" warning but  
+  can click through; past 100 it's a hard block.
+  - Limited Use policy applies: no human reading except narrow 
+  exceptions, no ad/broker use, no training. Must reflect in   
+  privacy policy; in scope for CASA.
+                                                               
+  R4 — dstack LUKS2 fix + key binding: RESOLVED                
+  
+  - CVEs 2025-59054 / 2025-58356 (Trail of Bits, public Oct    
+  30 2025). Fix landed in dstack v0.5.4 (2025-09-01); v0.5.3 
+  and earlier vulnerable. Latest is v0.5.11 (2026-05-26), so   
+  run ≥ v0.5.4 — verify the deployed version once we're on   
+  Phala.
+  - Fix is dstack's own LUKS-header JSON validation rejecting
+  null ciphers. Note cryptsetup v2.8.1 is only a partial       
+  upstream mitigation (null volume ciphers still permitted), so
+   the defense depends on dstack's validation, not cryptsetup  
+  alone. No MAC/measured-header approach shipped.            
+  - Key-binding confirmed: keys derive KDF(RootKey, 
+  deployer_id, app_hash, …, epoch); release binds to app       
+  identity + on-chain governance, not raw measurement.
+  Legitimate redeploy re-keys cleanly (no user lockout);       
+  unapproved image is refused. Matches intent.               
+
+  R5 — Scaleway DPA + sub-processors: RESOLVED                 
+  
+  - Standard GDPR Art. 28 DPA (v. 2024-06-01), auto-accepted as
+   part of Scaleway ToS at signup; C2P SCCs also published.  
+  French law/jurisdiction.                                     
+  - Generative APIs: Zero Data Retention by default, no      
+  training ever, prompts not stored (except transient          
+  security-debug on abnormal traffic). Hosted Paris (OPCORE), 
+  France only — no US transfer.                                
+  - Scaleway publishes its own sub-processor list.           
+  - Your downstream disclosure list: Google, Scaleway (LLM only
+   — hosting is Phala), Polar, Phala. Add Telegram (the daemon 
+  sends notifications there — a real data recipient the current
+   code already uses).                                         
+                                                             
+  Actions that still need you (can't be done from research):   
+  get Scaleway sales to confirm no attestation (R1); hold
+  AppAuth owner keys + run the empirical wrong-measurement test
+   once deployed (R2/F2); kick off Google brand verification +
+  pick a CASA assessor in your Cloud project (R3, longest lead
+  — start ASAP); confirm deployed dstack ≥ v0.5.4 at TEE-deploy
+   time (R4); sign Google + Polar + Phala DPAs and publish the
+  sub-processor list including Telegram (R5).
