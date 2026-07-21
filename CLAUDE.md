@@ -27,8 +27,12 @@ The typical loop: edit → commit → `./deploy.sh`.
 ## Server-only files (never overwritten by deploy)
 
 - `.env` — API keys, not in git.
-- `state.json`, `wake.fifo`, `restart.flag`, `process_push.lock`, `push.log`
-  — daemon runtime state.
+- `state.json`, `wake.fifo`, `wake_queue.jsonl`, `wake_queue.lock`,
+  `restart.flag`, `process_push.lock`, `push.log` — daemon runtime state.
+- `accounts/` — multi-tenant account store (per-user identity, creds dirs,
+  telegram targets, plan status). Holds PII + tokens; git-ignored, never
+  overwritten by deploy. The single-tenant box has no `accounts/` and falls
+  back to `default_account()`.
 - `node_modules/` — installed via `npm install` on the server.
 - `venv/` — Python virtualenv at `/opt/email_summary/venv`.
 - `.gmail-mcp/` — Gmail OAuth tokens.

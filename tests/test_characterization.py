@@ -314,6 +314,6 @@ def test_process_once_end_to_end(wire):
             "create_event.mjs": {"htmlLink": "https://cal/evt1", "id": "evt1"},
         },
     )
-    daemon_loop.process_once()
+    daemon_loop.process_all()
     assert_golden("process_once_end_to_end",
                   record(rec, final_state=store.load()))

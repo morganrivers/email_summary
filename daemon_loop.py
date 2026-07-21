@@ -28,6 +28,7 @@ load_dotenv(SCRIPT_DIR / ".env")
 
 import account as account_mod
 import pipeline
+import wake_queue
 from notify import notify_error
 
 FIFO_PATH = SCRIPT_DIR / "wake.fifo"
@@ -48,13 +49,26 @@ def ensure_fifo():
     os.chmod(str(FIFO_PATH), 0o666)
 
 
-def process_once():
+def _run_account(acct):
+    pipeline.process_account(
+        acct,
+        log=log,
+        notify_err=lambda ctx, err, a=acct: notify_error(ctx, err, a.telegram),
+    )
+
+
+def process_all():
     for acct in account_mod.load_accounts():
-        pipeline.process_account(
-            acct,
-            log=log,
-            notify_err=lambda ctx, err, a=acct: notify_error(ctx, err, a.telegram),
-        )
+        _run_account(acct)
+
+
+def process_accounts(ids):
+    for aid in ids:
+        acct = account_mod.get_account(aid)
+        if acct is None:
+            log(f"queued account {aid!r} not registered/active; skipping")
+            continue
+        _run_account(acct)
 
 
 def drain_fifo():
@@ -79,13 +93,15 @@ def drain_fifo():
 def main():
     ensure_fifo()
     log(f"daemon started; FIFO={FIFO_PATH}")
-    # Process once at startup in case anything is pending
+    # Bootstrap at startup: drain any queued pushes, then sweep all accounts
+    # in case a push arrived while the daemon was down.
     try:
-        process_once()
+        process_accounts(wake_queue.drain())
+        process_all()
     except Exception as err:
-        log(f"startup process_once failed: {err}")
+        log(f"startup sweep failed: {err}")
         traceback.print_exc(file=sys.stdout)
-        notify_error("startup process_once failed", err)
+        notify_error("startup sweep failed", err)
     while True:
         try:
             drain_fifo()
@@ -97,7 +113,13 @@ def main():
                 except FileNotFoundError:
                     pass
                 sys.exit(0)
-            process_once()
+            ids = wake_queue.drain()
+            if ids:
+                log(f"routed wake for {len(ids)} account(s): {ids}")
+                process_accounts(ids)
+            else:
+                log("wake with empty queue; sweeping all accounts")
+                process_all()
         except SystemExit:
             raise
         except Exception as err:

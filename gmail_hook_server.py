@@ -6,11 +6,16 @@ hostname and reverse-proxies to this listener on 127.0.0.1:WEBHOOK_PORT.
 
 Google Pub/Sub attaches an OIDC bearer JWT to every push. We verify it via
 Google's tokeninfo endpoint (no local crypto), enforcing issuer, audience,
-the pushing service account, and expiry, then wake the daemon by writing one
-byte to the FIFO. The Pub/Sub message body is irrelevant to processing:
-daemon_loop pulls the history delta itself from state.lastHistoryId.
+the pushing service account, and expiry. We then decode the message body
+({emailAddress, historyId}), resolve emailAddress to a registered account via
+account.get_account, enqueue that account id on the wake spool, and poke the
+FIFO so the daemon processes only that user's mailbox. The historyId is not
+used: the daemon pulls the delta from that account's stored lastHistoryId
+cursor (single source of truth). emailAddress is trusted only because the JWT
+proves the push came from Google; unregistered addresses are dropped.
 """
 
+import base64
 import json
 import os
 import sys
@@ -24,6 +29,10 @@ from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).parent
 load_dotenv(SCRIPT_DIR / ".env")
+
+sys.path.insert(0, str(SCRIPT_DIR))
+import account
+import wake_queue
 
 FIFO_PATH = SCRIPT_DIR / "wake.fifo"
 HOST = os.environ.get("WEBHOOK_HOST", "127.0.0.1")
@@ -89,6 +98,28 @@ def signal_daemon():
         os.close(fd)
 
 
+def route_push(body):
+    """Resolve a verified push to a registered account and wake the daemon for it.
+
+    Unregistered/inactive addresses are dropped (acked, never woken). An
+    unparseable body falls back to a full sweep so no mail is silently lost."""
+    try:
+        envelope = json.loads(body)
+        data = base64.b64decode(envelope["message"]["data"])
+        email = json.loads(data)["emailAddress"]
+    except Exception as err:
+        log(f"unparseable push body ({err}); waking full sweep as fallback")
+        signal_daemon()
+        return
+    acct = account.get_account(email)
+    if acct is None:
+        log("push for unregistered/inactive address; ignoring")
+        return
+    wake_queue.enqueue(acct.id)
+    log(f"queued account {acct.id} and signaling daemon")
+    signal_daemon()
+
+
 class Handler(BaseHTTPRequestHandler):
     def _reject(self, code, msg):
         log(f"reject {code}: {msg}")
@@ -108,10 +139,9 @@ class Handler(BaseHTTPRequestHandler):
         except HookError as err:
             return self._reject(err.code, err.msg)
         length = int(self.headers.get("Content-Length", "0") or "0")
-        if length:
-            self.rfile.read(length)
-        log("OK verified, signaling daemon")
-        signal_daemon()
+        body = self.rfile.read(length) if length else b""
+        log("OK verified, routing push")
+        route_push(body)
         self.send_response(204)
         self.send_header("Content-Length", "0")
         self.end_headers()
