@@ -1,3 +1,8 @@
 hezner.morganrivers.com {
-	reverse_proxy 127.0.0.1:8787
+	handle /polar/webhook {
+		reverse_proxy 127.0.0.1:8788
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8787
+	}
 }
