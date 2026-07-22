@@ -64,10 +64,11 @@
             base = baseNameOf path;
           in
           if type == "directory" then
-            !(builtins.elem base [ "tests" "docs" "deploy" "database" "frontend" ".git" "__pycache__" ])
+            !(builtins.elem base [ "tests" "docs" "deploy" "database" ".git" "__pycache__" ])
           else
             (lib.hasSuffix ".py" base && !(lib.hasPrefix "test_" base))
             || lib.hasSuffix ".mjs" base
+            || lib.hasSuffix ".css" base
             || base == "package.json"
             || base == "package-lock.json";
       };
@@ -95,11 +96,13 @@
           d=$!
           python -m backend.daemons.gmail_hook_server &
           w=$!
+          python -m frontend.web_server &
+          ui=$!
           supercronic /app/crontab &
           c=$!
-          trap 'kill "$d" "$w" "$c" 2>/dev/null || true' TERM INT
+          trap 'kill "$d" "$w" "$ui" "$c" 2>/dev/null || true' TERM INT
           wait -n
-          kill "$d" "$w" "$c" 2>/dev/null || true
+          kill "$d" "$w" "$ui" "$c" 2>/dev/null || true
           exit 1
         '';
       };
@@ -121,6 +124,7 @@
           Entrypoint = [ "${entrypoint}/bin/email-bot-entrypoint" ];
           ExposedPorts = {
             "8787/tcp" = { };
+            "8790/tcp" = { };
           };
           Env = [
             "PATH=${venv}/bin:${nodejs}/bin:${pkgs.supercronic}/bin:${pkgs.coreutils}/bin:${pkgs.bashInteractive}/bin"
