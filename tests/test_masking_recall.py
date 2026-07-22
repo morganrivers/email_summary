@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
-from masking_eval import evaluator
+from backend.masking.masking_eval import evaluator
 
 # Loose floors for non-deterministic types: below current measured recall,
 # present only to catch a large regression. Not a claim of guaranteed recall.

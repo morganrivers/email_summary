@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/email_summary
-ExecStart=/opt/email_summary/venv/bin/python /opt/email_summary/billing_webhook.py
+ExecStart=/opt/email_summary/venv/bin/python -m backend.billing.billing_webhook
 Restart=always
 RestartSec=3
 SyslogIdentifier=billing-webhook

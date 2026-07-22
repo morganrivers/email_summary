@@ -12,9 +12,9 @@ import json
 
 import pytest
 
-import account
-import watch_renew
-import onboarding_server as ob
+from backend.accounts import account
+from backend.onboarding import watch_renew
+from backend.onboarding import onboarding_server as ob
 
 
 def _use_store(tmp_path, monkeypatch):

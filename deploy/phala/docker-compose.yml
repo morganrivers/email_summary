@@ -30,7 +30,7 @@ services:
       - path: /app/.env
         required: false
     volumes:
-      - accounts:/app/accounts
+      - database:/app/database
       - gmail_tokens:/app/.gmail-mcp
       # RA-TLS material + boot attestation record written by tee_boot; tmpfs so
       # the enclave-held private key never lands on the encrypted volume at rest.
@@ -40,5 +40,5 @@ services:
       - /var/run/dstack.sock:/var/run/dstack.sock
 
 volumes:
-  accounts:
+  database:
   gmail_tokens:

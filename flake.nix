@@ -60,12 +60,12 @@
         path = ./.;
         filter =
           path: type:
+          let
+            base = baseNameOf path;
+          in
           if type == "directory" then
-            false
+            !(builtins.elem base [ "tests" "docs" "deploy" "database" "frontend" ".git" "__pycache__" ])
           else
-            let
-              base = baseNameOf path;
-            in
             (lib.hasSuffix ".py" base && !(lib.hasPrefix "test_" base))
             || lib.hasSuffix ".mjs" base
             || base == "package.json"
@@ -73,8 +73,8 @@
       };
 
       crontab = pkgs.writeText "email-bot-crontab" ''
-        0 5 * * * cd /app && python email_summary.py
-        0 4 * * 1 cd /app && node watch_register.mjs
+        0 5 * * * cd /app && python -m backend.drafting.email_summary
+        0 4 * * 1 cd /app && python -m backend.onboarding.watch_renew
       '';
 
       entrypoint = pkgs.writeShellApplication {
@@ -83,17 +83,17 @@
         text = ''
           cd /app
           export GMAIL_MCP_DIR=/app/.gmail-mcp
-          mkdir -p /app/.gmail-mcp /app/accounts
+          mkdir -p /app/.gmail-mcp /app/database
           # Track F3 attest-before-run gate. Under TEE_REQUIRED it fails closed
           # (exit -> Restart=always retries) rather than touching mailboxes
           # without proof the CVM runs the published, attested measurement.
-          if ! python tee_boot.py; then
+          if ! python -m backend.tee.tee_boot; then
             echo "tee_boot gate failed; refusing to start services" >&2
             exit 1
           fi
-          python daemon_loop.py &
+          python -m backend.daemons.daemon_loop &
           d=$!
-          python gmail_hook_server.py &
+          python -m backend.daemons.gmail_hook_server &
           w=$!
           supercronic /app/crontab &
           c=$!

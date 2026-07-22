@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/email_summary
-ExecStart=/opt/email_summary/venv/bin/python /opt/email_summary/onboarding_server.py
+ExecStart=/opt/email_summary/venv/bin/python -m backend.onboarding.onboarding_server
 Environment=PATH=/opt/email_summary/venv/bin:/usr/local/bin:/usr/bin:/bin
 Restart=always
 RestartSec=3

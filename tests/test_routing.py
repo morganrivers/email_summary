@@ -8,9 +8,9 @@ spool coalesces, and that unparseable pushes fall back to a full sweep.
 import base64
 import json
 
-import account
-import wake_queue
-import gmail_hook_server as hook
+from backend.accounts import account
+from backend.daemons import wake_queue
+from backend.daemons import gmail_hook_server as hook
 
 
 def _manifest(tmp_path, entries):
@@ -51,7 +51,7 @@ def test_get_account_resolves_and_filters(tmp_path, monkeypatch):
 def test_get_account_default_single_tenant(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
-    monkeypatch.setattr(account, "MANIFEST", account.SCRIPT_DIR / "does_not_exist.json")
+    monkeypatch.setattr(account, "MANIFEST", account.ACCOUNTS_DIR / "does_not_exist.json")
     a = account.get_account("danielmorganrivers@gmail.com")
     assert a is not None and a.id == "default"
 

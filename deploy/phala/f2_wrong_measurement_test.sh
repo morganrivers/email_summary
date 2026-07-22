@@ -19,7 +19,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-PROBE_FILE="tee_boot.py"
+PROBE_FILE="backend/tee/tee_boot.py"
 PROBE_BACKUP="$(mktemp)"
 cp "$PROBE_FILE" "$PROBE_BACKUP"
 

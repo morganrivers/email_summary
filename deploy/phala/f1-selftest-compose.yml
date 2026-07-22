@@ -11,7 +11,7 @@
 services:
   f1-selftest:
     image: tee-email-bot@sha256:REPLACE_WITH_PUBLISHED_DIGEST
-    entrypoint: ["python", "tee_boot.py", "--selftest"]
+    entrypoint: ["python", "-m", "backend.tee.tee_boot", "--selftest"]
     restart: "no"
     volumes:
       # In-enclave KMS unseal + attestation boundary.
