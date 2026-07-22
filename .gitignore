@@ -10,7 +10,7 @@ token*.json
 *.key
 
 state.json
-accounts/
+database/
 wake_queue.jsonl
 *.log
 *.lock

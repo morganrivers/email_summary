@@ -60,12 +60,12 @@
         path = ./.;
         filter =
           path: type:
+          let
+            base = baseNameOf path;
+          in
           if type == "directory" then
-            false
+            !(builtins.elem base [ "tests" "docs" "deploy" "database" "frontend" ".git" "__pycache__" ])
           else
-            let
-              base = baseNameOf path;
-            in
             (lib.hasSuffix ".py" base && !(lib.hasPrefix "test_" base))
             || lib.hasSuffix ".mjs" base
             || base == "package.json"
@@ -73,8 +73,8 @@
       };
 
       crontab = pkgs.writeText "email-bot-crontab" ''
-        0 5 * * * cd /app && python email_summary.py
-        0 4 * * 1 cd /app && node watch_register.mjs
+        0 5 * * * cd /app && python -m backend.drafting.email_summary
+        0 4 * * 1 cd /app && node backend/integrations/gmail_gcal/watch_register.mjs
       '';
 
       entrypoint = pkgs.writeShellApplication {
@@ -83,10 +83,10 @@
         text = ''
           cd /app
           export GMAIL_MCP_DIR=/app/.gmail-mcp
-          mkdir -p /app/.gmail-mcp /app/accounts
-          python daemon_loop.py &
+          mkdir -p /app/.gmail-mcp /app/database
+          python -m backend.daemons.daemon_loop &
           d=$!
-          python gmail_hook_server.py &
+          python -m backend.daemons.gmail_hook_server &
           w=$!
           supercronic /app/crontab &
           c=$!

@@ -87,7 +87,7 @@ DRAFT_OUT = {"create_draft.mjs": {"draftId": "draft-1"}}
 # --- auto-reply path ------------------------------------------------------
 
 def test_auto_reply_no_tools(wire):
-    import draft_replies
+    from backend.drafting import draft_replies
     rec = wire.install(
         responses=[
             {"content": decisions({"index": 0, "needs_reply": True, "reason": "Personal lunch request"})},
@@ -100,7 +100,7 @@ def test_auto_reply_no_tools(wire):
 
 
 def test_auto_reply_with_calendar_tool(wire):
-    import draft_replies
+    from backend.drafting import draft_replies
     rec = wire.install(
         responses=[
             {"content": decisions({"index": 0, "needs_reply": True, "reason": "Asks about meeting"})},
@@ -115,7 +115,7 @@ def test_auto_reply_with_calendar_tool(wire):
 
 
 def test_auto_reply_declined(wire):
-    import draft_replies
+    from backend.drafting import draft_replies
     rec = wire.install(
         responses=[
             {"content": decisions({"index": 0, "needs_reply": False, "reason": "Newsletter"})},
@@ -127,7 +127,7 @@ def test_auto_reply_declined(wire):
 
 
 def test_auto_reply_em_dash_rejected(wire):
-    import draft_replies
+    from backend.drafting import draft_replies
     dash_body = "Hi Alice — lunch works.\n\nBest,\nMorgan"
     rec = wire.install(
         responses=[
@@ -144,7 +144,7 @@ def test_auto_reply_em_dash_rejected(wire):
 # --- manual (bot-request) path -------------------------------------------
 
 def test_bot_request_forward_marker(wire):
-    import manual_draft
+    from backend.drafting import manual_draft
     rec = wire.install(
         responses=[
             {"tool_calls": [{"name": "get_calendar_events", "arguments": json.dumps(
@@ -163,7 +163,7 @@ def test_bot_request_forward_marker(wire):
 
 
 def test_bot_request_thread_fallback(wire):
-    import manual_draft
+    from backend.drafting import manual_draft
     rec = wire.install(
         responses=[
             {"content": "Hi Carol,\n\nThe budget looks good to me.\n\nBest,\nMorgan"},
@@ -190,7 +190,7 @@ def test_bot_request_thread_fallback(wire):
 # --- schedule-from-sent path ---------------------------------------------
 
 def test_schedule_from_sent_concrete(wire):
-    import schedule_from_sent
+    from backend.drafting import schedule_from_sent
     rec = wire.install(
         responses=[
             {"content": json.dumps({"events": [
@@ -205,7 +205,7 @@ def test_schedule_from_sent_concrete(wire):
 
 
 def test_schedule_from_sent_vague(wire):
-    import schedule_from_sent
+    from backend.drafting import schedule_from_sent
     rec = wire.install(
         responses=[{"content": json.dumps({"events": []})}],
         node_outputs={},
@@ -218,7 +218,7 @@ def test_schedule_from_sent_vague(wire):
 # --- masking core ---------------------------------------------------------
 
 def test_pii_masking_leaving_payload(wire):
-    import draft_replies
+    from backend.drafting import draft_replies
     pii_email = {
         "id": "p1", "threadId": "tp",
         "from": "Nadia Fowler <nadia.fowler@acme.io>",
@@ -250,7 +250,7 @@ def test_pii_masking_leaving_payload(wire):
 
 
 def test_pseudonymize_roundtrip():
-    import pseudonymizer
+    from backend.masking import pseudonymizer
     original = "Email Priya Sharma at priya@acme.io or call 415-555-0199."
     st = pseudonymizer.new_state()
     masked = pseudonymizer.pseudonymize(original, st)
@@ -264,7 +264,7 @@ def test_pseudonymize_roundtrip():
 
 
 def test_literal_scrub_owner_phone_and_contacts():
-    import pseudonymizer
+    from backend.masking import pseudonymizer
     ident = pseudonymizer.UserIdentity(
         "Morgan", "Rivers", ["Daniel"], ["danielmorganrivers@gmail.com"],
         phones=["+1 (415) 555-0142"], contacts=["Priya Sharma", "Bob"],
@@ -284,8 +284,8 @@ def test_literal_scrub_owner_phone_and_contacts():
 # --- top-level integration -----------------------------------------------
 
 def test_process_once_end_to_end(wire):
-    import state
-    import daemon_loop
+    from backend.accounts import state
+    from backend.daemons import daemon_loop
     store = state.StateStore(state.DEFAULT_STATE_FILE)
     store.save({"lastHistoryId": "100", "watchExpiration": None})
     fetch_payload = {

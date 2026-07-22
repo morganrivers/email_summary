@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/email_summary
-ExecStart=/usr/bin/node /opt/email_summary/watch_register.mjs
+ExecStart=/usr/bin/node /opt/email_summary/backend/integrations/gmail_gcal/watch_register.mjs
 Environment=GMAIL_MCP_DIR=/opt/email_summary/.gmail-mcp
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 SyslogIdentifier=gmail-watch

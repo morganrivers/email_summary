@@ -19,11 +19,11 @@ services:
       - path: /app/.env
         required: false
     volumes:
-      - accounts:/app/accounts
+      - database:/app/database
       - gmail_tokens:/app/.gmail-mcp
       # dstack guest-agent socket: in-enclave KMS unseal + on-demand attestation.
       - /var/run/dstack.sock:/var/run/dstack.sock
 
 volumes:
-  accounts:
+  database:
   gmail_tokens:

@@ -31,12 +31,12 @@ import harness
 def wire(monkeypatch, tmp_path):
     import subprocess
     import requests
-    import llm_client
-    import state
-    import account
-    import draft_replies
-    import agentic_drafter
-    import schedule_from_sent
+    from backend.integrations import llm_client
+    from backend.accounts import state
+    from backend.accounts import account
+    from backend.drafting import draft_replies
+    from backend.drafting import agentic_drafter
+    from backend.drafting import schedule_from_sent
 
     rec = harness.Recorder()
 

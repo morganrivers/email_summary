@@ -9,8 +9,8 @@ tested resolves the account from data carried in the event itself.
 
 import json
 
-import account
-import billing
+from backend.accounts import account
+from backend.billing import billing
 
 
 def _manifest(tmp_path, entries):

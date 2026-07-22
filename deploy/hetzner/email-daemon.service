@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/email_summary
-ExecStart=/opt/email_summary/venv/bin/python /opt/email_summary/daemon_loop.py
+ExecStart=/opt/email_summary/venv/bin/python -m backend.daemons.daemon_loop
 Restart=always
 RestartSec=3
 Environment=PATH=/opt/email_summary/venv/bin:/usr/local/bin:/usr/bin:/bin
