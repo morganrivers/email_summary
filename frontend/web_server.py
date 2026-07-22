@@ -246,7 +246,6 @@ not a policy promise.</p>
   <li>Optional full agent trace: the draft email includes a log of every tool called and every source consulted</li>
   <li>Open-source models served in the EU (Llama 3, Mistral, DeepSeek R1, Qwen)</li>
   <li>All code open source and auditable</li>
-  <li>No autosend, ever. Drafts only. You review and send.</li>
 </ul>
 </div>
 
@@ -259,12 +258,6 @@ This is what "provably runs the published code" means.
 </div>
 
 <hr>
-
-<h2>Not for everyone</h2>
-
-<p>Faraday works with Gmail only. It does not support Outlook, Apple Mail, or ProtonMail.
-It is not a general-purpose AI assistant. If you need something that browses the web,
-writes code, or manages files, this is not it.</p>
 
 <div style="text-align:center;padding:10px 0;">
   <a href="/pricing" style="font-size:11px;font-weight:bold;">See pricing &rarr;</a>
@@ -648,10 +641,6 @@ def _page_contact(msg=None, error=None):
         status_html = f'<div class="form-error">{_h(error)}</div>'
     body = f"""
 <h2>Contact</h2>
-
-<div class="notice">
-  Please check the <a href="/faq">FAQ</a> before writing. Most questions are answered there.
-</div>
 
 <div class="contact-form">
   <form method="post" action="/contact">

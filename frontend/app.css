@@ -372,7 +372,7 @@ summary:hover {
 	position: relative;
 }
 .feature-list li::before {
-	content: '&#9830;';
+	content: '\2666';
 	position: absolute;
 	left: 0;
 	color: #7722bb;
