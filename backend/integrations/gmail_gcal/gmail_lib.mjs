@@ -18,11 +18,44 @@ export const CONFIG_DIR = process.env.GMAIL_MCP_DIR || path.join(os.homedir(), '
 export const OAUTH_PATH = path.join(CONFIG_DIR, 'gcp-oauth.keys.json');
 export const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'credentials.json');
 
+// Shared OAuth app keys (client_id/secret) for the hosted onboarding flow.
+// GMAIL_OAUTH_KEYS points at one app's keys used for every user's consent;
+// falls back to the per-account OAUTH_PATH so the single-tenant box is unchanged.
+export const OAUTH_KEYS_PATH = process.env.GMAIL_OAUTH_KEYS || OAUTH_PATH;
+
+// Public redirect URI Google sends the consent code back to. The hosted web
+// flow registers this exact value; the localhost default is the loopback used
+// by the CLI browserAuth re-auth path.
+export const OAUTH_REDIRECT_URI = process.env.GMAIL_OAUTH_REDIRECT_URI
+    || 'http://localhost:3000/oauth2callback';
+
+// openid/email/profile grant the login identity (name + email) alongside the
+// Gmail/Calendar scopes, so one consent yields both the account and the token.
 export const SCOPES = [
+    'openid',
+    'email',
+    'profile',
     'https://www.googleapis.com/auth/gmail.modify',
     'https://www.googleapis.com/auth/gmail.settings.basic',
     'https://www.googleapis.com/auth/calendar.events',
 ];
+
+export function loadOAuthKeys() {
+    const keys = JSON.parse(fs.readFileSync(OAUTH_KEYS_PATH, 'utf8'));
+    const k = keys.installed || keys.web;
+    if (!k?.client_id || !k?.client_secret) {
+        throw new Error(`OAuth keys at ${OAUTH_KEYS_PATH} missing client_id/client_secret`);
+    }
+    return k;
+}
+
+// OAuth client for the hosted web flow: same app keys, but the public
+// redirect URI instead of the loopback. Sole constructor for the onboarding
+// code exchange so client config stays single-sourced.
+export function makeWebClient(redirectUri = OAUTH_REDIRECT_URI) {
+    const k = loadOAuthKeys();
+    return new OAuth2Client(k.client_id, k.client_secret, redirectUri);
+}
 
 export function log(msg) {
     process.stderr.write(msg + '\n');
@@ -284,6 +317,22 @@ export async function getCurrentHistoryId(client) {
     const gmail = gmailClient(client);
     const res = await gmail.users.getProfile({ userId: 'me' });
     return res.data.historyId;
+}
+
+// Sole users.watch call (Track C2). Both the CLI worker and the per-user
+// renewal driver route through here, so the topic/label registration shape is
+// defined in exactly one place. Returns the current historyId + watch expiry.
+export async function registerWatch(client, topicName) {
+    const gmail = gmailClient(client);
+    const res = await gmail.users.watch({
+        userId: 'me',
+        requestBody: {
+            topicName,
+            labelIds: ['INBOX'],
+            labelFilterAction: 'include',
+        },
+    });
+    return { historyId: res.data.historyId, expiration: res.data.expiration };
 }
 
 export async function fetchMessage(client, id) {

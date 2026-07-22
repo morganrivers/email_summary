@@ -6,7 +6,7 @@ REMOTE_USER="root"
 REMOTE_HOST="hezner.morganrivers.com"
 REMOTE_DIR="/opt/email_summary"
 SYSTEMD_DIR="/etc/systemd/system"
-SERVICES=(email-daemon email-webhook billing-webhook)
+SERVICES=(email-daemon email-webhook billing-webhook onboarding)
 
 PROMPT_LOCAL="$HOME/.system_files/prompt_for_email"
 PROMPT_REMOTE="/root/.system_files/prompt_for_email"

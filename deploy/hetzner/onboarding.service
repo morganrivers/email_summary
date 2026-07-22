@@ -1,0 +1,16 @@
+[Unit]
+Description=Sign-in-with-Google onboarding web flow (Caddy -> 127.0.0.1:8789)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/email_summary
+ExecStart=/opt/email_summary/venv/bin/python -m backend.onboarding.onboarding_server
+Environment=PATH=/opt/email_summary/venv/bin:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=3
+SyslogIdentifier=onboarding
+
+[Install]
+WantedBy=multi-user.target

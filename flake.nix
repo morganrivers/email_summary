@@ -74,7 +74,7 @@
 
       crontab = pkgs.writeText "email-bot-crontab" ''
         0 5 * * * cd /app && python -m backend.drafting.email_summary
-        0 4 * * 1 cd /app && node backend/integrations/gmail_gcal/watch_register.mjs
+        0 4 * * 1 cd /app && python -m backend.onboarding.watch_renew
       '';
 
       entrypoint = pkgs.writeShellApplication {
@@ -84,6 +84,13 @@
           cd /app
           export GMAIL_MCP_DIR=/app/.gmail-mcp
           mkdir -p /app/.gmail-mcp /app/database
+          # Track F3 attest-before-run gate. Under TEE_REQUIRED it fails closed
+          # (exit -> Restart=always retries) rather than touching mailboxes
+          # without proof the CVM runs the published, attested measurement.
+          if ! python -m backend.tee.tee_boot; then
+            echo "tee_boot gate failed; refusing to start services" >&2
+            exit 1
+          fi
           python -m backend.daemons.daemon_loop &
           d=$!
           python -m backend.daemons.gmail_hook_server &

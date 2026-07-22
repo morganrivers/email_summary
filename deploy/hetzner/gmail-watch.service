@@ -1,12 +1,12 @@
 [Unit]
-Description=Renew Gmail users.watch (Pub/Sub push registration)
+Description=Renew Gmail users.watch for every active account (Pub/Sub push registration)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/email_summary
-ExecStart=/usr/bin/node /opt/email_summary/backend/integrations/gmail_gcal/watch_register.mjs
+ExecStart=/opt/email_summary/venv/bin/python -m backend.onboarding.watch_renew
 Environment=GMAIL_MCP_DIR=/opt/email_summary/.gmail-mcp
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/opt/email_summary/venv/bin:/usr/local/bin:/usr/bin:/bin
 SyslogIdentifier=gmail-watch

@@ -181,6 +181,61 @@ def account_for_customer_id(customer_id):
     return None
 
 
+def register_account(email, first, last, creds_dir, *, first_aliases=(),
+                     telegram_chat_id=None, telegram_token=None,
+                     plan_status="inactive"):
+    """Add (or update) a manifest entry for a freshly onboarded user and return
+    the loaded Account. The sole writer that introduces users to the store,
+    mirroring set_plan_status as the sole plan writer, so onboarding never
+    hand-edits the manifest and the sealed-store swap stays contained here.
+
+    New accounts default to plan_status='inactive': the Polar order.paid webhook
+    flips them active (Track D), so an unpaid signup is unroutable until payment.
+
+    The account model requires a notification target. A Google consent carries no
+    Telegram chat, so the caller passes one or we fall back to env
+    TELEGRAM_CHAT_ID; with neither we refuse rather than write an entry that
+    would make the whole manifest fail to load. The hosted per-user notification
+    target (in-inbox email, plan step 6) is not built yet -- see track C notes."""
+    email = (email or "").strip().lower()
+    assert email and "@" in email, f"register_account needs a real email, got {email!r}"
+    chat_id = telegram_chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+    assert chat_id, (
+        "register_account requires a telegram chat_id (arg or env TELEGRAM_CHAT_ID); "
+        "no per-user notification target is configured for this signup"
+    )
+    telegram = {"chat_id": chat_id}
+    if telegram_token:
+        telegram["token"] = telegram_token
+    entry = {
+        "id": email,
+        "identity": {
+            "first": first,
+            "last": last,
+            "first_aliases": list(first_aliases),
+            "emails": [email],
+        },
+        "creds_dir": str(creds_dir),
+        "telegram": telegram,
+        "plan_status": plan_status,
+    }
+    data = _read_manifest() or {"accounts": []}
+    accounts = data["accounts"]
+    for i, existing in enumerate(accounts):
+        if existing["id"].strip().lower() == email:
+            entry["plan_status"] = existing.get("plan_status", plan_status)
+            entry["telegram"] = {**existing.get("telegram", {}), **telegram}
+            if existing.get("polar_customer_id"):
+                entry["polar_customer_id"] = existing["polar_customer_id"]
+            accounts[i] = entry
+            break
+    else:
+        accounts.append(entry)
+    ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
+    MANIFEST.write_text(json.dumps(data, indent=2))
+    return _account_from_entry(entry)
+
+
 def set_plan_status(account_id, status):
     """Persist `status` ('active'|'inactive') for account_id and return the prior
     status. The sole writer of plan gating: billing flips entitlement only through

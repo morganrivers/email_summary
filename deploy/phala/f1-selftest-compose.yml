@@ -1,0 +1,18 @@
+# Track F1 hello-world spike: deploy the same measured image but override the
+# entrypoint to run the KMS-unseal + RA-TLS + quote selftest instead of the app.
+#
+# Deploy (requires the phala CLI + a Phala Cloud account/KMS AppAuth contract):
+#   phala deploy -c deploy/phala/f1-selftest-compose.yml
+# then read the CVM logs; a healthy enclave prints "[f1] SUCCESS".
+#
+# Uses the digest-pinned image so the running measurement equals the published,
+# source-reproducible hash (deploy/phala/IMAGE_HASH.txt). Replace <digest> with
+# the sha256 from a `docker load` + push of the Nix image tarball.
+services:
+  f1-selftest:
+    image: tee-email-bot@sha256:REPLACE_WITH_PUBLISHED_DIGEST
+    entrypoint: ["python", "-m", "backend.tee.tee_boot", "--selftest"]
+    restart: "no"
+    volumes:
+      # In-enclave KMS unseal + attestation boundary.
+      - /var/run/dstack.sock:/var/run/dstack.sock

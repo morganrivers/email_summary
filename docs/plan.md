@@ -398,8 +398,8 @@ spine and start immediately**. Critical path is **B → F3 → G**.
 
 **Status legend:** `[DONE]` merged to `main` · `[TODO]` not started.
 **Progress so far (on `main`, commits c42b069…ee8852e):** Track A done, Track B
-done, Track E done, Track R researched (human follow-up actions outstanding).
-Everything else not started.
+done, Track C done (feat/identityonboarding), Track E done, Track R researched
+(human follow-up actions outstanding). Everything else not started.
 
 ### Track A — Masking hardening (no deps; start now)  — **[DONE]**
 Pure `pseudonymizer.py` work on the current single-tenant box. Sources: WS1.
@@ -422,13 +422,57 @@ Pure `pseudonymizer.py` work on the current single-tenant box. Sources: WS1.
   c42b069 (`identity.account_id == id`, duplicate-id manifest guard, per-account
   assert in `pipeline.process_account`).
 
-### Track C — Identity + onboarding OAuth (needs B1; source: WS2)  — **[TODO]**
-- **C1. Sign-in-with-Google + redirect-URI token exchange.** `[TODO]`
-- **C2. Per-user `users.watch` registration + weekly renewal.** `[TODO]`
+### Track C — Identity + onboarding OAuth (needs B1; source: WS2)  — **[DONE]**
+- **C1. Sign-in-with-Google + redirect-URI token exchange.** `[DONE]` —
+  `onboarding_server.py` (loopback web flow: landing -> `/oauth/start` CSRF
+  state cookie -> `/oauth/callback`) drives `oauth_helper.mjs` (auth-url +
+  code exchange, single-sourced on `gmail_lib` scopes/keys/redirect), writes the
+  per-user creds dir, `account.register_account` (sole store writer; new signups
+  `inactive` until Polar `order.paid`), then redirects to Polar checkout.
+  Deployed as `onboarding.service` behind Caddy `/onboard*` + `/oauth/*`.
+  *Outstanding:* register the public redirect URI + restricted scopes in the
+  Google console (R3); the per-user notification target is still the operator's
+  Telegram env fallback (hosted in-inbox target = WS7 step 6, not built).
+- **C2. Per-user `users.watch` registration + weekly renewal.** `[DONE]` —
+  `gmail_lib.registerWatch` is the sole watch call; `watch_register.mjs` is now a
+  per-account stdout worker (creds via `GMAIL_MCP_DIR`); `watch_renew.py` renews
+  every active account (`gmail-watch.timer` runs it now, not the old single
+  worker) and also registers the freshly onboarded account. Cursor is set once on
+  first registration and never rewound on renewal; only `watchExpiration`
+  refreshes.
 
-### Track D — Billing (needs only B1 plan-status field; ported code; source: WS3)  — **[TODO]**
-- **D1. Port Polar `webhook.py` / `poller.py` / `polar_api.py`.** `[TODO]`
-- **D2. Plan-gating on Gmail processing (active ↔ inactive).** `[TODO]`
+### Track D — Billing (needs only B1 plan-status field; ported code; source: WS3)  — **[DONE]**
+Ported as `billing.py` (shared `PolarBilling` + one `subscription_entitled`
+rule), `billing_webhook.py`, `billing_poller.py`, `polar_api.py`; 8 tests in
+`tests/test_billing.py` pass. Deploy wired: `billing-webhook.service`,
+`billing-poller.service` + `.timer` (reconcile every 3h), Caddy `/polar/webhook`
+-> `127.0.0.1:8788`, `deploy.sh` restarts `billing-webhook`, and
+`standardwebhooks` / `python-dotenv` added to `requirements.txt`.
+- **D1. Port Polar `webhook.py` / `poller.py` / `polar_api.py`.** `[DONE]`
+  d285952 — cert-signing action swapped for `account.set_plan_status`
+  active/inactive; webhook + poller share `subscription_entitled` so they can't
+  disagree. *Caveat:* Polar credentials + sandbox toggle + webhook secret live in
+  `.env` (unverified here); the Polar webhook-secret base64 quirk is handled in
+  `billing_webhook.main()`.
+- **D2. Plan-gating on Gmail processing (active ↔ inactive).** `[DONE]`
+  d285952 — `account.load_accounts()` drops `inactive`, so the webhook drops
+  their Pub/Sub pushes and the daemon skips them. *Caveat:* gating only bites in
+  multi-tenant mode — `default_account()` (single-tenant box, no `accounts/`
+  manifest) is hardwired `plan_status="active"` and `set_plan_status` asserts a
+  manifest exists, so a single-tenant deploy is never gated off.
+
+#### Track D — deploy to Hetzner (HUMAN action items, not Claude)
+
+Here's the honest picture. Being merged to main does not put it on Hetzner — and I can't confirm the server's current state without SSHing in (which I haven't done). Two separate questions:
+
+1. Has deploy.sh even been run since the billing merge? Unknown to me. If not, none of it is on the box.
+
+2. Even a full deploy.sh run does not finish this deploy. Four manual steps remain that deploy.sh skips:
+
+- Python deps — requirements.txt gained standardwebhooks + python-dotenv. deploy.sh never pip-installs. Without SSHing in to run venv/bin/pip install -r requirements.txt, billing_webhook.py crashes on import standardwebhooks.
+- Caddy route — the /polar/webhook → 127.0.0.1:8788 block is in deploy/hetzner/Caddyfile, but per CLAUDE.md deploy.sh does not sync Caddy. You must edit /etc/caddy/Caddyfile and reload Caddy by hand, or Polar's webhooks never reach the box.
+- Poller timer — deploy.sh rsyncs billing-poller.timer and runs daemon-reload, but its restart list is only email-daemon email-webhook billing-webhook. It never systemctl enable --now billing-poller.timer. So the reconcile timer stays inactive until you enable it manually.
+- .env + accounts/ — billing.py asserts POLAR_API_TOKEN / POLAR_ORGANIZATION_ID (and the webhook needs POLAR_WEBHOOK_SECRET); the webhook service won't start without them. I haven't checked .env (your no-peeking rule). And gating only does anything if there's an accounts/ manifest — single-tenant is always active.
 
 ### Track E — Reproducible-build packaging (no deps; start now; source: WS5)  — **[DONE]**
 Built the Nix source-reproducible path directly (skips E1's throwaway
@@ -446,13 +490,33 @@ rebuilds twice), `IMAGE_HASH.txt`.
   tarball sha256 is not yet the dstack CVM measurement — wiring the published
   hash to the attested measurement is F3/G.
 
-### Track F — TEE platform spike (infra spike has no deps; start now; source: WS4)  — **[TODO]**
-- **F1. dstack deploy spike: KMS unseal + RA-TLS mechanics (hello-world).** `[TODO]`
-- **F2. Empirical wrong-measurement KMS-refusal test.** `[TODO]` *(also KMS
-  checklist R2)*
-- **F3. Package the app into one measured image.** `[TODO]` *(needs B complete
-  [done] + E1 [done]; the E image is built, F3 is deploying it as the attested
-  CVM measurement)*
+### Track F — TEE platform spike (infra spike has no deps; start now; source: WS4)  — **[CODE DONE; live deploy outstanding]**
+Code + deploy artifacts landed; the empirical halves need a Phala Cloud account
++ `phala` CLI + an AppAuth contract we own (R2 outstanding action). SSOT socket
+client `dstack_client.py` (stdlib http-over-unixsocket: Info/GetKey/GetQuote/
+GetTlsKey). Boot module `tee_boot.py` is both the F1 spike and the F3 gate.
+- **F1. dstack deploy spike: KMS unseal + RA-TLS mechanics (hello-world).**
+  `[CODE DONE]` — `tee_boot.py --selftest` exercises GetKey (unseal) + GetTlsKey
+  (RA-TLS keypair, quote-bound cert) + GetQuote; deploy via
+  `deploy/phala/f1-selftest-compose.yml`. *Outstanding:* run on a live CVM,
+  confirm `[f1] SUCCESS`.
+- **F2. Empirical wrong-measurement KMS-refusal test.** `[CODE DONE]` *(also KMS
+  checklist R2)* — `deploy/phala/f2_wrong_measurement_test.sh` auto-verifies the
+  local mechanic (one-byte source change ⇒ different reproducible measurement)
+  and drives the live refusal proof behind `RUN_LIVE=1`. *Outstanding:* authorize
+  H1 only, deploy H2, confirm KMS refuses (fail-closed).
+- **F3. Package the app into one measured image.** `[CODE DONE]` *(needs B
+  complete [done] + E1 [done])* — attest-before-run gate wired into the Nix
+  entrypoint (`flake.nix`), `TEE_REQUIRED=1` + tmpfs RA-TLS material + encrypted-
+  env secret injection in `deploy/phala/docker-compose.yml`. *Outstanding:* pin
+  the published image digest into the compose files and deploy the attested CVM.
+  - *Caveat (feat/teespike merge):* `IMAGE_HASH.txt` values were invalidated by
+    the merge (merged tree = main Track C/D + Track F, so neither pre-merge hash
+    describes it). They are placeholders pending regeneration via
+    `deploy/phala/build_and_publish.sh --verify`. That rebuild was deferred
+    because the build host is at 100% disk (~3.6G free); free space first, then
+    regenerate before any push (registry-ref is still `<not pushed>`, so nothing
+    live depends on it yet).
 
 ### Track G — Attestation-verification surface (endpoint code parallel; live proof needs F; source: WS6)  — **[TODO]**
 - **G1. On-demand attestation endpoint + signature-chain verification.** `[TODO]`
