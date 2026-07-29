@@ -6,7 +6,7 @@ REMOTE_USER="root"
 REMOTE_HOST="hezner.morganrivers.com"
 REMOTE_DIR="/opt/email_summary"
 SYSTEMD_DIR="/etc/systemd/system"
-SERVICES=(email-daemon email-webhook billing-webhook onboarding)
+SERVICES=(email-daemon email-webhook billing-webhook onboarding faraday-web)
 
 PROMPT_LOCAL="$HOME/.system_files/prompt_for_email"
 PROMPT_REMOTE="/root/.system_files/prompt_for_email"
@@ -37,7 +37,6 @@ EXCLUDES=(
     --exclude='database/'
     --exclude='tests/'
     --exclude='docs/'
-    --exclude='frontend/'
     --exclude='wake.fifo'
     --exclude='wake_queue.jsonl'
     --exclude='wake_queue.lock'
