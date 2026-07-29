@@ -41,7 +41,7 @@ voicedna/
 │   └── paths.py                 single source of truth for on-disk locations (.env, node bridge, database)
 │                                                                 
 ├── frontend/                    NEW: server-rendered webapp (OAuth, sessions, settings,                                                                                                     
-│                                voice DNA, billing UI) — empty until the faradaymail plan lands                                                                                             
+│                                voice DNA, billing UI) — see docs/plan_webapp.md                                                                                                       
 │                                                                                                                                                                                            
 ├── database/                   git-ignored account store: accounts.json + per-user creds/state                                                                                              
 │                               (persistent data only; fifo/locks/logs are runtime scratch, not here)                                                                                        

@@ -1,9 +1,9 @@
-# Faraday web UI — plan (single-container design)
+# Knightdrafter web UI — plan (single-container design)
 
-Brand: **Faraday** — domain `faradaymail.ai`. Wedge: privacy ("nothing leaks
-out of the cage").
+Brand: **Knightdrafter**, domain `knightdrafter.com`. Wedge: privacy ("the
+operator cannot read your mail").
 
-Move the entire Faraday interface (onboarding, accounting, settings, voice DNA)
+Move the entire Knightdrafter interface (onboarding, accounting, settings, voice DNA)
 off email and into a **tiny server-rendered HTML web UI that lives inside the
 enclave container**, not a separate webapp.
 
@@ -14,7 +14,8 @@ Bot repo (the enclave): `~/Code/TEE_email_bot-worktree/voicedna`.
 This plan mostly adds code **to the bot repo**; `~/Code/mailbotwebsite` holds
 this plan and any scratch/mockups.
 
-Brand confirmed: **Faraday** (`faradaymail.ai`). "mailbot" retired.
+Brand confirmed: **Knightdrafter** (`knightdrafter.com`). "mailbot", "Faraday",
+and "Fortress" all retired. Buy `nightdrafter.com` and redirect it.
 
 ---
 
@@ -71,7 +72,7 @@ justification, so folding it into the enclave *removes* complexity:
 
 ## Track U2 — Retro theme (copy from frontdoor)
 
-- [ ] Copy `src/app.css` verbatim; rebrand "TLDR"→"Faraday". Verdana 12px,
+- [ ] Copy `src/app.css` verbatim; rebrand "TLDR" to "Knightdrafter". Verdana 12px,
       #1a237e navy, #7722bb diamonds, gradient titlebar, `.form-row` /
       `.form-submit`.
 - [ ] Recreate `+layout.svelte`'s chrome as a static `layout()` HTML wrapper:
@@ -246,7 +247,7 @@ and displays status.
 
 ## Open items to confirm before build
 
-- Brand name resolved: **Faraday** / `faradaymail.ai`.
+- Brand name resolved: **Knightdrafter** / `knightdrafter.com`.
 - Exact minimal Gmail scope the bot requires (check `gmail_lib.mjs`) — minimize
   for CASA restricted-scope review.
 - Whether to add a tiny template helper vs plain string templates (dep vs

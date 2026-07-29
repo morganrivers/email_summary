@@ -706,9 +706,13 @@ Two things to fix before this works, both cheap and both worth doing now:
   `frontend/session.py` asserts `SESSION_SECRET` is set from the environment.
   If each CVM gets a different value, users get logged out whenever they land on
   a different instance, and also on every redeploy. The right source is the KMS:
-  `DstackClient.get_key("faraday/session")` yields the same value for every
+  `DstackClient.get_key("tee-email-bot/session")` yields the same value for every
   authorized instance of the app and never exists outside an attested CVM. That
-  is a one-line change with a real operational payoff.
+  is a one-line change with a large operational payoff. Note the derivation path
+  matches the existing `APP_KEY_PATH` prefix in `backend/tee/tee_boot.py` and
+  deliberately carries no brand name: changing a derivation path rotates the
+  derived key, so anything already sealed under the old path becomes
+  unrecoverable. Freeze these strings before the first CVM seals data.
 - **The Pub/Sub push target and the browser-facing hostname become one
   load-balanced front.** Note that whatever terminates TLS in front of the
   enclaves is *outside* the attested boundary, which weakens the "the browser
