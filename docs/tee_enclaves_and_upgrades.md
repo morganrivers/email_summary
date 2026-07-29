@@ -131,7 +131,7 @@ Section 5 is about it.
 
 **Key wrapping.** Encrypting a key with another key. Used so that a large
 encrypted volume never has to be re-encrypted when its access key changes: you
-re-wrap the small volume key instead. LUKS keyslots work this way.
+re-wrap the small volume key instead. LUKS keyslots work this way. ! don't get this
 
 **Attestation.** The hardware producing a signed statement of the form "a
 program whose measurement is X is running inside a genuine TEE on this
