@@ -1,4 +1,4 @@
-"""Fortress web UI (Tracks U1, U2, U3, U4, U6, U7, U8, U9, U11).
+"""Knightdrafter web UI (Tracks U1, U2, U3, U4, U6, U7, U8, U9, U11).
 
 Minimal stdlib HTTP server. Caddy terminates TLS and reverse-proxies.
 Run as: python -m frontend.web_server
@@ -55,10 +55,10 @@ OAUTH_HELPER = paths.node_script("oauth_helper.mjs")
 HOST = os.environ.get("WEB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("WEB_PORT", "8790"))
 REDIRECT_URI = os.environ.get(
-    "WEB_OAUTH_REDIRECT_URI", "https://fortress.email/auth/callback"
+    "WEB_OAUTH_REDIRECT_URI", "https://knightdrafter.com/auth/callback"
 )
 POLAR_CHECKOUT_URL = os.environ.get("POLAR_CHECKOUT_URL", "")
-STATE_COOKIE = "fortress_oauth_state"
+STATE_COOKIE = "knightdrafter_oauth_state"
 STATE_TTL = 600
 
 _CSS_PATH = Path(__file__).parent / "app.css"
@@ -177,14 +177,14 @@ def _layout(title, body, active=None, user_email=None):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_h(title)} | Fortress</title>
+<title>{_h(title)} | Knightdrafter</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <div id="page">
   <div id="titlebar">
     <div class="brand">
-      <a href="/"><span class="mark" aria-hidden="true">&#9601;&#9600;&#9600;&#9601;</span> Fortress</a>
+      <a href="/"><span class="mark" aria-hidden="true">&#9601;&#9600;&#9600;&#9601;</span> Knightdrafter</a>
       <span class="tagline">the most secure AI agent for Gmail</span>
     </div>
   </div>
@@ -193,7 +193,7 @@ def _layout(title, body, active=None, user_email=None):
 {body}
   </div>
   <div id="footer">
-    <span>&copy; 2026 Fortress &nbsp;|&nbsp; <a href="/about">About</a> &nbsp;|&nbsp; <a href="/faq">FAQ</a> &nbsp;|&nbsp; <a href="https://fortress.email">fortress.email</a></span>
+    <span>&copy; 2026 Knightdrafter &nbsp;|&nbsp; <a href="/about">About</a> &nbsp;|&nbsp; <a href="/faq">FAQ</a> &nbsp;|&nbsp; <a href="https://knightdrafter.com">knightdrafter.com</a></span>
     <span class="footer-right">
       <span id="utc-clock"></span>
     </span>
@@ -217,7 +217,7 @@ def _page_home():
     body = """
 <h2>The most secure, powerful Gmail AI assistant</h2>
 
-<p>Most Gmail AI tools process your email on servers you have to trust. Fortress is different.</p>
+<p>Most Gmail AI tools process your email on servers you have to trust. Knightdrafter is different.</p>
 
 <p>Your email is processed inside a TEE (Trusted Execution Environment): a locked region
 of the processor that nobody, including us, can inspect. Before any text reaches the AI
@@ -270,9 +270,9 @@ This is what "provably runs the published code" means.
 
 def _page_about():
     body = """
-<h2>What is Fortress?</h2>
+<h2>What is Knightdrafter?</h2>
 
-<p>Fortress is a Gmail AI assistant that drafts replies, checks your calendar, and summarises
+<p>Knightdrafter is a Gmail AI assistant that drafts replies, checks your calendar, and summarises
 your inbox. It is not a general-purpose assistant. It only works with Gmail.</p>
 
 <p>The assistant is open source, runs in a Trusted Execution Environment (TEE), and strips
@@ -330,14 +330,14 @@ the billing integration, and this web server. You can read it, audit it, and reb
 the enclave image yourself. A reproducible Nix build means anyone can rebuild from
 source and derive the same image hash that the attestation report contains.</p>
 
-<h2>What Fortress does not do</h2>
+<h2>What Knightdrafter does not do</h2>
 
 <ul style="font-size:11px;line-height:1.9;">
-  <li>Fortress does not send email. It creates drafts. You review and send.</li>
-  <li>Fortress does not work with Outlook, Apple Mail, or ProtonMail.</li>
-  <li>Fortress does not browse the web, write code, or manage files.</li>
-  <li>Fortress does not store your email content persistently.</li>
-  <li>Fortress does not use US-based AI providers. All inference runs on EU-hosted open-weight models.</li>
+  <li>Knightdrafter does not send email. It creates drafts. You review and send.</li>
+  <li>Knightdrafter does not work with Outlook, Apple Mail, or ProtonMail.</li>
+  <li>Knightdrafter does not browse the web, write code, or manage files.</li>
+  <li>Knightdrafter does not store your email content persistently.</li>
+  <li>Knightdrafter does not use US-based AI providers. All inference runs on EU-hosted open-weight models.</li>
 </ul>
 
 <hr>
@@ -373,9 +373,9 @@ that touches it is the code whose hash is published and verifiable.</p>
 </details>
 
 <details>
-<summary>Does Fortress train on my emails?</summary>
+<summary>Does Knightdrafter train on my emails?</summary>
 <div class="answer">
-<p>No. The models Fortress uses are open-weight models served by Scaleway (France). We have
+<p>No. The models Knightdrafter uses are open-weight models served by Scaleway (France). We have
 no training relationship with Scaleway and no ability to train on your data. Additionally,
 the AI model never sees your raw email: personally identifying information is stripped before
 the masked text leaves the enclave.</p>
@@ -385,7 +385,7 @@ the masked text leaves the enclave.</p>
 <details>
 <summary>Which AI models are available?</summary>
 <div class="answer">
-<p>Fortress uses open-weight models served in the EU by Scaleway. Current options include
+<p>Knightdrafter uses open-weight models served in the EU by Scaleway. Current options include
 Llama 3.1 70B, Llama 3.1 405B, Mistral Large 2, DeepSeek R1, and Qwen 2.5 72B. All are
 open-source models with published weights. Because the masking always runs, the choice of
 model does not affect whether your raw PII is exposed.</p>
@@ -393,7 +393,7 @@ model does not affect whether your raw PII is exposed.</p>
 </details>
 
 <details>
-<summary>What can Fortress do?</summary>
+<summary>What can Knightdrafter do?</summary>
 <div class="answer">
 <ul style="margin:0 0 8px 0;padding-left:18px;line-height:1.9;">
   <li>Draft replies to emails, searching your thread history for context</li>
@@ -406,13 +406,13 @@ model does not affect whether your raw PII is exposed.</p>
 </details>
 
 <details>
-<summary>What can Fortress not do?</summary>
+<summary>What can Knightdrafter not do?</summary>
 <div class="answer">
 <ul style="margin:0 0 8px 0;padding-left:18px;line-height:1.9;">
-  <li>Fortress does not send email autonomously. It creates drafts only.</li>
-  <li>Fortress only works with Gmail. Not Outlook, Apple Mail, or ProtonMail.</li>
-  <li>Fortress does not browse the web, write code, or manage files.</li>
-  <li>Fortress does not support phone calls, SMS, or Slack.</li>
+  <li>Knightdrafter does not send email autonomously. It creates drafts only.</li>
+  <li>Knightdrafter only works with Gmail. Not Outlook, Apple Mail, or ProtonMail.</li>
+  <li>Knightdrafter does not browse the web, write code, or manage files.</li>
+  <li>Knightdrafter does not support phone calls, SMS, or Slack.</li>
 </ul>
 </div>
 </details>
@@ -456,7 +456,7 @@ so the highest-stakes identifiers are always caught regardless of what the NER m
 <details>
 <summary>What does it cost?</summary>
 <div class="answer">
-<p>Fortress costs 20 euros per month. Payment is handled by Polar (EU-based). No free trial
+<p>Knightdrafter costs 20 euros per month. Payment is handled by Polar (EU-based). No free trial
 is available. There is no free tier because the computational cost of running a TEE-backed
 email agent is fixed regardless of usage.</p>
 </div>
@@ -504,7 +504,7 @@ def _page_pricing():
   </div>
 </div>
 
-<h2>How Fortress compares</h2>
+<h2>How Knightdrafter compares</h2>
 
 <p style="font-size:11px;color:#555;margin-bottom:8px;">
 The table below compares tools that combine email with AI or strong privacy. Prices are
@@ -580,7 +580,7 @@ approximate and may change.
   <td>Free, but it's Google</td>
 </tr>
 <tr class="highlight">
-  <td><strong>Fortress</strong></td>
+  <td><strong>Knightdrafter</strong></td>
   <td><strong>&euro;20/mo</strong></td>
   <td><strong>TEE enclave + PII masking</strong></td>
   <td><strong>No, open source</strong></td>
@@ -591,23 +591,23 @@ approximate and may change.
 </table>
 
 <p style="font-size:10px;color:#666;margin-top:4px;">
-The key distinction: Fortress's security is verifiable. The attestation report is a
+The key distinction: Knightdrafter's security is verifiable. The attestation report is a
 cryptographic proof that the server runs the published open-source code. Other tools
 require you to trust their word.
 </p>
 
 <hr>
 
-<h2>Who Fortress is for</h2>
+<h2>Who Knightdrafter is for</h2>
 
 <div class="info-box">
-<p><strong>Choose Fortress if:</strong> you want a Gmail AI assistant and security is a priority.
+<p><strong>Choose Knightdrafter if:</strong> you want a Gmail AI assistant and security is a priority.
 You want to verify, independently, that the code processing your email matches what was published.
 You accept Gmail only (no Outlook, no ProtonMail). You want draft-only (no autonomous sending).</p>
 </div>
 
 <div class="info-box">
-<p><strong>Do not choose Fortress if:</strong> you use Outlook, Apple Mail, or another provider.
+<p><strong>Do not choose Knightdrafter if:</strong> you use Outlook, Apple Mail, or another provider.
 You need a general-purpose AI assistant. You need something that browses the web, writes code,
 or manages files. You need on-device processing with no server involved.
 You need more than ~100 drafts per month (see <a href="/faq">FAQ</a> on trial limits).</p>
@@ -725,8 +725,7 @@ it uses your voice when drafting replies rather than a generic style.
 
 <p style="font-size:11px;">
 If you have not received that email yet, it will arrive within a few minutes of
-a new email landing in your inbox. If you prefer not to wait, reply to any email
-in your inbox with <code>@fortress voice</code> as the first line.
+a new email landing in your inbox.
 </p>
 
 <p style="font-size:11px;">
@@ -856,7 +855,7 @@ def _page_account(acct, error=None):
 def _page_deleted():
     body = """
 <h2>Account deleted</h2>
-<p>Your account and credentials have been removed. Thank you for using Fortress.</p>
+<p>Your account and credentials have been removed. Thank you for using Knightdrafter.</p>
 <p><a href="/">Return to home</a></p>
 """
     return _layout("Account deleted", body)

@@ -14,28 +14,39 @@ Rules carried over from the voice profile, applied to marketing register:
 
 ---
 
-## 1. Two decisions to make before writing more copy
+## 1. One decision left before writing more copy
 
-### 1a. Product name
+### 1a. Product name: settled
 
-The domain is `faradaymail.ai` (see `deploy/hetzner/Caddyfile:19`). The site copy
-says "Fortress" throughout `frontend/web_server.py`. Pick one and change the other.
+The name is **Knightdrafter**, at `knightdrafter.com`. Buy `nightdrafter.com`
+alongside it and redirect, since the two are homophones and a competitor should
+not own the other spelling.
 
-Recommendation: **Faraday**.
+Both earlier candidates are dead, and for the same reason each time: the name
+was already occupied in this exact category.
 
-- A Faraday cage is a physical enclosure that stops signals escaping. That is
-  literally what a TEE is for the data inside it. The metaphor does the
-  explanatory work for free.
-- "Fortress" describes keeping attackers out. Your actual claim is about
-  keeping data in, and specifically about the operator (you) not being able to
-  see it. Wrong metaphor for the differentiated claim.
-- "Fortress" is crowded (Fortress Investment Group, Fortinet adjacency,
-  many security products). "Faraday" is distinctive and you own the domain.
-- Faraday also gives you a visual identity for free (mesh, cage, grid).
+- **Faraday** is out. `faraday.email` is a live AI email client marketing on
+  privacy, no training on user mail, AES-256, Gmail and Outlook support. The
+  cage metaphor was the best fit for the claim, but the name is taken by a
+  direct competitor with the better domain.
+- **Fortress** is out. `fortress.email` is registered, and the metaphor was
+  wrong anyway: a fortress keeps attackers out, while the differentiated claim
+  is that the operator on the inside cannot look in.
 
-Downside: one existing security tool is called Faraday (faradaysec.com,
-a vuln-management platform). Different category, and you have the `.ai`.
-Worth a five-minute trademark check before printing anything.
+Two things to hold to, given "Knight" is the weaker half of the name:
+
+- Keep the visual identity off knights, helms, shields, and armor. `inboxknight.com`
+  is an AI Gmail assistant using Knight across its pricing tiers, so the imagery
+  is the part that would create confusion. Its rights look thin (a waitlist since
+  2024, no shipped product, no registration found), but there is no reason to walk
+  toward it. Run TSDR and EUIPO before printing anything.
+- Armor connotes impenetrability, and the threat model has honest gaps (Scaleway
+  sees masked text, masking recall is not 100 percent, Google sees everything
+  regardless). Let the copy carry the security claim, qualified, rather than the
+  name. See the honesty ladder in section 2.
+
+Known cost, accepted: the silent K has to be spelled out every time the domain is
+said aloud, which is a real tax on an email product.
 
 ### 1b. Gmail in the tagline
 
@@ -99,7 +110,7 @@ Always ship these with the boundary in the same sentence.
 
 Suggested replacement for the front-page superlative:
 
-> Faraday is open-source agentic email that runs where the operator cannot look.
+> Knightdrafter is open-source agentic email that runs where the operator cannot look.
 
 That is defensible today. "Never leaks" is not.
 
@@ -134,7 +145,7 @@ of the marketing claim is one component ahead of the build.
   isolation is a property of your code, and attestation says nothing about
   whether your code is correct. This deserves a paragraph on the About page,
   because a security-literate reader will ask.
-- Google sees everything anyway. The honest framing is "Faraday adds no new
+- Google sees everything anyway. The honest framing is "Knightdrafter adds no new
   party who can read your mail", not "your mail is private". The former is
   true and still valuable. The latter invites a dunk.
 
@@ -159,7 +170,7 @@ specific one.
 
 **One line (bylines, launch sites, forum signatures):**
 
-> Morgan Rivers builds Faraday. Previously an electro-optic engineer on
+> Morgan Rivers builds Knightdrafter. Previously an electro-optic engineer on
 > satellite systems, and a researcher on critical-infrastructure resilience
 > at ALLFED.
 
@@ -188,7 +199,7 @@ specific one.
 > that looks efficient in normal times is the thing that turns a local
 > failure into a general one.
 >
-> Faraday is the same argument applied to email.
+> Knightdrafter is the same argument applied to email.
 
 The last line is the reason the bio belongs on the site at all. The physics
 credential is not the point. The infrastructure-fragility credential is the
@@ -200,13 +211,13 @@ point, because it explains why you specifically noticed this problem.
 
 **Ten seconds:**
 
-> Faraday is an open-source AI assistant for Gmail that runs inside a hardware
+> Knightdrafter is an open-source AI assistant for Gmail that runs inside a hardware
 > enclave, so I cannot read your email even if I wanted to.
 
 **Thirty seconds:**
 
 > Every AI email assistant today asks you to trust a company's privacy policy.
-> Faraday replaces that with a hardware proof. It runs inside an Intel TDX
+> Knightdrafter replaces that with a hardware proof. It runs inside an Intel TDX
 > enclave, which produces a signed report saying exactly which code is running,
 > and the code is public so you can check the hash yourself. It drafts replies,
 > checks your calendar, and summarises your inbox. It never sends anything
@@ -225,7 +236,7 @@ point, because it explains why you specifically noticed this problem.
 > silos was, and the models good enough to be useful are also good enough to be
 > used offensively.
 >
-> Faraday is the same product built so that the operator is not a trusted
+> Knightdrafter is the same product built so that the operator is not a trusted
 > party. It runs in a hardware enclave that proves which code it is executing,
 > the code is open source, and personal identifiers are stripped before
 > anything reaches a model. It works with Gmail, it drafts but never sends, and
@@ -240,7 +251,7 @@ diagnosis in the middle is the strongest thing you have written so far, so it
 should stay near the top rather than being buried under features.
 
 ```
-Faraday is agentic email that the operator cannot read.
+Knightdrafter is agentic email that the operator cannot read.
 
 Open source. Runs in a hardware enclave. Works with Gmail.
 
@@ -261,7 +272,7 @@ more effective.
 
 The fix is not to hide the code.
 
-Faraday runs inside an Intel TDX enclave, a region of the processor that the
+Knightdrafter runs inside an Intel TDX enclave, a region of the processor that the
 host operating system, the cloud provider, and I cannot inspect. At boot the
 enclave signs a report naming the exact code it is running. The source is
 public and the build is reproducible, so you can rebuild it and check that the
@@ -302,7 +313,7 @@ offers from a solo pre-launch product read as either desperate or dishonest.
 **Page:**
 
 ```
-Faraday is not open yet.
+Knightdrafter is not open yet.
 
 I am building an AI assistant for Gmail that runs inside a hardware enclave,
 so that the person operating it (me) cannot read your mail. The code is open
@@ -355,7 +366,7 @@ Recommended: the third. It is specific to you, and nobody else can write it.
    acquirable, and subpoenable. Code that is attested is none of those.
 5. Why the answer is not secrecy. Closed source means the claim reduces to
    trusting the operator, which is exactly the thing being replaced.
-6. What Faraday actually is, and what it is not yet. Include the Scaleway gap
+6. What Knightdrafter actually is, and what it is not yet. Include the Scaleway gap
    here. Ending a manifesto on an admitted limitation is unusual and is the
    most persuasive move available to you.
 7. One line asking for the waitlist. One line only.
@@ -530,13 +541,13 @@ Show HN, awesome-selfhosted, r/SideProject.
 
 **Short description, ~200 characters:**
 
-> Faraday drafts your Gmail replies, handles scheduling, and summarises your
+> Knightdrafter drafts your Gmail replies, handles scheduling, and summarises your
 > inbox. It runs inside an Intel TDX enclave and publishes an attestation of
 > the exact open-source code it is executing.
 
 **Show HN title:**
 
-> Show HN: Faraday, an open-source Gmail assistant running in a TDX enclave
+> Show HN: Knightdrafter, an open-source Gmail assistant running in a TDX enclave
 
 Show HN body should lead with architecture, not benefits, and should include
 the Scaleway limitation in the first three paragraphs. That crowd will find it
@@ -570,7 +581,6 @@ than fifty waitlist rows.
 
 - What is the satellite and defense employer's name, and are you comfortable
   naming it in public copy?
-- Faraday or Fortress? The code says one thing and the domain says another.
 - Is the 20 euro price fixed, and does the founding-price offer fit your
   actual inference cost per user?
 - Who is David, in one line, so the email above can be made specific?
