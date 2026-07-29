@@ -140,6 +140,26 @@ auditable.
 - **Sequencing: multi-tenant refactor first, then lift into TEE.** The refactor
   is the larger, riskier, substrate-independent work. Prove it clean
   single-tenant, then wrap in the CVM.
+- **Deployment: Phala required from day one for the operator-blind promise.**
+  The entire stack — web UI, billing, OAuth, account store, daemons — runs as
+  one container (single-container design, Track U11). Hetzner is incompatible
+  with the core claim: on any non-attested host the operator has root access and
+  can extract all user data in plaintext (e.g. `docker exec ... tar`). The
+  open-source code must contain no such backdoor; the TEE hardware is the only
+  enforcement mechanism that makes "the operator cannot see user data" a
+  verifiable fact rather than a promise. Phala (TDX + dstack KMS) is therefore
+  not a fast-follow — it is the launch platform.
+- **CVM instances are stateful permanent infrastructure.** User data is sealed
+  inside the LUKS2 volume with a KMS-derived key the operator never holds. The
+  correct migration path when moving to a larger CVM is block-device level
+  (copy LUKS2 ciphertext; the new CVM receives the same KMS-derived key via
+  attestation and decrypts cleanly). Container-level plaintext extraction is
+  not an option and must not exist in the codebase.
+- **Phala CVM sizing and pricing: unconfirmed.** Check cloud.phala.network for
+  current TDX tiers. The stack needs enough RAM for spaCy `en_core_web_lg`
+  (~560 MB model loaded by Presidio) plus multiple Python processes plus Node;
+  8 GB is the comfortable minimum. Confidential-compute CVMs cost more than
+  plain VPS — confirm pricing fits the budget before committing to timelines.
 
 ## Current state (what exists)
 
