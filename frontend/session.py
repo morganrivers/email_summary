@@ -13,7 +13,7 @@ import http.cookies
 import os
 import time
 
-SESSION_COOKIE = "faraday_session"
+SESSION_COOKIE = "fortress_session"
 SESSION_TTL = 86400 * 30
 
 _secret = None
