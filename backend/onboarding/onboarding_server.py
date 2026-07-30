@@ -45,6 +45,7 @@ from dotenv import load_dotenv
 
 from backend import paths
 from backend.accounts import account
+from backend.billing import billing
 from backend.onboarding import watch_renew
 
 load_dotenv(paths.ENV_FILE)
@@ -56,7 +57,6 @@ PORT = int(os.environ.get("ONBOARD_PORT", "8789"))
 REDIRECT_URI = os.environ.get(
     "GMAIL_OAUTH_REDIRECT_URI", "https://hezner.morganrivers.com/oauth/callback"
 )
-POLAR_CHECKOUT_URL = os.environ.get("POLAR_CHECKOUT_URL", "")
 STATE_COOKIE = "onboard_state"
 STATE_TTL = 600
 
@@ -121,10 +121,7 @@ def checkout_redirect(email):
     """Where to send the user after a successful connect. Polar hosted checkout
     when configured (carrying customer_email so the order.paid webhook resolves
     to this account), else the local success stub."""
-    if not POLAR_CHECKOUT_URL:
-        return "/onboard/success"
-    sep = "&" if "?" in POLAR_CHECKOUT_URL else "?"
-    return f"{POLAR_CHECKOUT_URL}{sep}customer_email={urllib.parse.quote(email)}"
+    return billing.checkout_url(email, fallback="/onboard/success")
 
 
 def provision(code):

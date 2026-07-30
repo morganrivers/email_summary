@@ -2,7 +2,7 @@
   "llm_calls": [
     {
       "model": "deepseek-v4-pro",
-      "max_tokens": 2000,
+      "max_tokens": 16000,
       "response_format": {
         "type": "json_object"
       },
@@ -11,11 +11,11 @@
       "messages": [
         {
           "role": "system",
-          "content": "Decide for each email whether [USER_FIRST] (the recipient) should personally reply.\n\nReply 'yes' ONLY when a specific human contact is personally writing to [USER_FIRST] and clearly expects a direct personal response from him. The email should read like it was hand-written and sent to him individually (not as part of a list).\n\nReply 'no' for ALL of the following, even if they contain a call to action, an interesting opportunity, or a deadline:\n- Newsletters, Substack posts, blog digests (even ones soliciting pitches or submissions)\n- Marketing, promotional, sales, or fundraising emails\n- Automated notifications, alerts, confirmations, and digests\n- Anything from no-reply, noreply, donotreply, jobalerts, notifications, marketing, or similar senders\n- Calendar invites without explicit personal questions directed at [USER_FIRST]\n- Receipts, invoices, shipping updates, package notifications, order confirmations\n- Mass-mailed announcements, event invitations, conference CFPs\n- Job alerts and recruitment broadcasts (even from real recruiters using mass tools)\n- Security alerts, account notifications, system messages\n- Bulk emails identifiable by 'List-Unsubscribe' style cues, generic greetings, or 'view in browser' links\n\nWhen unsure, prefer 'no'. False positives create draft noise; missed emails are recoverable via the daily summary.\n\nOutput JSON: {\"decisions\": [{\"index\": int, \"needs_reply\": bool, \"reason\": str}, ...]}. Include one entry per input email. Keep each reason to one short sentence."
+          "content": "Decide for each email whether the recipient should personally reply.\n\nReply 'yes' when a specific human contact is personally writing to the recipient and clearly expects a direct personal response. The email should read like it was hand-written and sent to them individually (not as part of a list).\n\nAlso reply 'yes' when the email is marked 'Thread: the recipient has written in this thread' AND it was hand-written by a specific human. A human continuing or closing a conversation the recipient took part in warrants a reply even when it asks no question: decisions, outcomes, rejections, and sign-offs on a personal back-and-forth all deserve an acknowledgement. This carve-out never applies to the categories below; an automated or bulk message stays 'no' however the thread is marked.\n\nReply 'no' for ALL of the following, even if they contain a call to action, an interesting opportunity, or a deadline:\n- Newsletters, Substack posts, blog digests (even ones soliciting pitches or submissions)\n- Marketing, promotional, sales, or fundraising emails\n- Automated notifications, alerts, confirmations, and digests\n- Anything from no-reply, noreply, donotreply, jobalerts, notifications, marketing, or similar senders\n- Calendar invites without explicit personal questions directed at the recipient\n- Receipts, invoices, shipping updates, package notifications, order confirmations\n- Mass-mailed announcements, event invitations, conference CFPs\n- Job alerts and recruitment broadcasts (even from real recruiters using mass tools)\n- Security alerts, account notifications, system messages\n- Bulk emails identifiable by 'List-Unsubscribe' style cues, generic greetings, or 'view in browser' links\n\nWhen unsure, prefer 'no'. False positives create draft noise; missed emails are recoverable via the daily summary.\n\nOutput JSON: {\"decisions\": [{\"index\": int, \"needs_reply\": bool, \"reason\": str}, ...]}. Include one entry per input email. Keep each reason to one short sentence."
         },
         {
           "role": "user",
-          "content": "[0] From: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nSubject: Lunch next week?\nBody: Hi [USER_FIRST], want to grab lunch next week? Best, [PERSON1_FIRST] [PERSON1_LAST]"
+          "content": "[0] From: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nSubject: Lunch next week?\nThread: no earlier message from the recipient in this thread\nBody: Hi [USER_FIRST], want to grab lunch next week? Best, [PERSON1_FIRST] [PERSON1_LAST]"
         }
       ]
     },

@@ -4,6 +4,7 @@ All callers route through `complete()` so model, thinking toggle, and
 reasoning effort live in exactly one place.
 """
 
+import json
 import os
 import sys
 
@@ -15,6 +16,11 @@ MODEL = "deepseek-v4-pro"
 BASE_URL = "https://api.deepseek.com"
 REASONING_EFFORT = "max"
 THINKING = {"type": "enabled"}
+
+# Reasoning tokens count against max_tokens, so a budget sized for the answer
+# alone truncates before any answer is emitted. Sized for the largest batch a
+# caller sends (40 emails) rather than the typical one.
+JSON_MAX_TOKENS = 16000
 
 LANGSMITH_ENABLED = True
 
@@ -88,3 +94,25 @@ def complete(client, messages, max_tokens, pseudonymize=True, identity=None, **k
     if state is not None:
         _restore_response(resp, state)
     return resp
+
+
+def complete_json(client, messages, max_tokens=JSON_MAX_TOKENS, **kwargs):
+    """Single boundary for completions that must return parseable JSON.
+    Reasoning tokens count against max_tokens, so a budget sized for the answer
+    alone silently truncates: the API returns finish_reason='length' with empty
+    content, which a bare json.loads turns into an opaque JSONDecodeError deep
+    in the caller. Assert it where it happens instead."""
+    resp = complete(
+        client, messages, max_tokens=max_tokens,
+        response_format={"type": "json_object"}, **kwargs,
+    )
+    choice = resp.choices[0]
+    content = (choice.message.content or "").strip()
+    assert choice.finish_reason != "length", (
+        f"LLM output truncated at max_tokens={max_tokens}; raise JSON_MAX_TOKENS "
+        f"or shrink the batch"
+    )
+    assert content, (
+        f"LLM returned empty content (finish_reason={choice.finish_reason})"
+    )
+    return json.loads(content)

@@ -199,6 +199,38 @@ export async function getThread(client, threadId) {
     return { threadId, messages };
 }
 
+// Sole source of the reply-triage participation signal. Gmail's own SENT label
+// records that the account owner wrote in the thread, so this needs no address
+// matching and cannot disagree with what the mailbox shows.
+export async function threadHasUserMessage(client, threadId, excludeMessageId) {
+    const gmail = gmailClient(client);
+    const res = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'minimal' });
+    for (const msg of res.data.messages || []) {
+        if (msg.id === excludeMessageId) continue;
+        if ((msg.labelIds || []).includes('SENT')) return true;
+    }
+    return false;
+}
+
+// Annotates inbound emails in place with userParticipated. One failed lookup
+// degrades that email to the pre-existing "no participation signal" behavior
+// rather than losing the whole batch.
+export async function annotateThreadParticipation(client, emails) {
+    for (const e of emails) {
+        if (!e.threadId) {
+            e.userParticipated = false;
+            continue;
+        }
+        try {
+            e.userParticipated = await threadHasUserMessage(client, e.threadId, e.id);
+        } catch (err) {
+            log(`thread participation lookup failed for ${e.id}: ${err.message}`);
+            e.userParticipated = false;
+        }
+    }
+    return emails;
+}
+
 export async function listCalendarEvents(client, startIso, endIso, maxResults = 50, calendarId = 'primary') {
     const cal = calendarClient(client);
     const res = await cal.events.list({

@@ -9,20 +9,26 @@ The server has no git repo. Never `scp` individual files or edit remote files
 in place — both will drift from git. Instead:
 
 ```bash
-./deploy.sh              # rsync + systemd daemon-reload + restart services
-DRY_RUN=1 ./deploy.sh    # preview only
+./deploy/deploy.sh              # rsync + systemd daemon-reload + restart services
+DRY_RUN=1 ./deploy/deploy.sh    # preview only
 ```
 
-`deploy.sh` (SSH key `~/.ssh/hezner`, user `root`) rsyncs the repo to
-`root@hezner.morganrivers.com:/opt/email_summary/`, syncs the systemd units in
-`deploy/hetzner/*.service` and `*.timer` to `/etc/systemd/system/`, syncs
-`~/.system_files/prompt_for_email` to `/root/.system_files/`, then runs
-`systemctl daemon-reload && systemctl restart email-daemon email-webhook`.
+`deploy/deploy.sh` (SSH key `~/.ssh/hezner`, user `root`) rsyncs the repo root
+(its own parent directory) to `root@hezner.morganrivers.com:/opt/email_summary/`,
+syncs the systemd units in `deploy/hetzner/*.service` and `*.timer` to
+`/etc/systemd/system/`, syncs `~/.system_files/prompt_for_email` to
+`/root/.system_files/`, then runs `systemctl daemon-reload && systemctl restart`
+over `email-daemon email-webhook`. Restarting a unit whose env or deps are not
+yet on the box fails the whole deploy, so newer services are opted in per run:
 
-Caddy config (`deploy/hetzner/Caddyfile`) is not synced by `deploy.sh`; update
-`/etc/caddy/Caddyfile` and reload Caddy manually if it changes.
+```bash
+SERVICES="email-daemon email-webhook billing-webhook" ./deploy/deploy.sh
+```
 
-The typical loop: edit → commit → `./deploy.sh`.
+Caddy config (`deploy/hetzner/Caddyfile`) is not synced by `deploy/deploy.sh`;
+update `/etc/caddy/Caddyfile` and reload Caddy manually if it changes.
+
+The typical loop: edit → commit → `./deploy/deploy.sh`.
 
 ## Server-only files (never overwritten by deploy)
 
@@ -65,7 +71,7 @@ comment in `requirements.txt`).
   account (`inactive` until Polar `order.paid`), registers its watch, then
   redirects to Polar checkout.
 
-Code changes take effect when the systemd services restart, which `deploy.sh`
+Code changes take effect when the systemd services restart, which `deploy/deploy.sh`
 does via `systemctl restart`. The daemon also honors `restart.flag` (it exits
 and `Restart=always` respawns it), but restarting the webhook requires a
 service restart.

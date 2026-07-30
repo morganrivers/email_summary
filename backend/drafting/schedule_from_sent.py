@@ -71,17 +71,14 @@ def extract_events(client, email, identity=None):
         f"Date: {email.get('date', '')}\n\n"
         f"{email.get('body', '')}"
     )
-    resp = llm_client.complete(
+    parsed = llm_client.complete_json(
         client,
         messages=[
             {"role": "system", "content": EXTRACT_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        max_tokens=2000,
-        response_format={"type": "json_object"},
         identity=identity,
     )
-    parsed = json.loads(resp.choices[0].message.content)
     return parsed.get("events", [])
 
 

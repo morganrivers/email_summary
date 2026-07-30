@@ -25,6 +25,7 @@ Authenticated:
   GET  /settings         settings (telegram, inference provider)
   POST /settings         save settings
   GET  /billing          plan status + Polar portal link
+  GET  /billing/portal   mint a Polar customer session, redirect to the portal
   GET  /account          account info + danger-zone delete
   POST /account/delete   delete account entry
 """
@@ -45,6 +46,7 @@ from dotenv import load_dotenv
 
 from backend import paths
 from backend.accounts import account
+from backend.billing import billing
 from backend.onboarding import watch_renew
 from frontend import session as sess
 
@@ -57,7 +59,6 @@ PORT = int(os.environ.get("WEB_PORT", "8790"))
 REDIRECT_URI = os.environ.get(
     "WEB_OAUTH_REDIRECT_URI", "https://knightdrafter.com/auth/callback"
 )
-POLAR_CHECKOUT_URL = os.environ.get("POLAR_CHECKOUT_URL", "")
 STATE_COOKIE = "knightdrafter_oauth_state"
 STATE_TTL = 600
 
@@ -118,11 +119,25 @@ def _exchange_and_provision(code):
     return acct
 
 
+_BILLING = None
+
+
+def _portal_url(acct):
+    """Polar customer-portal link for the signed-in account, or None. Polar
+    credentials are optional to the web UI: a box without them still serves
+    every page, it just cannot mint a portal link."""
+    global _BILLING
+    if _BILLING is None:
+        try:
+            _BILLING = billing.PolarBilling()
+        except AssertionError as err:
+            log(f"polar portal unavailable: {err}")
+            return None
+    return _BILLING.portal_url(acct)
+
+
 def _checkout_redirect(email):
-    if not POLAR_CHECKOUT_URL:
-        return "/dashboard"
-    sep = "&" if "?" in POLAR_CHECKOUT_URL else "?"
-    return f"{POLAR_CHECKOUT_URL}{sep}customer_email={urllib.parse.quote(email)}"
+    return billing.checkout_url(email)
 
 
 def _css():
@@ -770,12 +785,15 @@ def _page_settings(acct, saved=False):
     return _layout("Settings", body, active="/settings", user_email=acct.id)
 
 
-def _page_billing(acct):
+def _page_billing(acct, error=None):
     plan_badge = (
         '<span class="status-ok">ACTIVE</span>'
         if acct.plan_status == "active"
         else '<span class="status-error">INACTIVE</span>'
     )
+    error_html = ""
+    if error:
+        error_html = f'<div class="form-error" style="margin-bottom:10px;">{_h(error)}</div>'
     portal_html = ""
     if acct.polar_customer_id:
         portal_html = (
@@ -785,6 +803,8 @@ def _page_billing(acct):
         )
     body = f"""
 <h2>Billing</h2>
+
+{error_html}
 
 <table class="data-table" style="width:auto;min-width:280px;">
 <tbody>
@@ -1006,6 +1026,22 @@ class Handler(BaseHTTPRequestHandler):
             if acct is None:
                 return
             return self._send(200, _page_billing(acct))
+
+        if path == "/billing/portal":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            try:
+                url = _portal_url(acct)
+            except Exception as e:
+                log(f"billing portal error for {acct.id}: {e}")
+                url = None
+            if not url:
+                return self._send(200, _page_billing(acct, error=(
+                    "The billing portal is unavailable right now. "
+                    "If you have an active subscription, try again shortly."
+                )))
+            return self._redirect(url)
 
         if path == "/account":
             acct = self._require_auth()

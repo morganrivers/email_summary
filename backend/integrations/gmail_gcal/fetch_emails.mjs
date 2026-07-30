@@ -3,7 +3,7 @@
 import {
     loadClient, ensureAuth, gmailClient, log,
     historyList, fetchMessage, getCurrentHistoryId,
-    listCalendarEvents,
+    listCalendarEvents, annotateThreadParticipation,
 } from './gmail_lib.mjs';
 
 const MAX_EMAILS = 40;
@@ -20,7 +20,7 @@ async function fetchUnread24h(client) {
     const messages = listRes.data.messages || [];
     const emails = [];
     for (const m of messages) emails.push(await fetchMessage(client, m.id));
-    return emails;
+    return annotateThreadParticipation(client, emails);
 }
 
 async function fetchIds(client, ids) {
@@ -41,7 +41,8 @@ async function fetchSinceHistory(client, sinceId) {
         const current = await getCurrentHistoryId(client);
         return { emails: [], sent: [], historyId: current, stale: true };
     }
-    const emails = await fetchIds(client, result.addedMessageIds);
+    const emails = await annotateThreadParticipation(
+        client, await fetchIds(client, result.addedMessageIds));
     const sent = await fetchIds(client, result.sentMessageIds);
     return { emails, sent, historyId: result.historyId, stale: false };
 }

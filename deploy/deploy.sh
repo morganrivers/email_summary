@@ -6,12 +6,17 @@ REMOTE_USER="root"
 REMOTE_HOST="hezner.morganrivers.com"
 REMOTE_DIR="/opt/email_summary"
 SYSTEMD_DIR="/etc/systemd/system"
-SERVICES=(email-daemon email-webhook billing-webhook onboarding faraday-web)
+# Only services actually provisioned on the box. Restarting a unit whose env or
+# deps are missing fails the whole deploy, so new services are opted in per run:
+#   SERVICES="email-daemon email-webhook billing-webhook" ./deploy/deploy.sh
+read -r -a SERVICES <<< "${SERVICES:-email-daemon email-webhook}"
 
 PROMPT_LOCAL="$HOME/.system_files/prompt_for_email"
 PROMPT_REMOTE="/root/.system_files/prompt_for_email"
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+[ -d "$REPO_DIR/backend" ] || { echo "REPO_DIR=$REPO_DIR is not the repo root (no backend/)" >&2; exit 1; }
+[ -d "$REPO_DIR/deploy/hetzner" ] || { echo "REPO_DIR=$REPO_DIR has no deploy/hetzner" >&2; exit 1; }
 
 RSYNC_FLAGS=(-avz --itemize-changes)
 if [ "${DRY_RUN:-0}" = "1" ]; then
@@ -23,6 +28,9 @@ EXCLUDES=(
     --exclude='.git/'
     --exclude='.gitignore'
     --exclude='__pycache__/'
+    --exclude='.pytest_cache/'
+    --exclude='.claude/'
+    --exclude='masking_eval/'
     --exclude='node_modules/'
     --exclude='venv/'
     --exclude='.gmail-mcp/'

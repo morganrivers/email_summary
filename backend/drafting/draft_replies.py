@@ -33,17 +33,24 @@ load_dotenv(paths.ENV_FILE)
 DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
 
 CLASSIFIER_PROMPT = (
-    "Decide for each email whether Morgan (the recipient) should personally reply.\n\n"
-    "Reply 'yes' ONLY when a specific human contact is personally writing to Morgan "
-    "and clearly expects a direct personal response from him. The email should read like "
-    "it was hand-written and sent to him individually (not as part of a list).\n\n"
+    "Decide for each email whether the recipient should personally reply.\n\n"
+    "Reply 'yes' when a specific human contact is personally writing to the recipient "
+    "and clearly expects a direct personal response. The email should read like "
+    "it was hand-written and sent to them individually (not as part of a list).\n\n"
+    "Also reply 'yes' when the email is marked 'Thread: the recipient has written in "
+    "this thread' AND it was hand-written by a specific human. A human continuing or "
+    "closing a conversation the recipient took part in warrants a reply even when it "
+    "asks no question: decisions, outcomes, rejections, and sign-offs on a personal "
+    "back-and-forth all deserve an acknowledgement. This carve-out never applies to "
+    "the categories below; an automated or bulk message stays 'no' however the thread "
+    "is marked.\n\n"
     "Reply 'no' for ALL of the following, even if they contain a call to action, "
     "an interesting opportunity, or a deadline:\n"
     "- Newsletters, Substack posts, blog digests (even ones soliciting pitches or submissions)\n"
     "- Marketing, promotional, sales, or fundraising emails\n"
     "- Automated notifications, alerts, confirmations, and digests\n"
     "- Anything from no-reply, noreply, donotreply, jobalerts, notifications, marketing, or similar senders\n"
-    "- Calendar invites without explicit personal questions directed at Morgan\n"
+    "- Calendar invites without explicit personal questions directed at the recipient\n"
     "- Receipts, invoices, shipping updates, package notifications, order confirmations\n"
     "- Mass-mailed announcements, event invitations, conference CFPs\n"
     "- Job alerts and recruitment broadcasts (even from real recruiters using mass tools)\n"
@@ -71,22 +78,29 @@ def fetch_emails():
     return json.loads(result.stdout)
 
 
+def thread_participation_line(email):
+    """Render the deterministic participation signal fetch_emails.mjs attaches.
+    Absent (older payloads, failed lookup) reads as 'not established' so the
+    carve-out only fires on a positive signal from Gmail's own SENT label."""
+    if email.get("userParticipated"):
+        return "Thread: the recipient has written in this thread"
+    return "Thread: no earlier message from the recipient in this thread"
+
+
 def classify(client, emails, identity=None):
     listing = "\n\n".join(
-        f"[{i}] From: {e['from']}\nSubject: {e['subject']}\nBody: {e['body'][:1500]}"
+        f"[{i}] From: {e['from']}\nSubject: {e['subject']}\n"
+        f"{thread_participation_line(e)}\nBody: {e['body'][:1500]}"
         for i, e in enumerate(emails)
     )
-    resp = llm_client.complete(
+    parsed = llm_client.complete_json(
         client,
         messages=[
             {"role": "system", "content": CLASSIFIER_PROMPT},
             {"role": "user", "content": listing},
         ],
-        max_tokens=2000,
-        response_format={"type": "json_object"},
         identity=identity,
     )
-    parsed = json.loads(resp.choices[0].message.content)
     return {d["index"]: d for d in parsed.get("decisions", [])}
 
 

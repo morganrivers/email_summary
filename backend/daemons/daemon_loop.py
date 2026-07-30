@@ -8,14 +8,16 @@ Runs as morganrivers (NFSN daemon), so no permission hacks. The webhook PHP
 (running as 'web') only opens the FIFO for write and writes one byte — that
 unblocks our read and we process the delta.
 
-A re-wake during processing is fine: we drain the FIFO once before processing
-so multiple wakes coalesce into a single run.
+A re-wake during processing is fine: the webhook spools the account id to
+wake_queue before poking the FIFO, and the read end stays open for the whole
+process lifetime so a poke during processing is never refused.
 """
 
 import os
 import sys
 import stat
 import time
+import select
 import signal
 import traceback
 from pathlib import Path
@@ -32,6 +34,8 @@ load_dotenv(paths.ENV_FILE)
 
 FIFO_PATH = paths.RUN_DIR / "wake.fifo"
 RESTART_FLAG = paths.RUN_DIR / "restart.flag"
+
+WAKE_POLL_SECONDS = 300
 
 
 def log(msg):
@@ -70,28 +74,42 @@ def process_accounts(ids):
         _run_account(acct)
 
 
-def drain_fifo():
-    """Read all pending bytes (coalesce multiple wakes). Blocks until at least one byte."""
-    fd = os.open(str(FIFO_PATH), os.O_RDONLY)
-    try:
-        # Block on first read
-        os.read(fd, 4096)
-        # Drain anything else that arrived
-        os.set_blocking(fd, False)
-        while True:
-            try:
-                chunk = os.read(fd, 4096)
-                if not chunk:
-                    break
-            except BlockingIOError:
+def open_fifo_reader():
+    """Open the read end once, for the lifetime of the process.
+
+    A writer's O_WRONLY|O_NONBLOCK open fails ENXIO whenever no process holds
+    the FIFO open for reading, so opening it per-wake silently refused every
+    push that arrived while process_once() was running. Holding it open removes
+    that window entirely. The extra write fd is never written to; it exists so
+    poll() cannot see POLLHUP (and spin) when the webhook closes its own end."""
+    fd = os.open(str(FIFO_PATH), os.O_RDONLY | os.O_NONBLOCK)
+    keepalive = os.open(str(FIFO_PATH), os.O_WRONLY | os.O_NONBLOCK)
+    assert stat.S_ISFIFO(os.fstat(fd).st_mode), f"{FIFO_PATH} is not a FIFO"
+    return fd, keepalive
+
+
+def wait_for_wake(fd, timeout=WAKE_POLL_SECONDS):
+    """Wait for a wake byte, giving up after timeout seconds. Returns True when
+    woken by a signal, False on timeout. All pending bytes are drained so a
+    burst of pokes coalesces into a single processing pass. The timeout is the
+    backstop: it re-checks the spool and restart.flag even if no poke lands."""
+    poller = select.poll()
+    poller.register(fd, select.POLLIN)
+    if not poller.poll(timeout * 1000):
+        return False
+    while True:
+        try:
+            if not os.read(fd, 4096):
                 break
-    finally:
-        os.close(fd)
+        except BlockingIOError:
+            break
+    return True
 
 
 def main():
     ensure_fifo()
-    log(f"daemon started; FIFO={FIFO_PATH}")
+    fd, _keepalive = open_fifo_reader()
+    log(f"daemon started; FIFO={FIFO_PATH} poll={WAKE_POLL_SECONDS}s")
     # Bootstrap at startup: drain any queued pushes, then sweep all accounts
     # in case a push arrived while the daemon was down.
     try:
@@ -103,8 +121,7 @@ def main():
         notify_error("startup sweep failed", err)
     while True:
         try:
-            drain_fifo()
-            log("wake")
+            woken = wait_for_wake(fd)
             if RESTART_FLAG.exists():
                 log("restart.flag present, exiting for clean restart")
                 try:
@@ -116,7 +133,7 @@ def main():
             if ids:
                 log(f"routed wake for {len(ids)} account(s): {ids}")
                 process_accounts(ids)
-            else:
+            elif woken:
                 log("wake with empty queue; sweeping all accounts")
                 process_all()
         except SystemExit:

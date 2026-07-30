@@ -137,12 +137,22 @@ def test_callback_happy_path_provisions_and_redirects(monkeypatch):
         return Acct()
 
     monkeypatch.setattr(ob, "provision", fake_provision)
-    monkeypatch.setattr(ob, "POLAR_CHECKOUT_URL", "https://polar.sh/checkout/abc")
+    monkeypatch.delenv("POLAR_SANDBOX", raising=False)
+    monkeypatch.setenv("POLAR_CHECKOUT_URL", "https://polar.sh/checkout/abc")
     loc = ob.handle_callback({"code": "the-code", "state": "s"}, cookie_state="s")
     assert seen["code"] == "the-code"
     assert loc == "https://polar.sh/checkout/abc?customer_email=e%40x.com"
 
 
 def test_checkout_redirect_falls_back_without_polar(monkeypatch):
-    monkeypatch.setattr(ob, "POLAR_CHECKOUT_URL", "")
+    monkeypatch.delenv("POLAR_SANDBOX", raising=False)
+    monkeypatch.setenv("POLAR_CHECKOUT_URL", "")
     assert ob.checkout_redirect("z@x.com") == "/onboard/success"
+
+
+def test_checkout_redirect_uses_sandbox_url_when_toggled(monkeypatch):
+    monkeypatch.setenv("POLAR_SANDBOX", "1")
+    monkeypatch.setenv("POLAR_CHECKOUT_URL", "https://buy.polar.sh/prod")
+    monkeypatch.setenv("POLAR_CHECKOUT_URL_SANDBOX", "https://sandbox.polar.sh/dev")
+    loc = ob.checkout_redirect("z@x.com")
+    assert loc == "https://sandbox.polar.sh/dev?customer_email=z%40x.com"

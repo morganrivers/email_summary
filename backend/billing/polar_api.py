@@ -1,10 +1,11 @@
 """Thin Polar API client (stdlib only).
 
-Backend endpoints require an organization API token. Billing needs two reads:
+Backend endpoints require an organization API token. Billing needs two reads --
 resolve a customer's email (map a Polar customer to a local account) and list
-subscriptions (poller reconcile). Ported from hetzner_signing_server/polar_api.py
-and trimmed to the subscription-billing surface (no license-key or
-customer-portal endpoints).
+subscriptions (poller reconcile) -- plus one write: mint a customer session so
+the web UI can link a signed-in user into the Polar-hosted portal. Ported from
+hetzner_signing_server/polar_api.py and trimmed to the subscription-billing
+surface (no license-key endpoints).
 """
 
 import json
@@ -48,6 +49,16 @@ def _request(method, endpoint, payload=None, token=None):
 def get_customer(customer_id, token):
     assert token, "backend API token required to read a customer"
     return _request("GET", f"/v1/customers/{customer_id}", token=token)
+
+
+def create_customer_session(customer_id, token):
+    """Mint a short-lived customer session. The response carries
+    customer_portal_url, the only link that authenticates a user into the
+    Polar-hosted portal without us holding their billing credentials."""
+    assert token, "backend API token required to create a customer session"
+    assert customer_id, "customer_id required to create a customer session"
+    return _request("POST", "/v1/customer-sessions/",
+                    payload={"customer_id": customer_id}, token=token)
 
 
 def list_subscriptions(organization_id, token, page=1, limit=100):

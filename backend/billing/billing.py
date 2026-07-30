@@ -17,6 +17,7 @@ webhook and the reconcile can never disagree about what "paid" means.
 
 import os
 import sys
+import urllib.parse
 
 from dotenv import load_dotenv
 
@@ -43,6 +44,25 @@ def select_env(name, sandbox):
     return val if val is not None else os.environ.get(name)
 
 
+def sandbox_enabled():
+    """The one read of the POLAR_SANDBOX toggle, so the API base, the tokens,
+    the webhook secret, and the checkout link can never disagree about which
+    Polar environment this box is talking to."""
+    return os.environ.get("POLAR_SANDBOX", "0") == "1"
+
+
+def checkout_url(email, fallback="/dashboard"):
+    """Polar-hosted checkout link prefilled with the signed-in user's address.
+    Sandbox and production checkouts live on different domains, so this reads
+    through the same suffix switch as the credentials. Shared by the web app and
+    the onboarding flow; both used to carry their own copy of this."""
+    base = select_env("POLAR_CHECKOUT_URL", sandbox_enabled())
+    if not base:
+        return fallback
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}customer_email={urllib.parse.quote(email)}"
+
+
 def subscription_entitled(status):
     """The one rule for 'this subscription grants access', shared by the webhook
     and the poller. Entitled while active or trialing; past_due / canceled /
@@ -58,7 +78,7 @@ class PolarBilling:
     subscription state into their local account's plan_status."""
 
     def __init__(self):
-        self.sandbox = os.environ.get("POLAR_SANDBOX", "0") == "1"
+        self.sandbox = sandbox_enabled()
         self.token = select_env("POLAR_API_TOKEN", self.sandbox)
         self.org = select_env("POLAR_ORGANIZATION_ID", self.sandbox)
         assert self.token and self.org, (
@@ -128,6 +148,22 @@ class PolarBilling:
         if acct is None:
             return f"no local account for event type={etype}"
         return self._apply(acct, target)
+
+    def portal_url(self, acct):
+        """Polar-hosted customer-portal link for one account, or None when the
+        account has no linked Polar customer or the session call fails. The web
+        UI only ever renders this; entitlement truth stays with the webhook and
+        the poller."""
+        assert acct is not None, "portal_url needs an account"
+        if not acct.polar_customer_id:
+            return None
+        status, body = polar_api.create_customer_session(
+            acct.polar_customer_id, self.token
+        )
+        if status not in (200, 201) or not isinstance(body, dict):
+            log(f"create_customer_session for {acct.id} failed: {status}")
+            return None
+        return body.get("customer_portal_url")
 
     def entitlement_by_customer(self):
         """customer_id -> True if any of their subscriptions is entitled."""
