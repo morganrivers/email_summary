@@ -12,7 +12,6 @@ Both boundaries are now per account, the same seams the drafting path uses:
 node_env(account.creds_dir) for the mailbox, account.telegram for the delivery.
 """
 
-import os
 import json
 import subprocess
 import datetime
@@ -33,8 +32,6 @@ FETCH_SCRIPT = paths.node_script("fetch_emails.mjs")
 PROMPT_FILE = paths.config_file("prompt_for_email")
 
 load_dotenv(paths.ENV_FILE)
-
-DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
 
 DEFAULT_PROMPT = (
     "You write a short daily briefing from the account owner's unread email and "
@@ -86,7 +83,7 @@ def _format_events(events: list[dict]) -> str:
 
 def summarise(account, emails, events, community_events) -> str:
     prompt = _prompt_text()
-    client = llm_client.make_client(DEEPSEEK_API_KEY)
+    client = llm_client.make_client(account)
 
     email_text = "\n\n".join(
         untrusted(

@@ -13,7 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
+from backend.masking import pseudonymizer
 from backend.masking.masking_eval import evaluator
+
+ANALYZER = pseudonymizer.analyzer_available()
 
 # Loose floors for non-deterministic types: below current measured recall,
 # present only to catch a large regression. Not a claim of guaranteed recall.
@@ -31,6 +34,37 @@ def result():
     return evaluator.evaluate()
 
 
+@pytest.fixture(scope="module")
+def result_no_analyzer():
+    base = evaluator.EVAL_IDENTITY
+    identity = pseudonymizer.UserIdentity(
+        base.first, base.last, base.first_aliases, base.emails, [],
+        base.contacts, base.account_id, analyzer=False,
+    )
+    return evaluator.evaluate(identity=identity)
+
+
+def test_deterministic_types_hold_without_analyzer(result_no_analyzer):
+    """The floor a small box still stands on. Everything the deterministic
+    scrub and the secret regexes own must stay at 100% with NER switched off;
+    only PERSON is allowed to fall, and it falls to zero."""
+    for name in evaluator.DETERMINISTIC_TYPES:
+        bucket = result_no_analyzer["by_type"].get(name)
+        if bucket:
+            assert evaluator.recall(bucket) == 1.0, (name, result_no_analyzer["misses"])
+    for name in ("API_KEY", "JWT"):
+        bucket = result_no_analyzer["by_type"].get(name)
+        if bucket:
+            assert evaluator.recall(bucket) == 1.0, (name, result_no_analyzer["misses"])
+
+
+requires_analyzer = pytest.mark.skipif(
+    not ANALYZER,
+    reason="Presidio/spaCy not installed on this box; analyzer-path floors do not apply",
+)
+
+
+@requires_analyzer
 def test_deterministic_types_fully_masked(result):
     for name, bucket in result["by_type"].items():
         if name in evaluator.DETERMINISTIC_TYPES:

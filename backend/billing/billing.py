@@ -30,6 +30,14 @@ load_dotenv(paths.ENV_FILE)
 
 ENTITLED_SUB_STATUSES = frozenset({"active", "trialing"})
 
+# What the Polar product charges, in euros. Every page that quotes a price reads
+# this one name: the landing copy, the pricing page, the comparison table, the
+# sign-up button and the billing table each carried their own literal, and they
+# drifted from the product until a buyer was quoted one figure and charged
+# another. Polar remains the authority that actually bills; changing the product
+# there means changing this line too.
+PLAN_PRICE_EUR = 25
+
 
 def log(msg):
     sys.stderr.write(f"billing {msg}\n")
@@ -45,11 +53,10 @@ def select_env(name, sandbox):
     return val if val is not None else os.environ.get(name)
 
 
-def sandbox_enabled():
-    """The one read of the POLAR_SANDBOX toggle, so the API base, the tokens,
-    the webhook secret, and the checkout link can never disagree about which
-    Polar environment this box is talking to."""
-    return os.environ.get("POLAR_SANDBOX", "0") == "1"
+# The toggle is read in polar_api, next to the two base URLs it selects between,
+# and re-exported here because the tokens, the webhook secret and the checkout
+# link all switch on the same answer.
+sandbox_enabled = polar_api.sandbox_enabled
 
 
 def product_id():
@@ -127,13 +134,12 @@ class PolarBilling:
             f"missing POLAR_API_TOKEN / POLAR_ORGANIZATION_ID for "
             f"{'SANDBOX' if self.sandbox else 'PROD'}"
         )
-        polar_api.API_BASE = polar_api.SANDBOX_BASE if self.sandbox else polar_api.PROD_BASE
 
     def log_startup(self, who):
         tok = self.token
         masked = f"{tok[:10]}...{tok[-4:]}" if len(tok) > 16 else "****"
         log(f"{who} env={'SANDBOX' if self.sandbox else 'PRODUCTION'} "
-            f"base={polar_api.API_BASE} org={self.org} token={masked}")
+            f"base={polar_api.api_base()} org={self.org} token={masked}")
 
     @staticmethod
     def _customer_id(data):

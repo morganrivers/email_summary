@@ -9,6 +9,7 @@ surface (no license-key endpoints).
 """
 
 import json
+import os
 import ssl
 import urllib.error
 import urllib.request
@@ -19,12 +20,29 @@ _ctx = ssl.create_default_context(cafile=certifi.where())
 
 PROD_BASE = "https://api.polar.sh"
 SANDBOX_BASE = "https://sandbox-api.polar.sh"
-API_BASE = PROD_BASE
 _TIMEOUT = 15
 
 
+def sandbox_enabled():
+    """The one read of the POLAR_SANDBOX toggle, so the API base, the tokens,
+    the webhook secret, and the checkout link can never disagree about which
+    Polar environment this box is talking to."""
+    return os.environ.get("POLAR_SANDBOX", "0") == "1"
+
+
+def api_base():
+    """Which Polar deployment a request goes to, answered per call.
+
+    This used to be a module global assigned in PolarBilling.__init__, which
+    made every request depend on whether anyone had constructed one yet.
+    checkout_url() does not, so it minted checkouts against production with a
+    sandbox token, took the 403 as "Polar is unavailable", and quietly handed
+    the buyer a static link with no success URL."""
+    return SANDBOX_BASE if sandbox_enabled() else PROD_BASE
+
+
 def _request(method, endpoint, payload=None, token=None):
-    url = f"{API_BASE}{endpoint}"
+    url = f"{api_base()}{endpoint}"
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Accept": "application/json", "User-Agent": "tee-email-billing"}
     if data is not None:

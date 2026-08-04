@@ -2,7 +2,6 @@
 """Smoke test for agentic_drafter — feeds a contrived 'are you free?' email
 so we can see whether DeepSeek calls the calendar tool."""
 
-import os
 import sys
 from dotenv import load_dotenv
 from pathlib import Path
@@ -39,7 +38,7 @@ user_prompt = (
     "Draft a reply."
 )
 
-client = agentic_drafter.make_client(os.environ["DEEPSEEK_API_KEY"])
+client = agentic_drafter.make_client(acct)
 print("--- Calling agentic_drafter.draft ---", flush=True)
 body, url = agentic_drafter.draft(client, sys_prompt, user_prompt)
 print("\n=== DRAFT BODY ===")

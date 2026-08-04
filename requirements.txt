@@ -4,9 +4,25 @@ requests==2.34.2
 langsmith==0.10.5
 certifi==2025.4.26
 standardwebhooks==1.0.1
-presidio-analyzer==2.2.363
-presidio-anonymizer==2.2.363
-spacy==3.8.13
-# spaCy model for Presidio NER (not on PyPI; install with the pinned wheel URL):
+
+# --- PII analyzer (optional) -------------------------------------------------
+# Off by default. Presidio imports spaCy behind it and costs ~470 MB resident
+# before a model is loaded; en_core_web_lg is ~1.1 GB more at first use, per
+# process that masks. That does not fit a 2 GB confidential VM, and the box is
+# priced by the GB.
+#
+# Without these, pseudonymizer runs its regex-only path: the owner's own name,
+# email and phone, known contacts, API keys, JWTs, private key blocks, email
+# addresses and phone numbers are still masked. What is lost is NER, meaning
+# names of people not already in the account's contacts. Measured recall on the
+# public corpus is 96% with the analyzer and 74% without.
+#
+# Uncomment all four lines to switch it on. pseudonymizer.analyzer_available()
+# picks the presence up on the next start, and the Settings checkbox stops
+# being greyed out. Nothing else has to change.
+#presidio-analyzer==2.2.363
+#presidio-anonymizer==2.2.363
+#spacy==3.8.13
+# The model is not on PyPI; install it with the pinned wheel URL:
 #   python -m spacy download en_core_web_lg
 # or: pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl

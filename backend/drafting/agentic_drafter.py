@@ -32,6 +32,13 @@ GREETING_RE = re.compile(
 
 EM_DASH_RE = re.compile(r'[—–]')
 
+# Whether the instructions in front of us ban dashes at all. The ban lives in the
+# account's own voice document (voice_dna.DEFAULT_CONSTRAINTS ships with it), so
+# a user who deletes that line means it: retrying and rejecting drafts for a rule
+# their profile no longer states would be enforcing an instruction they cannot
+# see and cannot edit.
+DASH_RULE_RE = re.compile(r'\b(em|en)[- ]dash', re.IGNORECASE)
+
 EM_DASH_CORRECTION_PROMPT = (
     "Your previous draft contained an em-dash (—) or en-dash (–). "
     "These characters cause the draft to be rejected. "
@@ -72,6 +79,13 @@ def untrusted(text):
 
 def contains_em_dash(text):
     return bool(EM_DASH_RE.search(text or ''))
+
+
+def dashes_banned(instructions):
+    """Does this voice profile (or assembled system prompt) ask for no dashes?
+    Single source of the question, asked by the drafter before it adds the
+    punctuation rule and by every caller before it rejects a draft."""
+    return bool(DASH_RULE_RE.search(instructions or ''))
 
 
 def _strip_preamble(body):
@@ -124,6 +138,12 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
     # [USER_FIRST] by the pseudonymizer below (the identity's own rules tag it)
     # and restored on the way out, so the model never sees it either way.
     owner = (identity or pseudonymizer.DEFAULT_IDENTITY).first
+    ban_dashes = dashes_banned(system_prompt)
+    punctuation_rule = (
+        "PUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. "
+        "Use commas, periods, parentheses, or restructured sentences instead. "
+        "Em-dashes will cause the draft to be rejected.\n\n"
+    ) if ban_dashes else ""
     system_with_time = (
         f"{system_prompt}\n\n"
         f"Current UTC time: {now}\n\n"
@@ -138,9 +158,7 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
         "ONLY the email body. Begin with the greeting (Hi/Hello/Dear/Hey). "
         f"End with the sign-off and {owner}'s name. No analysis, no reasoning, no preamble, "
         "no notes about why you wrote it that way. Just the email.\n\n"
-        "PUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. "
-        "Use commas, periods, parentheses, or restructured sentences instead. "
-        "Em-dashes will cause the draft to be rejected.\n\n"
+        f"{punctuation_rule}"
         "REASONING BUDGET: Keep your internal reasoning under 1000 words. "
         "Do not exhaustively explore alternatives. Decide quickly, then write. "
         "The final email content must fit in the response, so leave ample room for it."
@@ -169,7 +187,7 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
         ) as run:
             body = _draft_with_em_dash_retry(client, messages, max_iterations,
                                              ls_extra, state, on_iteration=on_iteration,
-                                             creds_dir=creds_dir)
+                                             creds_dir=creds_dir, ban_dashes=ban_dashes)
         body = pseudonymizer.restore(body, state)
         run_url = None
         try:
@@ -178,7 +196,8 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
             sys.stderr.write(f"get_run_url failed: {err}\n")
         return body, run_url
     body = _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra,
-                                     state, on_iteration=on_iteration, creds_dir=creds_dir)
+                                     state, on_iteration=on_iteration, creds_dir=creds_dir,
+                                     ban_dashes=ban_dashes)
     body = pseudonymizer.restore(body, state)
     return body, None
 
@@ -212,9 +231,11 @@ def _safe_notify(on_iteration, *args):
 
 
 def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra, state,
-                              on_iteration=None, creds_dir=None):
+                              on_iteration=None, creds_dir=None, ban_dashes=True):
     body = _run_loop(client, messages, max_iterations, ls_extra, state,
                      on_iteration=on_iteration, creds_dir=creds_dir)
+    if not ban_dashes:
+        return body
     for attempt in range(MAX_EM_DASH_RETRIES):
         if not contains_em_dash(body):
             return body

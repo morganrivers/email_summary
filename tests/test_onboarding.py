@@ -179,7 +179,7 @@ def test_callback_surfaces_consent_denial(monkeypatch):
     assert ei.value.code == 400
 
 
-def test_callback_happy_path_provisions_and_redirects(monkeypatch):
+def test_callback_happy_path_provisions_and_lands_in_the_app(monkeypatch):
     seen = {}
 
     class Acct:
@@ -196,7 +196,7 @@ def test_callback_happy_path_provisions_and_redirects(monkeypatch):
     acct, loc = ob.handle_callback({"code": "the-code", "state": "s"}, "s", REDIRECT)
     assert acct.id == "e@x.com"
     assert seen["code"] == "the-code" and seen["redirect"] == REDIRECT
-    assert loc == "https://polar.sh/checkout/abc?customer_email=e%40x.com"
+    assert loc == "/dashboard", "signing in must not push the user into checkout"
 
 
 def test_checkout_redirect_falls_back_without_polar(monkeypatch):

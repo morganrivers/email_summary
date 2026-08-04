@@ -117,9 +117,11 @@ def provision(code, redirect_uri):
 
 
 def checkout_redirect(email, fallback="/dashboard"):
-    """Where to send the user after a successful connect: Polar hosted checkout
-    when configured (carrying customer_email so the order.paid webhook resolves
-    to this account), else the caller's own landing spot."""
+    """Where to send a user who has asked to pay: Polar hosted checkout when
+    configured (carrying customer_email so the order.paid webhook resolves to
+    this account), else the caller's own landing spot. Reached from the billing
+    page, never from sign-in: signing in and subscribing are separate decisions,
+    and a subscriber sent back to checkout is refused by Polar."""
     return billing.checkout_url(email, fallback=fallback)
 
 
@@ -136,4 +138,4 @@ def handle_callback(query, cookie_state, redirect_uri, fallback="/dashboard"):
     if not cookie_state or not compare_digest(state, cookie_state):
         raise ProvisionError(403, "state mismatch (possible CSRF)")
     acct = provision(code, redirect_uri)
-    return acct, checkout_redirect(acct.id, fallback=fallback)
+    return acct, fallback

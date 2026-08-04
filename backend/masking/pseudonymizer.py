@@ -14,6 +14,7 @@ Flip PSEUDONYMIZE_ENABLED to turn the whole layer on. When off, every
 function here is a passthrough and Presidio is never imported.
 """
 
+import importlib.util
 import re
 import sys
 from collections import defaultdict
@@ -67,10 +68,12 @@ class UserIdentity:
     person-numbering. Compiled once per identity; passed into new_state so a
     shared process can hold one identity per user without global coupling."""
 
-    def __init__(self, first, last, first_aliases=(), emails=(), phones=(), contacts=(), account_id="default"):
+    def __init__(self, first, last, first_aliases=(), emails=(), phones=(), contacts=(), account_id="default",
+                 analyzer=True):
         assert first and last, "identity requires first and last name"
         assert account_id, "identity requires an account_id"
         self.account_id = account_id
+        self.analyzer = bool(analyzer)
         self.first = first
         self.last = last
         self.first_aliases = list(first_aliases)
@@ -153,8 +156,40 @@ SECRET_PATTERNS = [
 
 ENTITIES = NER_ENTITIES + sorted({row[0] for row in SECRET_PATTERNS})
 
+# What the regex-only path can still find once the analyzer is off. The secret
+# patterns carry over verbatim; EMAIL_ADDRESS and PHONE_NUMBER are re-expressed
+# here because Presidio's own recognizers for them are unreachable without
+# importing the analyzer, which is the 470 MB we are avoiding. CREDIT_CARD and
+# IBAN_CODE are checksum-validated by Presidio and have no honest regex, so
+# they are detected only when the analyzer runs.
+_EMAIL_RUN = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
+
+PATTERN_ONLY_ENTITIES = sorted({row[0] for row in SECRET_PATTERNS}) + [
+    "EMAIL_ADDRESS", "PHONE_NUMBER",
+]
+
+_SECRET_RULES = [(entity, re.compile(regex)) for entity, _, regex, _ in SECRET_PATTERNS]
+
 _ANALYZER = None
 _ANONYMIZER = None
+
+
+def analyzer_available():
+    """Whether this box can run the Presidio + spaCy analyzer at all.
+
+    Checked by module presence, never by importing: `import presidio_analyzer`
+    pulls spaCy in behind it and costs ~470 MB before a model is even loaded,
+    which is the whole reason a small box turns this off. The web UI uses this
+    to decide whether the setting is selectable or shown locked."""
+    if not PSEUDONYMIZE_ENABLED:
+        return False
+    for module in ("presidio_analyzer", "presidio_anonymizer", SPACY_MODEL):
+        try:
+            if importlib.util.find_spec(module) is None:
+                return False
+        except (ImportError, ValueError):
+            return False
+    return True
 
 
 def _build_engines():
@@ -168,16 +203,7 @@ def _build_engines():
             etype = params["entity_type"]
             if etype == "PERSON":
                 return params["pindex"].get(text.lower().strip(), text)
-            counters = params["counters"]
-            seen = params["seen"]
-            mapping = params["mapping"]
-            key = (etype, text.lower().strip())
-            if key not in seen:
-                counters[etype] += 1
-                tag = f"[{etype}{counters[etype]}]"
-                seen[key] = tag
-                mapping[tag] = text
-            return seen[key]
+            return _tag_value(params, etype, text)
 
         def validate(self, params):
             pass
@@ -215,17 +241,55 @@ def _engines():
     return _ANALYZER, _ANONYMIZER
 
 
+def _tag_value(state, etype, surface):
+    """Assign, or reuse, the numbered tag standing in for one non-person value.
+
+    Sole allocator of those tags: the Presidio operator and the regex-only path
+    both come through here, so a value carries the same tag whichever path
+    found it and the mapping restore() reads is written in one place."""
+    assert etype, "tagging needs an entity type"
+    key = (etype, surface.lower().strip())
+    seen = state["seen"]
+    if key not in seen:
+        state["counters"][etype] += 1
+        tag = f"[{etype}{state['counters'][etype]}]"
+        seen[key] = tag
+        state["mapping"][tag] = surface
+    return seen[key]
+
+
+def _pseudonymize_patterns(text, state):
+    """Mask what regexes alone can find, for accounts running without the
+    analyzer. Secrets first, so a key embedded in an address-shaped string is
+    tagged as a key rather than half-eaten by the email rule."""
+    assert state is not None, "pattern masking needs a state"
+    for entity, rx in _SECRET_RULES:
+        text = rx.sub(lambda m, e=entity: _tag_value(state, e, m.group(0)), text)
+    text = _EMAIL_RUN.sub(lambda m: _tag_value(state, "EMAIL_ADDRESS", m.group(0)), text)
+
+    def phone(m):
+        if len(_digits(m.group(0))) < _MIN_PHONE_DIGITS:
+            return m.group(0)
+        return _tag_value(state, "PHONE_NUMBER", m.group(0))
+
+    return _PHONE_RUN.sub(phone, text)
+
+
 def new_state(identity=None):
     """Fresh shared mapping for one draft, or None when disabled.
 
     identity is the account owner whose own name/email get fixed tags; defaults
-    to DEFAULT_IDENTITY so single-tenant callers need pass nothing."""
+    to DEFAULT_IDENTITY so single-tenant callers need pass nothing. It also
+    carries whether this account runs the analyzer; an account that asked for it
+    on a box without it installed gets the regex-only path rather than a crash,
+    which is why the flag is resolved here and not at the call site."""
     if not PSEUDONYMIZE_ENABLED:
         return None
     identity = identity or DEFAULT_IDENTITY
     return {
         "account_id": identity.account_id,
         "identity": identity,
+        "analyzer": bool(identity.analyzer and analyzer_available()),
         "counters": defaultdict(int),
         "seen": {},
         "mapping": identity.seed_mapping(),
@@ -358,15 +422,25 @@ def pseudonymize(text, state):
     under one person id and decomposes each into first/last role tags, so the
     model sees [PERSON1_FIRST] / [PERSON1_LAST] as the same identity.
 
+    With the analyzer off, the deterministic layers above still run and the
+    secret, email and phone regexes replace it, so the owner's own identifiers,
+    known contacts, and anything key-shaped are still masked. What is lost is
+    detection of people, places and organisations this account has never
+    corresponded with before.
+
     Passthrough when disabled or when text is empty.
     """
     if state is None or not text:
         return text
-    from presidio_anonymizer.entities import OperatorConfig
 
     text = state["identity"].mask_user(text)
     text = _scrub_contacts(text, state)
     text = _mask_names(text, state)
+    if not state["analyzer"]:
+        return _pseudonymize_patterns(text, state)
+
+    from presidio_anonymizer.entities import OperatorConfig
+
     analyzer, anonymizer = _engines()
     results = analyzer.analyze(text=text, language="en", entities=ENTITIES)
     if results:

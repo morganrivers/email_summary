@@ -28,9 +28,14 @@ below.
 
 Dependencies are installed automatically when their manifests change in a push:
 `requirements.txt` triggers `venv/bin/pip install -r requirements.txt`,
-`package.json` / `package-lock.json` trigger `npm install --omit=dev`. The spaCy
-model `en_core_web_lg` remains a separate one-time install (see the comment in
-`requirements.txt`).
+`package.json` / `package-lock.json` trigger `npm install --omit=dev`.
+
+The PII analyzer (Presidio + spaCy + `en_core_web_lg`) is commented out of
+`requirements.txt` and off by default, because it costs ~1.6 GB resident per
+masking process and the confidential VMs this runs on are priced by the GB.
+Uncomment the three pins and install the model to switch it on; nothing else
+changes, since `pseudonymizer.analyzer_available()` detects it. Note that pip
+never uninstalls: a box that already has it keeps it until the venv is rebuilt.
 
 Which units get deployed is derived from `deploy/hetzner/`: every `.service`
 with an `[Install]` section plus every `.timer`. Adding a unit file is all it
@@ -75,7 +80,8 @@ The typical loop: edit → commit → `./deploy/deploy.sh`.
 Each entry here has a matching `--exclude` in `deploy/deploy.sh`; that exclusion
 is what protects it from `--delete-after`.
 
-- `.env` — API keys, not in git.
+- `.env` — API keys, not in git. `DEEPSEEK_API_KEY` and, to offer the
+  confidential route, `TRESOR_API_KEY` (see `llm_client.PROVIDERS`).
 - `.gmail-mcp/` — Gmail OAuth tokens.
 - `state/` — daemon runtime scratch: `state.json`, `wake.fifo`,
   `wake_queue.jsonl`, `wake_queue.lock`, `restart.flag`. Created on first write
@@ -141,9 +147,18 @@ copy.
   checkout redirect. `handle_callback()` is the whole decision path, HTTP-free
   and directly tested. Any future sign-in surface imports this rather than
   reimplementing token custody.
-- `llm_client.py` — DeepSeek client + `complete()`. Model, thinking mode,
-  reasoning effort, and the masking boundary all live here. LangSmith tracing is
-  off unless `LANGSMITH_TRACING=1`: it ships prompts to a third party.
+- `llm_client.py` — the inference client + `complete()`. The provider catalog
+  (`PROVIDERS`), model, thinking mode, reasoning effort, and the masking
+  boundary all live here. Two providers ship: `deepseek` (direct, the default)
+  and `tresor` (same model through a confidential-compute gateway, keyed by
+  `TRESOR_API_KEY`). A provider whose key is absent from `.env` is not offered
+  in Settings and cannot be selected. `make_client(account)` is the only
+  constructor and `resolve(account)` the only chooser; a stated per-account
+  preference is honored or it raises, never substituted, because standing in a
+  different provider would send that user's mail somewhere they did not agree
+  to. Masking applies on every provider. LangSmith tracing is off unless
+  `LANGSMITH_TRACING=1`: it ships prompts to a third party, outside whatever
+  enclave the chosen provider runs in.
 - `backend/integrations/telegram.py` — `TelegramTarget`, sends, and chat
   linking. `send_telegram(msg, target)` always takes an explicit target;
   `operator_target()` (env) is only for box-level failures, never for a user's
@@ -155,13 +170,37 @@ copy.
   through their own manifest entry; everyone else gets
   `backend/drafting/default_voice.md` until they generate or write their own,
   which lands in `database/<id>/voice-dna.md` (never in `config/`, which the
-  deploy overwrites). `HARD_CONSTRAINTS` holds the output rules appended to
-  every profile — the em-dash ban among them, which `agentic_drafter` enforces
-  by rejecting drafts — so no profile carries its own copy and no user can edit
-  them away. `account.set_voice()` is the sole writer of the manifest pointer.
+  deploy overwrites). `DEFAULT_CONSTRAINTS` is the Constraints section a profile
+  starts with (the em-dash ban among them), written into the document by
+  `with_constraints()` when one is first created, never appended at prompt time:
+  `resolve()` hands the drafter exactly what the /voice box shows, so a rule the
+  user edits or deletes is a rule the drafter stops following. That includes the
+  em-dash rejection, which `agentic_drafter.dashes_banned()` gates on the
+  instructions it was actually given, in `draft()`, `draft_replies` and
+  `manual_draft` alike. `account.set_voice()` is the sole writer of the manifest
+  pointer.
 - `agentic_drafter.untrusted()` — the fence put around anything that came from
   outside the account (email bodies, tool results) before it reaches the model,
   paired with `INJECTION_RULE` in the system prompt.
+- `backend/masking/pseudonymizer.py` — masking runs in one of two modes and
+  `new_state()` is where that is decided. With the Presidio + spaCy analyzer
+  installed it does NER; without it, or for an account that switched it off in
+  Settings, `_pseudonymize_patterns()` covers the same text with the secret,
+  email and phone regexes. Both modes run the deterministic layers first
+  (`identity.mask_user()`, `_scrub_contacts()`, `_mask_names()`) and both
+  allocate tags through `_tag_value()`, so a restore works either way.
+  `analyzer_available()` answers by module lookup and never imports:
+  `import presidio_analyzer` drags spaCy in at ~470 MB before a model loads,
+  and `en_core_web_lg` is another ~1.1 GB at first use, which is what makes the
+  mode worth choosing on a small box. Measured recall on the public corpus is
+  96% with the analyzer and 74% without, the whole gap being PERSON. The
+  account's stated preference is stored even where it cannot run, so installing
+  the model later restores the behaviour without touching the manifest.
+- `billing.PLAN_PRICE_EUR` — the quoted price, rendered as
+  `web_server.PRICE`. The landing copy, pricing page, comparison table, sign-up
+  button and billing table each held their own literal and drifted from the
+  Polar product, quoting €20 for a €25 subscription. Polar is what actually
+  charges, so changing the product there means changing this constant too.
 - `draft_replies.build_draft_payload()` — canonical payload shape for
   `create_draft.mjs`. All draft callers route through this.
 - `draft_replies.submit_draft(payload, draft_id=None)` — sole subprocess

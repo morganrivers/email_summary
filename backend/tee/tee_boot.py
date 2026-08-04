@@ -39,6 +39,7 @@ RA_TLS_SUBJECT = "tee-email-bot"
 # the attested CVM). Boot must not proceed without them under TEE_REQUIRED.
 REQUIRED_SECRETS = (
     "DEEPSEEK_API_KEY",
+    "TRESOR_API_KEY",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
 )

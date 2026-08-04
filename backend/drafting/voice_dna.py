@@ -19,11 +19,14 @@ They reach the model masked (llm_client.complete) and fenced
 (agentic_drafter.untrusted), because a sent message quotes whatever was sent to
 the user and is therefore not all the user's own words.
 
-`HARD_CONSTRAINTS` is the reason the generated document has no Constraints
-section. The em-dash ban and the plain-text rules are the product's, not the
-user's, so they are appended to every profile at prompt time instead of being
-written into each one. That keeps one copy of them, and it means a user editing
-their profile cannot delete a rule the drafter enforces anyway.
+`DEFAULT_CONSTRAINTS` is the starting Constraints section: the em-dash ban and
+the plain-text rules. It is part of the document, not something appended behind
+the user's back at prompt time, so what the /voice box shows is exactly what the
+drafter reads and every rule in it can be edited or deleted. The drafter's own
+em-dash rejection follows the document rather than overriding it: see
+`agentic_drafter.dashes_banned()`. A synthesized profile is saved with this
+section appended, which is why `SYNTHESIS_PROMPT` tells the model not to write
+one of its own.
 
 Generation is slow (a Gmail sweep plus one reasoning-heavy completion), so
 `start()` runs it on a thread and `status()` reports progress. The registry is
@@ -31,7 +34,6 @@ in-process and ephemeral on purpose, like the Telegram link codes: a restart
 means starting generation again, which costs only time.
 """
 
-import os
 import re
 import sys
 import threading
@@ -48,6 +50,9 @@ from backend.integrations import llm_client
 # an account with none of its own and deliberately describes a plain
 # correspondent rather than imitating anyone. The operator's personal profile is
 # reachable only through their own manifest entry, which seed_owner points here.
+# The default file holds drafting instructions and nothing else: it is what a new
+# user sees in the /voice box and starts editing, so a note about the file itself
+# would be both prompt text and something to explain away.
 DEFAULT_PROFILE = Path(__file__).parent / "default_voice.md"
 OWNER_PROFILE = paths.config_file("voice-dna-email.md")
 
@@ -75,11 +80,13 @@ MIN_LETTER_RATIO = 0.55
 MAX_TOKENS = 8000
 MAX_PROFILE_CHARS = 20000
 
-# The rules the drafter enforces regardless of voice. Appended to every profile
-# by resolve(), so there is one copy of them and no profile can omit them:
-# agentic_drafter rejects a draft containing an em-dash, so a profile that
-# described a writer's fondness for them would fail every draft.
-HARD_CONSTRAINTS = """## Constraints
+# The output rules a profile starts with. They ship inside the document rather
+# than around it: a user who wants em-dashes, or a longer reply than the one it
+# answers, edits this section out and the drafter obeys, including its em-dash
+# rejection (agentic_drafter.dashes_banned reads the instructions it was given).
+CONSTRAINTS_HEADING = "## Constraints"
+
+DEFAULT_CONSTRAINTS = """## Constraints
 
 - Never invent facts, commitments, dates, prices, or opinions the owner has not
   expressed. An honest "let me check and come back to you" beats a confident
@@ -153,15 +160,26 @@ def profile_path(acct):
     return account.ACCOUNTS_DIR / acct.id / PROFILE_NAME
 
 
+def with_constraints(text):
+    """A profile document that carries a Constraints section. Used where a
+    document is first written, never on the way to the model: re-adding the
+    section at read time would put back rules the user chose to delete."""
+    body = (text or "").strip()
+    if CONSTRAINTS_HEADING in body:
+        return body
+    return f"{body}\n\n{DEFAULT_CONSTRAINTS}"
+
+
 def default_text():
-    """The neutral profile, as the text a user starts editing from."""
+    """The neutral profile, as the text a user starts editing from, constraints
+    included: the box shows the whole document the drafter will read."""
     assert DEFAULT_PROFILE.exists(), f"default voice profile missing at {DEFAULT_PROFILE}"
-    return DEFAULT_PROFILE.read_text().strip()
+    return with_constraints(DEFAULT_PROFILE.read_text())
 
 
 def load(acct):
-    """This account's own profile document, or None when it has none. Returns the
-    editable text: the hard constraints resolve() appends are not part of it."""
+    """This account's own profile document, or None when it has none. Returns it
+    verbatim: what is stored is what the drafter reads."""
     candidate = getattr(acct, "voice_file", None)
     if not candidate:
         return None
@@ -174,13 +192,12 @@ def load(acct):
 
 def resolve(acct):
     """The voice profile text as it reaches the model: the account's own document
-    if it has one, else the neutral default, plus the hard constraints.
+    if it has one, else the neutral default. Nothing is added to it.
 
     Single source of the resolution order. The operator's personal profile is
     reachable only through their own manifest entry, never as an implicit
     fallback for other users."""
-    profile = load(acct) or default_text()
-    return f"{profile}\n\n{HARD_CONSTRAINTS}"
+    return load(acct) or default_text()
 
 
 def save(acct, text):
@@ -286,9 +303,7 @@ def synthesize(acct, samples):
     model; checked for identifiers on the way back, because whatever this returns
     is pasted into every future draft prompt for this account."""
     assert samples, "synthesize needs at least one sample"
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    assert api_key, "DEEPSEEK_API_KEY is not configured"
-    client = llm_client.make_client(api_key)
+    client = llm_client.make_client(acct)
     resp = llm_client.complete(
         client,
         messages=[
@@ -330,7 +345,7 @@ def generate(acct):
             f"from, and we need {MIN_SAMPLES}. Send a few more replies from this "
             "address, or write your profile by hand below."
         )
-    text = synthesize(acct, samples)
+    text = with_constraints(synthesize(acct, samples))
     save(acct, text)
     return text
 

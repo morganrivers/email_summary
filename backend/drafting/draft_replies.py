@@ -9,7 +9,6 @@ Drafts created via create_draft.mjs (sibling).
 Telegram receives a single notification listing what was drafted.
 """
 
-import os
 import json
 import re
 import html
@@ -29,8 +28,6 @@ FETCH_SCRIPT = paths.node_script("fetch_emails.mjs")
 DRAFT_SCRIPT = paths.node_script("create_draft.mjs")
 
 load_dotenv(paths.ENV_FILE)
-
-DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
 
 CLASSIFIER_PROMPT = (
     "Decide for each email whether the recipient should personally reply.\n\n"
@@ -247,8 +244,9 @@ def process_emails(account, emails):
     if not emails:
         return []
     voice = voice_profile_for(account)
+    ban_dashes = agentic_drafter.dashes_banned(voice)
 
-    client = agentic_drafter.make_client(DEEPSEEK_API_KEY)
+    client = agentic_drafter.make_client(account)
     decisions = classify(client, emails, account.identity)
 
     drafted = []
@@ -258,7 +256,7 @@ def process_emails(account, emails):
         if not d or not d.get("needs_reply"):
             continue
         body, run_url = draft_body(client, voice, email, account)
-        if agentic_drafter.contains_em_dash(body):
+        if ban_dashes and agentic_drafter.contains_em_dash(body):
             rejected.append({
                 "from": email["from"],
                 "subject": email["subject"],

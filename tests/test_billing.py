@@ -11,6 +11,7 @@ import json
 
 from backend.accounts import account
 from backend.billing import billing
+from backend.billing import polar_api
 
 
 def _manifest(tmp_path, entries):
@@ -116,3 +117,31 @@ def test_set_plan_status_persists_and_reports_prior(tmp_path, monkeypatch):
     # persisted across a fresh read
     assert [a.id for a in account.load_accounts()] == []
     assert [a.id for a in account.all_accounts()] == ["eve@x.com"]
+
+
+def test_api_base_follows_the_toggle_without_a_billing_object(monkeypatch):
+    """The base used to be module state assigned in PolarBilling.__init__, so a
+    caller that never built one (checkout_url) hit production with a sandbox
+    token and fell back to a static checkout link."""
+    monkeypatch.setenv("POLAR_SANDBOX", "1")
+    assert polar_api.api_base() == polar_api.SANDBOX_BASE
+    monkeypatch.setenv("POLAR_SANDBOX", "0")
+    assert polar_api.api_base() == polar_api.PROD_BASE
+
+
+def test_checkout_url_mints_against_the_sandbox_when_toggled(monkeypatch):
+    seen = {}
+
+    def fake_create(product_id, success_url, email, token):
+        seen["base"] = polar_api.api_base()
+        seen["success_url"] = success_url
+        return 201, {"url": "https://sandbox.polar.sh/checkout/abc"}
+
+    monkeypatch.setenv("POLAR_SANDBOX", "1")
+    monkeypatch.setenv("POLAR_PRODUCT_ID_SANDBOX", "prod_1")
+    monkeypatch.setenv("POLAR_API_TOKEN_SANDBOX", "tok")
+    monkeypatch.setattr(polar_api, "create_checkout", fake_create)
+    url = billing.checkout_url("dan@x.com", fallback="/dashboard")
+    assert url == "https://sandbox.polar.sh/checkout/abc"
+    assert seen["base"] == polar_api.SANDBOX_BASE
+    assert "{CHECKOUT_ID}" in seen["success_url"], "the return trip needs the id"

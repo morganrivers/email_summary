@@ -546,6 +546,26 @@ GetTlsKey). Boot module `tee_boot.py` is both the F1 spike and the F3 gate.
 - **H1. Vendor MIT template + LLM synthesis prompt → `voice-dna.md`.** `[TODO]`
 - **H2. In-product paste/sample voice onboarding + deferred-voice safeguard.** `[TODO]`
 
+### Tracks I / J / K — Split-custody OAuth tokens + Node removal (needs C [done]; cuts over on F)  — **[TODO]**
+Full plan in `docs/plan_token_custody.md`. Closes the gap named in
+`docs/tee_enclaves_and_upgrades.md` §5.4: today a compromised enclave reads
+every mailbox, because the refresh token is cleartext on the volume and in RAM.
+- **I. Split custody (enclave side).** Nested wrapping: the enclave seals the
+  refresh token under a KMS-derived key, the co-signer wraps that ciphertext
+  under its own key. Neither side can read mail alone; the operator cannot read
+  mail at either box. DPoP binding makes the second barrier permanent rather
+  than one-shot. `[TODO]`
+- **J. Co-signer service (Hetzner).** Outer key custody, per-user + aggregate
+  rate limits, kill switch, append-only audit log, and RA-TLS measurement
+  checking against an allowlist the enclave cannot edit. `[TODO]`
+- **K. Remove Node entirely.** ~595 of 1001 `.mjs` lines are rewritten by I
+  anyway; porting the rest drops a language runtime and its dependency tree out
+  of the measured image. `[TODO]`
+
+Deploy-order consequence for Track F: a new `compose_hash` must be authorized
+in the co-signer allowlist *and* AppAuth before deploying, or every unwrap
+fails. Amends §6.6 step 5 of `docs/tee_enclaves_and_upgrades.md`.
+
 ### Track R — Research / procurement (no code; long lead time; start immediately)  — **[DONE] (research); follow-up actions outstanding**
 Research complete (`docs/R_results.txt`). Each item leaves a human
 procurement/empirical action that is NOT done.

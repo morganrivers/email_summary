@@ -241,7 +241,7 @@ def process_draft_request(account, forwarded_email):
     voice = draft_replies.voice_profile_for(account)
 
     thread_info = find_thread(account, parsed["original_email"], parsed["original_subject"])
-    client = agentic_drafter.make_client(draft_replies.DEEPSEEK_API_KEY)
+    client = agentic_drafter.make_client(account)
     found = thread_info.get("found")
     thread_id = thread_info.get("threadId") if found else None
 
@@ -288,7 +288,7 @@ def process_draft_request(account, forwarded_email):
         )
         return None
 
-    if agentic_drafter.contains_em_dash(body):
+    if agentic_drafter.dashes_banned(voice) and agentic_drafter.contains_em_dash(body):
         rejection_body = f"🚫 Draft rejected (em-dash detected):\n\n{body}"
         draft_replies.submit_draft(account, make_payload(rejection_body), draft_id=draft_id)
         draft_replies.send_telegram(

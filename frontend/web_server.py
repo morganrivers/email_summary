@@ -26,12 +26,15 @@ Authenticated:
   POST /voice            save the edited profile
   POST /voice/generate   build a profile from the account's sent mail
   POST /voice/reset      drop the profile, back to the default
-  GET  /settings         settings (telegram link, timezone, auto-scheduling)
-  POST /settings         save timezone + auto-scheduling
+  GET  /settings         settings (telegram link, timezone, auto-scheduling,
+                         inference provider, PII analyzer)
+  POST /settings         save timezone + auto-scheduling + inference provider
+                         + PII analyzer
   POST /settings/telegram/start    mint a one-time chat link code
   POST /settings/telegram/confirm  claim the chat that posted the code
   POST /settings/telegram/unlink   drop the linked chat
   GET  /billing          plan status + Polar portal link
+  GET  /billing/checkout send a user who wants to pay to Polar checkout
   GET  /billing/return   where Polar returns a buyer; settles entitlement
   GET  /billing/portal   mint a Polar customer session, redirect to the portal
   GET  /account          account info + danger-zone delete
@@ -54,7 +57,9 @@ from backend import site
 from backend.accounts import account
 from backend.billing import billing
 from backend.drafting import voice_dna
+from backend.integrations import llm_client
 from backend.integrations import telegram
+from backend.masking import pseudonymizer
 from backend.onboarding import provisioning
 from frontend import session as sess
 
@@ -65,6 +70,9 @@ PORT = int(os.environ.get("WEB_PORT", str(site.WEB_PORT)))
 REDIRECT_URI = os.environ.get("WEB_OAUTH_REDIRECT_URI", site.oauth_callback_url())
 STATE_COOKIE = "letterlock_oauth_state"
 STATE_TTL = 600
+
+# Rendered form of billing.PLAN_PRICE_EUR, for every page that quotes a price.
+PRICE = f"&euro;{billing.PLAN_PRICE_EUR}"
 
 # Every page is server-rendered from our own templates with no third-party
 # assets, so the policy can be as tight as "nothing but us, and no framing".
@@ -396,46 +404,205 @@ from source and derive the same image hash that the attestation report contains.
     return _layout("About", body, active="/about")
 
 
+# The masking FAQ answer, kept out of the f-string body below so its script can
+# use braces normally. Everything it demonstrates runs in the reader's browser
+# on sample values: it illustrates the shape of the pipeline, it is not the
+# pipeline, which runs inside the enclave (backend/masking/pseudonymizer.py).
+_MASKING_ANSWER = """
+<p>
+Before any message leaves the enclave, Letterlock scans it for personally identifying
+information (provider API keys, names, email addresses, phone numbers, government IDs, etc);
+and replaces each value with a session token. Only the tokenised text reaches the AI model.
+When the response comes back, the tokens are swapped back to your real values before you see
+anything. The AI provider never sees your actual data.
+</p>
+
+<pre>  Your mailbox              Letterlock enclave      AI model
+  ────────────              ──────────────────      ────────
+  "Hi, I'm Alice      ──&#9658;  scan &amp; replace    ──&#9658;  "Hi, I'm [NAME_1].
+   Johnson. SSN:            PII with tokens          SSN [SSN_1]."
+   123-45-6789."            store in vault
+                                                        <svg width="14" height="28" viewBox="0 0 20 40">
+                                                          <line x1="10" y1="0" x2="10" y2="25" stroke="currentColor" />
+                                                          <polygon points="5,25 15,25 10,35" fill="currentColor" />
+                                                        </svg>
+  "OK Alice Johnson,  &#9664;──  restore tokens    &#9664;──    "OK [NAME_1],
+   your SSN                from vault                your SSN
+   123-45-6789 is                                    [SSN_1] is
+   on file."                                         on file."</pre>
+
+<p>
+The vault is seeded from your Google profile and grows as new personally identifying
+information is detected during a draft; a named-entity recogniser catches what the seeded
+list misses. Values that match common patterns (email addresses, phone numbers, card
+numbers) but are not already in the vault are given a fresh numbered token of their type, so
+they are never sent in the clear. See <a href="/about">About</a> for what recall the open
+test corpus measures.
+</p>
+<p>Edit the sample message below to see redaction live:</p>
+
+<div class="pii-demo">
+  <div class="pii-demo-col">
+    <div class="pii-demo-label out">&#9654; Your message (sent to the model)</div>
+    <textarea class="pii-input" id="pii-input" rows="5" spellcheck="false">Hi Bob Martinez, Alice Johnson here. My SSN is 123-45-6789, reply to alice@example.com or call +1-555-0101.</textarea>
+  </div>
+  <div class="pii-demo-col">
+    <div class="pii-demo-label out">Redacted &mdash; what the model sees</div>
+    <div class="pii-output" id="pii-redacted"></div>
+  </div>
+  <div class="pii-divider">&#9660; mock model response (using tokens throughout) &#9660;</div>
+  <div class="pii-demo-col">
+    <div class="pii-demo-label in">&#9654; Model responds (tokens only)</div>
+    <div class="pii-output" id="pii-tokenised"></div>
+  </div>
+  <div class="pii-demo-col">
+    <div class="pii-demo-label in">What you see (tokens restored)</div>
+    <div class="pii-output" id="pii-restored"></div>
+  </div>
+</div>
+
+<p>The vault is built fresh for each draft and never persisted beyond it.</p>
+
+<script>
+(function(){
+  var SEED = [
+    ["Alice Johnson", "[NAME_1]"],
+    ["Bob Martinez", "[NAME_2]"],
+    ["alice@example.com", "[EMAIL_1]"],
+    ["bob@example.net", "[EMAIL_2]"],
+    ["123-45-6789", "[SSN_1]"],
+    ["987-65-4321", "[SSN_2]"],
+    ["+1-555-0101", "[PHONE_1]"]
+  ];
+  var PATTERNS = [
+    ["SSN", /\\b\\d{3}-\\d{2}-\\d{4}\\b/g],
+    ["EMAIL", /\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b/g],
+    ["CARD", /\\b\\d{4}[ -]?\\d{4}[ -]?\\d{4}[ -]?\\d{4}\\b/g],
+    ["PHONE", /\\+?\\d[\\d\\s().-]{6,}\\d/g]
+  ];
+  var TOKEN = /\\[[A-Z]+_[0-9]+\\]/g;
+  var input = document.getElementById('pii-input');
+  var redactedBox = document.getElementById('pii-redacted');
+  var tokenisedBox = document.getElementById('pii-tokenised');
+  var restoredBox = document.getElementById('pii-restored');
+  if (!input) { return; }
+
+  function esc(s){
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function newVault(){
+    var vault = {counters: {}, byToken: {}, byValue: {}};
+    for (var i = 0; i < SEED.length; i++) {
+      var value = SEED[i][0], token = SEED[i][1];
+      var kind = token.slice(1, token.indexOf('_'));
+      vault.counters[kind] = (vault.counters[kind] || 0) + 1;
+      vault.byToken[token] = value;
+      vault.byValue[value.toLowerCase()] = token;
+    }
+    return vault;
+  }
+
+  function tokenFor(vault, kind, value){
+    var known = vault.byValue[value.toLowerCase()];
+    if (known) { return known; }
+    vault.counters[kind] = (vault.counters[kind] || 0) + 1;
+    var token = '[' + kind + '_' + vault.counters[kind] + ']';
+    vault.byToken[token] = value;
+    vault.byValue[value.toLowerCase()] = token;
+    return token;
+  }
+
+  function redact(text, vault){
+    var seeded = SEED.slice().sort(function(a, b){ return b[0].length - a[0].length; });
+    for (var i = 0; i < seeded.length; i++) {
+      text = text.split(seeded[i][0]).join(seeded[i][1]);
+    }
+    for (var j = 0; j < PATTERNS.length; j++) {
+      var kind = PATTERNS[j][0], rx = PATTERNS[j][1];
+      text = text.replace(rx, function(match){ return tokenFor(vault, kind, match); });
+    }
+    return text;
+  }
+
+  function tokensIn(text){
+    var found = text.match(TOKEN) || [];
+    var seen = {}, unique = [];
+    for (var i = 0; i < found.length; i++) {
+      if (!seen[found[i]]) { seen[found[i]] = true; unique.push(found[i]); }
+    }
+    return unique;
+  }
+
+  function mockReply(tokens){
+    if (!tokens.length) {
+      return 'Understood. I have drafted a reply; nothing in that message needed masking.';
+    }
+    return 'Understood. I have drafted a reply referring to ' + tokens.join(', ') + '.';
+  }
+
+  function markTokens(text){
+    return esc(text).replace(TOKEN, function(t){
+      return '<span class="pii-token">' + t + '</span>';
+    });
+  }
+
+  function restore(text, vault){
+    return esc(text).replace(TOKEN, function(t){
+      var value = vault.byToken[t];
+      if (!value) { return '<span class="pii-token">' + t + '</span>'; }
+      return '<span class="pii-restored">' + esc(value) + '</span>';
+    });
+  }
+
+  function render(){
+    var vault = newVault();
+    var redacted = redact(input.value, vault);
+    var reply = mockReply(tokensIn(redacted));
+    redactedBox.innerHTML = markTokens(redacted);
+    tokenisedBox.innerHTML = markTokens(reply);
+    restoredBox.innerHTML = restore(reply, vault);
+  }
+
+  input.addEventListener('input', render);
+  render();
+})();
+</script>
+"""
+
+
 def _page_faq():
-    body = """
+    body = f"""
 <h2>Frequently asked questions</h2>
 
 <details>
 <summary>What is a TEE and why does it matter for email privacy?</summary>
 <div class="answer">
-<p>It is a locked compartment inside the processor that the operating system, the cloud
-provider, and we ourselves cannot read into. Your Gmail token lives only in there.
-<a href="/about">About</a> explains the attestation that makes this checkable rather than
-a promise.</p>
-</div>
+<p>A TEE (Trusted Execution Environment) is a locked compartment inside the processor that the cloud
+provider with our servers, the infererence provider for the AI agent, and Letterlock itself cannot read into.
 </details>
 
 <details>
 <summary>Does Letterlock train on my emails?</summary>
 <div class="answer">
-<p>No. We have no training relationship with the model provider and no ability to train on
-your data. The model never sees your raw email in the first place.</p>
+<p>No. This would be impossible, as Letterlock and the model provider provably cannot access your emails.</p>
 </div>
 </details>
 
 <details>
 <summary>Which AI models are available?</summary>
 <div class="answer">
-<p>Letterlock uses open-weight models served in the EU by Scaleway. Current options include
-Llama 3.1 70B, Llama 3.1 405B, Mistral Large 2, DeepSeek R1, and Qwen 2.5 72B. All are
-open-source models with published weights. Because the masking always runs, the choice of
-model does not affect whether your raw PII is exposed.</p>
+<p>Letterlock uses open-weight models served in the EU by Tresor.co.
+Current options include Mistral Large 2, DeepSeek R1, and Qwen 2.5 72B. All are
+open-source models with published weights. Inference directly on Deepseek is also available (for users with lower security requirements).</p>
 </div>
 </details>
 
 <details>
 <summary>Can a malicious email manipulate the assistant?</summary>
 <div class="answer">
-<p>The drafter can search your mailbox for context, so an email written to look like
-instructions is a possible attack: get the assistant to pull something out of your mail and
-put it in a reply addressed back to the sender.</p>
-<p>Email content and tool results are fenced and marked as untrusted data rather than
-instructions. Letterlock also never sends: every draft waits in your Drafts folder until you
+<p>No. Email content and tool results are untrusted data rather than
+instructions. Letterlock also never sends emails: every draft waits in your Drafts folder until you
 read it and press send.</p>
 </div>
 </details>
@@ -443,53 +610,34 @@ read it and press send.</p>
 <details>
 <summary>How do I get Telegram notifications?</summary>
 <div class="answer">
-<p>Open <a href="/settings">Settings</a> and follow the linking steps: we show you a
-one-time code, you send it to the Letterlock bot, and we read the chat back from the bot. That is how
-we know the chat is yours.</p>
-</div>
-</details>
-
-<details>
-<summary>Where is my data stored?</summary>
-<div class="answer">
-<p>Email bodies are not stored at all once a draft is written, and the masking mapping is
-discarded with them. The only thing kept is your Gmail token, in an encrypted volume the
-host cannot open (see <a href="/about">About</a>).</p>
+<p>Open <a href="/settings">Settings</a> and follow the linking steps.</p>
 </div>
 </details>
 
 <details>
 <summary>How does the PII masking work?</summary>
-<div class="answer">
-<p>Identifying values are replaced with placeholders such as <code>[PERSON1]</code> before
-anything leaves the enclave, and restored afterwards. A named-entity recogniser catches
-what the known-values list misses. See <a href="/about">About</a> for the detail, including
-what recall the open test corpus measures.</p>
-</div>
+<div class="answer">{_MASKING_ANSWER}</div>
 </details>
 
 <details>
 <summary>What does it cost?</summary>
 <div class="answer">
-<p>&euro;20 a month, billed by Polar. There is no free tier: model calls cost money on every
-email processed. <a href="/pricing">Pricing</a> compares this against the alternatives.</p>
+<p>{PRICE} a month. You look at <a href="/pricing">Pricing</a> to compare this against the alternatives.</p>
 </div>
 </details>
 
 <details>
 <summary>Is the code open source?</summary>
 <div class="answer">
-<p>Yes, all of it. You can read it, run the test suite, and rebuild the enclave image
-yourself.</p>
+<p>Yes, all of the code to run the service is open source. </p>
 </div>
 </details>
 
 <details>
 <summary>What is the jurisdiction?</summary>
 <div class="answer">
-<p>Inference runs on Scaleway (France). The TEE substrate is Phala Cloud (Intel TDX).
-Both are EU or EU-aligned. This means no CLOUD Act exposure and no need for Standard
-Contractual Clauses for the inference path.</p>
+<p>The code is hosted on Phala Cloud. Inference runs on Tresor.
+All servers operate from within the EU, unless you elect to use Deepseek servers for inference.</p>
 </div>
 </details>
 
@@ -502,12 +650,12 @@ Contractual Clauses for the inference path.</p>
 
 
 def _page_pricing():
-    body = """
+    body = f"""
 <h2>Pricing</h2>
 
 <div class="info-box" style="text-align:center;padding:16px;">
   <div style="font-size:22px;font-weight:bold;color:#1a237e;font-family:'Trebuchet MS',Verdana,sans-serif;">
-    &euro;20 / month
+    {PRICE} / month
   </div>
   <div style="font-size:11px;color:#444;margin-top:4px;">All features included. No usage caps.</div>
   <div style="margin-top:12px;">
@@ -592,7 +740,7 @@ approximate and may change.
 </tr>
 <tr class="highlight">
   <td><strong>Letterlock</strong></td>
-  <td><strong>&euro;20/mo</strong></td>
+  <td><strong>{PRICE}/mo</strong></td>
   <td><strong>TEE enclave + PII masking</strong></td>
   <td><strong>No, open source</strong></td>
   <td><strong>EU</strong></td>
@@ -603,7 +751,7 @@ approximate and may change.
 
 <p style="font-size:11px;color:#555;">
 The key distinction: Letterlock's security is verifiable. The attestation report shows that
-the server runs the published open-source code. Other tools require you to trust their word.
+the server runs the published open-source code, which can be verified. Other tools require you to trust they are telling you the truth.
 </p>
 
 <h2>What is included</h2>
@@ -611,15 +759,16 @@ the server runs the published open-source code. Other tools require you to trust
 <ul style="font-size:11px;line-height:1.9;padding-left:18px;">
   <li>Automatic draft creation with email history search for context</li>
   <li>Google Calendar read, plus event creation from your sent mail when enabled</li>
-  <li>Telegram notifications and a daily inbox summary</li>
-  <li>A per-account voice profile, so drafts sound like you</li>
   <li>All open-source EU-hosted models (Llama 3, Mistral, DeepSeek R1, Qwen)</li>
+  <li>An optional per-account voice profile, so drafts sound are written with your writing style</li>
+  <li>Optional Telegram notifications</li>
+  <li>Optional daily inbox summary</li>
   <li>On-demand attestation: verify the server is running the published code at any time</li>
 </ul>
 
 <hr>
 <div style="text-align:center;padding:10px 0;">
-  <a href="/auth/login" class="cta-btn">&#187; Sign up (&euro;20/mo)</a>
+  <a href="/auth/login" class="cta-btn">&#187; Sign up ({PRICE}/mo)</a>
 </div>
 """
     return _layout("Pricing", body, active="/pricing")
@@ -706,9 +855,10 @@ def _page_voice(acct, error=None, notice=None):
     summary of the thing that actually matters. Generating overwrites it, which is
     why the page says so before the button rather than after.
 
-    voice_dna.HARD_CONSTRAINTS is deliberately not in the box. Those rules are
-    the product's, they are appended to every profile, and a user editing their
-    voice must not be able to delete a rule the drafter enforces anyway."""
+    The box holds the whole document, output rules included. Nothing is appended
+    behind it at prompt time, so a rule the user deletes here is a rule the
+    drafter stops following, down to the em-dash rejection. "Revert to default"
+    is how they get the shipped rules back."""
     own = voice_dna.load(acct)
     job = voice_dna.status(acct.id)
     running = bool(job and job["state"] == "running")
@@ -762,7 +912,7 @@ def _page_voice(acct, error=None, notice=None):
 {error_html}{notice_html}
 
 <p>
-Your voice profile tells the assistant how you write, so replies sound like you.
+Your voice DNA tells the assistant how you write, so Letterlock drafts sound like you.
 </p>
 
 <table class="data-table" style="width:auto;min-width:280px;">
@@ -774,9 +924,7 @@ Your voice profile tells the assistant how you write, so replies sound like you.
 <h3>Generate from your sent mail</h3>
 
 <p>
-We read recent emails you have sent, keep the ones long enough to show how you
-write, and turn them into the profile below. Nothing is sent anywhere else, and
-generating <b>replaces whatever is in the box</b>.
+Letterlock securely analyze recent emails you have sent and generate the the profile below. Nothing is sent anywhere else. <b>Caution: Generating a result replaces whatever is in the box below</b>.
 </p>
 
 <form method="post" action="/voice/generate" style="display:inline">
@@ -789,9 +937,11 @@ generating <b>replaces whatever is in the box</b>.
 <h3>Edit the profile</h3>
 
 <p>
-This is the text the assistant reads before every draft. Edit it freely: plain
-prose works better than a form. Letterlock always adds its own output rules
-(plain text, no em-dashes, never invent facts), so you do not need to write those.
+This is the whole text the assistant reads before every draft, nothing hidden
+and nothing added on top. Edit it freely: plain prose works better than a form.
+The Constraints section at the bottom is where the output rules live (plain
+text, no dashes, never invent facts). They are the defaults, not our rules about
+you: change them or delete them and the assistant follows what you leave.
 </p>
 
 <div class="contact-form" style="max-width:100%;">
@@ -830,12 +980,17 @@ def _telegram_section(acct, link_code=None, error=None, notice=None):
             f'@{_h(username)}</a>'
             if username else "our Telegram bot"
         )
+        search_name = f"@{_h(username)}" if username else "our Telegram bot"
         return f"""
 <h3>Telegram</h3>
 {error_html}{notice_html}
 <div class="info-box">
   <p>
-    1. Open {open_link} in Telegram and press Start.<br>
+    1. Open {open_link} in Telegram and press Start, or send it <code>/start</code>
+    if no button appears.<br>
+    &nbsp;&nbsp;&nbsp;Or, without the app, sign in at
+    <a href="https://web.telegram.org" target="_blank" rel="noopener">web.telegram.org</a>
+    and search for {search_name}.<br>
     2. Send it this code:
   </p>
   <p style="text-align:center;font-size:18px;font-weight:bold;letter-spacing:2px;">
@@ -871,6 +1026,57 @@ def _telegram_section(acct, link_code=None, error=None, notice=None):
   <button type="submit" class="form-submit">Link Telegram</button>
 </form>
 """
+
+
+def _provider_section(acct):
+    """The inference-provider radio group. Rendered only when this box has keys
+    for more than one provider: with a single option there is no choice to make,
+    and showing a locked control invites support mail about it."""
+    providers = llm_client.available_providers()
+    if len(providers) < 2:
+        return ""
+    current = acct.inference_provider or llm_client.DEFAULT_PROVIDER
+    rows = []
+    for p in providers:
+        checked = " checked" if p.name == current else ""
+        rows.append(f"""
+    <label style="display:block;margin-bottom:6px;">
+      <input type="radio" name="inference_provider" value="{_h(p.name)}"{checked}>
+      {_h(p.label)}
+      <span style="display:block;font-size:10px;color:#666;padding-left:18px;">
+        {_h(p.blurb)}
+      </span>
+    </label>""")
+    return f"""
+    <div class="form-row">
+      <label>Where drafts are generated</label>{"".join(rows)}
+    </div>"""
+
+
+def _analyzer_section(acct):
+    """The PII analyzer checkbox. Always rendered, unlike the provider group:
+    a box that cannot run the analyzer should say so in the place the user went
+    looking for it, rather than silently omit the control."""
+    available = pseudonymizer.analyzer_available()
+    checked = " checked" if acct.pii_analyzer and available else ""
+    disabled = "" if available else " disabled"
+    if available:
+        hint = ("Finds names, places and organisations in the mail you receive and "
+                "replaces them with tags before any text leaves this server. Costs "
+                "about 1.1 GB of memory while a draft is being written.")
+    else:
+        hint = ("Not installed on this server, so this cannot be switched on. Your "
+                "own name, email and phone, your saved contacts, and anything "
+                "key-shaped are still masked; names of people new to your mailbox "
+                "are not.")
+    return f"""
+    <div class="form-row" style="opacity:{'1' if available else '0.6'};">
+      <label>
+        <input type="checkbox" name="pii_analyzer" value="1"{checked}{disabled}>
+        Mask names with the PII analyzer
+      </label>
+      <span style="font-size:10px;color:#666;">{_h(hint)}</span>
+    </div>"""
 
 
 def _page_settings(acct, saved=False, link_code=None, error=None, notice=None,
@@ -916,6 +1122,8 @@ def _page_settings(acct, saved=False, link_code=None, error=None, notice=None,
         calendar. Off by default. No invitations are sent.
       </span>
     </div>
+{_provider_section(acct)}
+{_analyzer_section(acct)}
     <button type="submit" class="form-submit">Save</button>
   </form>
 </div>
@@ -1005,6 +1213,12 @@ def _page_billing(acct, error=None):
             '<a href="/billing/portal" class="cta-btn">Manage subscription &rarr;</a>'
             "</p>"
         )
+    elif acct.plan_status != "active":
+        portal_html = (
+            '<p style="font-size:11px;margin-top:12px;">'
+            '<a href="/billing/checkout" class="cta-btn">Subscribe &rarr;</a>'
+            "</p>"
+        )
     body = f"""
 <h2>Billing</h2>
 
@@ -1012,7 +1226,7 @@ def _page_billing(acct, error=None):
 
 <table class="data-table" style="width:auto;min-width:280px;">
 <tbody>
-<tr><td style="font-weight:bold;width:140px;">Plan</td><td>&euro;20/mo</td></tr>
+<tr><td style="font-weight:bold;width:140px;">Plan</td><td>{PRICE}/mo</td></tr>
 <tr><td style="font-weight:bold;">Status</td><td>{plan_badge}</td></tr>
 </tbody>
 </table>
@@ -1249,6 +1463,22 @@ class Handler(BaseHTTPRequestHandler):
             acct = account.account_for_email(acct.id, include_inactive=True) or acct
             return self._send(200, _page_checkout_return(acct, paid))
 
+        if path == "/billing/checkout":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            if acct.plan_status == "active":
+                return self._send(200, _page_billing(acct, error=(
+                    "Your subscription is already active, so there is nothing "
+                    "to buy. Use Manage subscription to change or cancel it."
+                )))
+            location = provisioning.checkout_redirect(acct.id, fallback="")
+            if not location:
+                return self._send(200, _page_billing(acct, error=(
+                    "Checkout is unavailable right now. Please try again shortly."
+                )))
+            return self._redirect(location)
+
         if path == "/billing/portal":
             acct = self._require_auth()
             if acct is None:
@@ -1306,8 +1536,16 @@ class Handler(BaseHTTPRequestHandler):
             if not _valid_timezone(tz):
                 return self._send(200, _page_settings(
                     acct, settings_error=f"{tz} is not a known timezone name."))
+            provider = form.get("inference_provider", "").strip() or None
+            offered = {p.name for p in llm_client.available_providers()}
+            if provider is not None and provider not in offered:
+                return self._send(200, _page_settings(
+                    acct, settings_error=f"{provider} is not an available inference provider."))
+            analyzer = (bool(form.get("pii_analyzer"))
+                        if pseudonymizer.analyzer_available() else None)
             acct = account.set_settings(
                 acct.id, timezone=tz, auto_schedule=bool(form.get("auto_schedule")),
+                inference_provider=provider, pii_analyzer=analyzer,
             )
             return self._send(200, _page_settings(acct, saved=True))
 

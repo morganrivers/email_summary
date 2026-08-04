@@ -20,6 +20,8 @@ Store schema (database/accounts.json), one object per user:
       "telegram": {"chat_id": "...", "token": "<optional; shared bot otherwise>"},
       "timezone": "Europe/Berlin",
       "auto_schedule": false,
+      "inference_provider": "<optional; llm_client provider name, default deepseek>",
+      "pii_analyzer": true,
       "voice_file": "<optional; per-user voice profile>",
       "plan_status": "active",
       "polar_customer_id": "<optional; set at checkout for exact billing link>"
@@ -41,6 +43,7 @@ import shutil
 from pathlib import Path
 
 from backend import paths
+from backend.integrations import llm_client
 from backend.integrations.telegram import TelegramTarget, bot_token, operator_target
 from backend.masking import pseudonymizer
 from backend.accounts import state
@@ -63,7 +66,8 @@ class AccountLimitReached(Exception):
 class Account:
     def __init__(self, id, identity, state, telegram=None, creds_dir=None,
                  plan_status="active", polar_customer_id=None,
-                 timezone=DEFAULT_TIMEZONE, auto_schedule=False, voice_file=None):
+                 timezone=DEFAULT_TIMEZONE, auto_schedule=False, voice_file=None,
+                 inference_provider=None, pii_analyzer=True):
         assert id and identity and state, "account requires id, identity, state"
         assert identity.account_id == id, (
             f"identity account_id {identity.account_id!r} does not match account id {id!r}"
@@ -81,6 +85,15 @@ class Account:
         self.timezone = timezone or DEFAULT_TIMEZONE
         self.auto_schedule = auto_schedule
         self.voice_file = voice_file
+        # None means "whatever llm_client defaults to". Stored rather than
+        # resolved here so the provider catalog stays in llm_client and an
+        # account never pins a stale copy of it.
+        self.inference_provider = inference_provider
+        # The stated preference, not the effective one: a box without the
+        # analyzer installed serves the regex-only path regardless, and
+        # pseudonymizer.new_state() is where the two are reconciled. Keeping the
+        # preference intact means it comes back if the model is installed later.
+        self.pii_analyzer = bool(pii_analyzer)
 
     @property
     def display_name(self):
@@ -166,6 +179,7 @@ def _telegram_from_entry(entry):
 def _account_from_entry(entry):
     aid = entry["id"]
     ident = entry["identity"]
+    pii_analyzer = bool(entry.get("pii_analyzer", True))
     identity = pseudonymizer.UserIdentity(
         ident["first"],
         ident["last"],
@@ -174,6 +188,7 @@ def _account_from_entry(entry):
         phones=ident.get("phones", ()),
         contacts=ident.get("contacts", ()),
         account_id=aid,
+        analyzer=pii_analyzer,
     )
     state_file = _resolve(entry.get("state_file") or (ACCOUNTS_DIR / aid / "state.json"))
     creds_dir = entry.get("creds_dir")
@@ -189,6 +204,8 @@ def _account_from_entry(entry):
         timezone=entry.get("timezone", DEFAULT_TIMEZONE),
         auto_schedule=bool(entry.get("auto_schedule", False)),
         voice_file=_resolve(voice_file) if voice_file else None,
+        inference_provider=entry.get("inference_provider"),
+        pii_analyzer=pii_analyzer,
     )
 
 
@@ -433,12 +450,17 @@ def set_voice(account_id, voice_file=None, clear=False):
     return _account_from_entry(entry)
 
 
-def set_settings(account_id, timezone=None, auto_schedule=None):
+def set_settings(account_id, timezone=None, auto_schedule=None,
+                 inference_provider=None, pii_analyzer=None):
     """Persist the per-user preferences the web UI owns and return the loaded
-    Account. Sole writer of them, for the same reason as set_telegram."""
-    assert timezone is not None or auto_schedule is not None, (
-        "set_settings needs something to set"
-    )
+    Account. Sole writer of them, for the same reason as set_telegram.
+
+    pii_analyzer is stored as asked even on a box that cannot run the analyzer:
+    availability is a property of the box, the preference is the user's, and
+    pseudonymizer.new_state() decides what actually runs."""
+    assert (timezone is not None or auto_schedule is not None
+            or inference_provider is not None
+            or pii_analyzer is not None), "set_settings needs something to set"
     data = _read_manifest()
     assert data is not None, "cannot set settings without an accounts manifest"
     entry = _entry_for(data, account_id)
@@ -446,6 +468,19 @@ def set_settings(account_id, timezone=None, auto_schedule=None):
         entry["timezone"] = timezone
     if auto_schedule is not None:
         entry["auto_schedule"] = bool(auto_schedule)
+    if inference_provider is not None:
+        provider = llm_client.PROVIDERS.get(inference_provider)
+        assert provider is not None, (
+            f"unknown inference provider {inference_provider!r}; "
+            f"known: {sorted(llm_client.PROVIDERS)}"
+        )
+        assert provider.configured(), (
+            f"provider {provider.name!r} cannot be selected: {provider.key_env} "
+            f"is not set on this box"
+        )
+        entry["inference_provider"] = provider.name
+    if pii_analyzer is not None:
+        entry["pii_analyzer"] = bool(pii_analyzer)
     _write_manifest(data)
     return _account_from_entry(entry)
 

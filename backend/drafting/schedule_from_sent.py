@@ -12,7 +12,6 @@ Dedup is handled upstream by the history cursor (lastHistoryId), which delivers
 each sent message exactly once — same guarantee the drafting path relies on.
 """
 
-import os
 import json
 import html
 import datetime
@@ -29,8 +28,6 @@ from backend.integrations.telegram import send_telegram, notify_error
 CREATE_EVENT_SCRIPT = paths.node_script("create_event.mjs")
 
 load_dotenv(paths.ENV_FILE)
-
-DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
 
 # Per account: an event written at "3pm" means 3pm where the user is, and a
 # module constant put every user in the operator's timezone.
@@ -149,7 +146,7 @@ def run(account, sent_emails):
     assert isinstance(sent_emails, list), "sent_emails must be a list"
     if not sent_emails:
         return []
-    client = llm_client.make_client(DEEPSEEK_API_KEY)
+    client = llm_client.make_client(account)
     created = []
     for email in sent_emails:
         try:
