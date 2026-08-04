@@ -24,6 +24,22 @@ HEADER = """\
 """
 
 
+def co_tenant_handles():
+    """Routes for other products sharing this box. This module renders the whole
+    Caddy config, so omitting one deletes it; see site.CO_TENANT_ROUTES."""
+    blocks = []
+    for path, port, owner in site.CO_TENANT_ROUTES:
+        blocks.append(
+            f"\t# Not Letterlock: {owner}.\n"
+            f"\t# Kept because this file is the whole Caddy config, so dropping\n"
+            f"\t# the route would take that service offline.\n"
+            f"\thandle {path} {{\n"
+            f"\t\treverse_proxy 127.0.0.1:{port}\n"
+            f"\t}}"
+        )
+    return "".join(b + "\n" for b in blocks)
+
+
 def api_block():
     """The original box: Gmail Pub/Sub push and the Polar webhook. Sign-in lives
     on the app host now; the standalone /onboard flow was retired."""
@@ -32,6 +48,7 @@ def api_block():
 \thandle {site.POLAR_WEBHOOK_PATH} {{
 \t\treverse_proxy 127.0.0.1:{site.BILLING_WEBHOOK_PORT}
 \t}}
+{co_tenant_handles()}\
 \t# The catch-all keeps the Gmail Pub/Sub push (POST /) on the webhook. Serving
 \t# a landing page from this site root would require repointing the push
 \t# subscription off "/" first.
@@ -49,6 +66,7 @@ def app_block():
 \thandle {site.POLAR_WEBHOOK_PATH} {{
 \t\treverse_proxy 127.0.0.1:{site.BILLING_WEBHOOK_PORT}
 \t}}
+{co_tenant_handles()}\
 \thandle {{
 \t\treverse_proxy 127.0.0.1:{site.WEB_PORT}
 \t}}

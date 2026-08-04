@@ -58,6 +58,18 @@ POLAR_WEBHOOK_PATH = "/letterlock/polar/webhook"
 # back, which is what it did.
 CHECKOUT_RETURN_PATH = "/billing/return"
 
+# Paths on this box that belong to a different product. They are here because
+# deploy/render_caddyfile.py renders the *whole* /etc/caddy/Caddyfile: anything
+# absent from this module is absent from the installed config, so a route left
+# out here is a route deleted from a service that has nothing to do with
+# Letterlock. The Kitchen Search license signer was reachable only through the
+# hezner block's /polar/webhook, meaning Letterlock's renderer was serving it by
+# coincidence; naming it makes that deliberate and survives the next regenerate.
+# (path, loopback port, who owns it)
+CO_TENANT_ROUTES = (
+    ("/polar/webhook", 8788, "Kitchen Search license signer (/opt/ks_signer)"),
+)
+
 
 def _url(host, path):
     assert path.startswith("/"), f"path must be absolute, got {path!r}"

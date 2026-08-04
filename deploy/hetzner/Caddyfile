@@ -6,6 +6,12 @@ hezner.morganrivers.com {
 	handle /letterlock/polar/webhook {
 		reverse_proxy 127.0.0.1:8789
 	}
+	# Not Letterlock: Kitchen Search license signer (/opt/ks_signer).
+	# Kept because this file is the whole Caddy config, so dropping
+	# the route would take that service offline.
+	handle /polar/webhook {
+		reverse_proxy 127.0.0.1:8788
+	}
 	# The catch-all keeps the Gmail Pub/Sub push (POST /) on the webhook. Serving
 	# a landing page from this site root would require repointing the push
 	# subscription off "/" first.
@@ -17,6 +23,12 @@ hezner.morganrivers.com {
 letterlock.morganrivers.com {
 	handle /letterlock/polar/webhook {
 		reverse_proxy 127.0.0.1:8789
+	}
+	# Not Letterlock: Kitchen Search license signer (/opt/ks_signer).
+	# Kept because this file is the whole Caddy config, so dropping
+	# the route would take that service offline.
+	handle /polar/webhook {
+		reverse_proxy 127.0.0.1:8788
 	}
 	handle {
 		reverse_proxy 127.0.0.1:8790
