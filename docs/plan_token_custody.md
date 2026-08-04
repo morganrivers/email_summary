@@ -78,6 +78,56 @@ the wire.
 | Co-signer | outer wrapping key, DPoP private key | nothing — has no ciphertexts, and unwrapping yields `inner` |
 | Both | one token, one user, per request | that one mailbox |
 
+### Why adding a second box does not add exposure
+
+The intuition to argue against is "more machines, more to attack." For
+**confidentiality** that is false here, and the reason is worth stating
+precisely because it is checkable.
+
+A new component widens the attack surface only if compromising it yields
+something. Enumerate what the co-signer can yield:
+
+- It receives `inner` — ciphertext under `K_inner`, a key derived from
+  `app_secret`, which dstack's KMS releases only to an attested enclave. The
+  co-signer has never held it and cannot derive it.
+- It returns `inner` — the same ciphertext.
+- It signs DPoP proofs, which cover `htm`, `htu`, `iat`, `jti`, `nonce`. No
+  token material.
+- It stores nothing. The `outer` ciphertexts live on the enclave volume.
+
+So an attacker with total control of the co-signer holds a wrapping key with
+nothing to unwrap, a signing key that signs no secrets, and a log. Reading one
+mailbox still requires separately compromising the enclave. The set of paths to
+plaintext does not grow; it shrinks, because the pre-existing path (read the
+volume, or read enclave RAM at rest) stops working on its own.
+
+That makes the confidentiality surface **monotonically smaller**: every attack
+that worked before still needs everything it needed before, plus a live
+compromise of a second machine under a different operator, on a per-request
+basis.
+
+The claim is not unconditional. It rests on four invariants, and a
+convenient-looking refactor that breaks any one of them silently destroys the
+guarantee:
+
+1. **Layer order.** The operator's wrap is *outside*, the enclave's is *inside*.
+   Reverse them and the co-signer's unwrap yields plaintext — it becomes the
+   single box that can read every mailbox, which is the arrangement this design
+   exists to avoid.
+2. **The co-signer never receives plaintext.** Not for "validation", not for
+   logging, not for a health check.
+3. **No bypass.** Fail closed. A cached local key or a "co-signer unreachable,
+   proceed anyway" fallback collapses the whole property to the status quo.
+4. **The co-signer persists no ciphertext.** If it ever stores `outer`
+   alongside its own key, one compromise gives both halves.
+
+**Where it is not a reduction: availability.** The co-signer is a new hard
+dependency, and by design there is no way around it. Down means no mail
+processed for anyone. That is a deliberate trade — a denial-of-service
+possibility accepted in exchange for removing a confidentiality one — and it
+should be stated plainly rather than glossed, including in any user-facing
+copy. Monitoring and a fast restart path matter more here than they did before.
+
 ### Why the DPoP key lives on the co-signer
 
 Google binds a **refresh token** to a DPoP key at the authorization-code
@@ -478,7 +528,48 @@ Found during this review; small, and they belong to the same threat model:
   broker found holds the refresh token itself, which is the arrangement that
   gives one compromised box everything.
 
-## 10. Line-count estimate
+## 10. Front-end copy
+
+**Rule: ask the user about each change individually and get confirmation before
+editing.** Do not batch these, do not apply them as a set, and do not rewrite
+surrounding prose while in the file. Every edit below is a factual correction
+to a claim this work changes; anything beyond that is out of scope.
+
+Copy is inline in `frontend/web_server.py` (no templates). Minimal set:
+
+- **`web_server.py:383-386` (/about, "Your Gmail refresh token…").** The only
+  passage that becomes **untrue**. It currently says the token "lives inside the
+  enclave, in an encrypted volume whose key is released by the KMS only after
+  the attestation report passes verification." After Track I the token is
+  nested-wrapped and unusable without the co-signer, which is a stronger claim
+  than the one being made. Must change. Propose the smallest edit that states
+  both layers.
+- **`web_server.py:308-310` (landing, "How secure is Letterlock?").** Already
+  says "Email access tokens requires simultaneous access to an encrypted secure
+  enclave as well as Letterlock's EU-based verifier server" — i.e. it already
+  describes this design. Check for accuracy once built; it may need **no
+  change at all**. There is a grammar slip ("tokens requires"); ask separately
+  rather than fixing it silently as part of a security edit.
+- **`web_server.py:823-825` (dashboard Attestation row).** Reads
+  `STUB (Hetzner)` / `Live on Phala TEE`. Only touch this at Phase 4 cutover,
+  when it stops being a stub. Not part of Tracks I-K.
+
+Explicitly **not** in scope: the comparison table (`~815`), the PII/masking demo
+(`~423-553`), the open-source section (`~392`), taglines, pricing. None of their
+claims change.
+
+Ask before writing anything new about the co-signer. Describing a second
+independent barrier in marketing copy raises the stakes on getting the
+rate-limit and audit behaviour right, and it is the user's call whether to
+advertise it at all. If it is advertised, the defensible claim is the narrow one
+argued in §1 ("Why adding a second box does not add exposure"): the co-signer
+holds no readable copy of anything, so it removes a way to read mail without
+adding one. Do not stretch that into "more secure because there are two
+servers" — the argument is about which paths to plaintext exist, not about
+count. The availability trade named at the end of that section is part of the
+honest version of the claim.
+
+## 11. Line-count estimate
 
 | Piece | Lines |
 | --- | --- |
