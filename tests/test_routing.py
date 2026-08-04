@@ -48,12 +48,39 @@ def test_get_account_resolves_and_filters(tmp_path, monkeypatch):
     assert account.get_account("stranger@x.com") is None
 
 
-def test_get_account_default_single_tenant(monkeypatch):
+def test_missing_manifest_refuses_rather_than_inventing_an_account(tmp_path, monkeypatch):
+    """No implicit owner: an unseeded box must fail loudly. The old fallback
+    silently stopped applying the moment anyone else signed up, which removed
+    the owner from routing without a word."""
+    monkeypatch.setattr(account, "MANIFEST", tmp_path / "does_not_exist.json")
+    try:
+        account.get_account("danielmorganrivers@gmail.com")
+    except AssertionError as err:
+        assert "seed_owner" in str(err)
+    else:
+        raise AssertionError("expected a missing manifest to raise")
+
+
+def test_seeded_owner_is_row_one_and_survives_a_later_signup(tmp_path, monkeypatch):
+    """The seed makes the owner an ordinary active entry, so a stranger signing
+    up afterwards appends a row instead of displacing them."""
+    from backend.accounts import seed_owner
+
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
-    monkeypatch.setattr(account, "MANIFEST", account.ACCOUNTS_DIR / "does_not_exist.json")
-    a = account.get_account("danielmorganrivers@gmail.com")
-    assert a is not None and a.id == "default"
+    monkeypatch.setenv("GMAIL_MCP_DIR", str(tmp_path / ".gmail-mcp"))
+    monkeypatch.setattr(account, "ACCOUNTS_DIR", tmp_path)
+    monkeypatch.setattr(account, "MANIFEST", tmp_path / "accounts.json")
+
+    owner = seed_owner.seed()
+    assert owner.id == "danielmorganrivers@gmail.com"
+    assert owner.plan_status == "active"
+    assert account.get_account("danielmorganrivers@gmail.com").id == owner.id
+
+    account.register_account("stranger@x.com", "Stranger", "Danger",
+                             tmp_path / "creds", telegram_chat_id="999")
+    assert [a.id for a in account.load_accounts()] == [owner.id]      # signup is inactive
+    assert account.get_account("danielmorganrivers@gmail.com") is not None
 
 
 def test_wake_queue_roundtrip_and_dedup(tmp_path, monkeypatch):

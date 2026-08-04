@@ -5,7 +5,7 @@ import sys
 from backend.accounts import account
 from backend.drafting import draft_replies
 
-acct = account.default_account()
+acct = account.owner_account()
 
 print("=== Fetching emails ===", flush=True)
 emails = draft_replies.fetch_emails()

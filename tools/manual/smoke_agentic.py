@@ -10,10 +10,11 @@ from pathlib import Path
 load_dotenv(Path(__file__).parent / ".env")
 
 from backend.drafting import agentic_drafter
-from backend.drafting.draft_replies import VOICE_PROFILE
+from backend.accounts import account
+from backend.drafting import draft_replies
 
-assert VOICE_PROFILE.exists()
-voice = VOICE_PROFILE.read_text()
+acct = account.owner_account()
+voice = draft_replies.voice_profile_for(acct)
 
 DRAFTER_INSTRUCTION = (
     "\n\nWrite a reply email that follows the voice profile above. "

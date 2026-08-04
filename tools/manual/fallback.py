@@ -7,7 +7,7 @@ from pathlib import Path
 from backend.accounts import account
 from backend.drafting import manual_draft
 
-acct = account.default_account()
+acct = account.owner_account()
 email_id = "19f198a5b20434e0"
 result = subprocess.run(
     ["node", "fetch_emails.mjs", "--since-history", "2854017"],

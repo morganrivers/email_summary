@@ -50,8 +50,8 @@ def process_account(account, *, log, notify_err):
     if stale:
         log(f"history.list 404 (startHistoryId={last} too old); bootstrapping to {new_history_id}")
 
-    bot_requests = [e for e in emails if manual_draft.is_bot_request(e)]
-    auto_emails = [e for e in emails if not manual_draft.is_bot_request(e)]
+    bot_requests = [e for e in emails if manual_draft.is_bot_request(e, account)]
+    auto_emails = [e for e in emails if not manual_draft.is_bot_request(e, account)]
 
     for req in bot_requests:
         try:
@@ -65,7 +65,10 @@ def process_account(account, *, log, notify_err):
         except Exception as err:
             log(f"process_emails failed: {err}\n{traceback.format_exc()}")
             notify_err("process_emails failed", err)
-    if sent:
+    # Writing to someone's calendar without being asked is a surprise, so it is
+    # opt-in per account (the owner's seed turns it on). Off means the sent mail
+    # is simply not inspected.
+    if sent and account.auto_schedule:
         try:
             schedule_from_sent.run(account, sent)
         except Exception as err:

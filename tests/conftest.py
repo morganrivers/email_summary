@@ -4,6 +4,7 @@
 into the environment BEFORE any app module imports (they read env at import).
 """
 
+import json
 import os
 import sys
 from collections import deque
@@ -40,12 +41,36 @@ def wire(monkeypatch, tmp_path):
 
     rec = harness.Recorder()
 
-    monkeypatch.setattr(draft_replies, "VOICE_PROFILE", harness.VOICE_FIXTURE)
+    # The voice profile is per account now; the fixture stands in for the
+    # neutral default that any account without its own profile gets.
+    monkeypatch.setattr(draft_replies, "DEFAULT_VOICE_PROFILE", harness.VOICE_FIXTURE)
     monkeypatch.setattr(state, "DEFAULT_STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(agentic_drafter, "datetime", harness.FrozenDateTime)
     monkeypatch.setattr(schedule_from_sent, "datetime", harness.frozen_datetime_namespace())
 
-    acct = account.default_account()
+    # There is no implicit account any more: anything that enumerates users goes
+    # through the manifest, so the harness writes a throwaway one holding exactly
+    # the owner. Keyed "default" like owner_account() rather than by email, so
+    # the golden outputs stay pinned to the identity under test.
+    acct = account.owner_account()
+    manifest = tmp_path / "database" / "accounts.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"accounts": [{
+        "id": acct.id,
+        "identity": {
+            "first": acct.identity.first,
+            "last": acct.identity.last,
+            "first_aliases": acct.identity.first_aliases,
+            "emails": acct.identity.emails,
+        },
+        "telegram": {"chat_id": acct.telegram.chat_id, "token": acct.telegram.token},
+        "state_file": str(acct.state.path),
+        "plan_status": "active",
+        "timezone": "Europe/Berlin",
+        "auto_schedule": True,
+    }]}))
+    monkeypatch.setattr(account, "ACCOUNTS_DIR", manifest.parent)
+    monkeypatch.setattr(account, "MANIFEST", manifest)
     real_run = subprocess.run
 
     def install(responses=(), node_outputs=None):

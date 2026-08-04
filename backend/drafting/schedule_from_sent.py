@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Turn sent emails into calendar events.
 
-Fed by the realtime Gmail history path (pipeline.process_account): every
-message the user sends is routed here. An email becomes a calendar event only
-when it commits to a concrete date AND clock time. Events are created on the
-primary calendar with no attendees (no invites are sent). A single Telegram
-notice lists what was scheduled.
+Fed by the realtime Gmail history path (pipeline.process_account) for accounts
+that opted in (auto_schedule): every message such a user sends is routed here.
+An email becomes a calendar event only when it commits to a concrete date AND
+clock time. Events are created on the primary calendar with no attendees (no
+invites are sent), in the account's own timezone. A single Telegram notice
+lists what was scheduled.
 
 Dedup is handled upstream by the history cursor (lastHistoryId), which delivers
 each sent message exactly once — same guarantee the drafting path relies on.
@@ -31,11 +32,12 @@ load_dotenv(paths.ENV_FILE)
 
 DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
 
-TIMEZONE = "Europe/Berlin"
+# Per account: an event written at "3pm" means 3pm where the user is, and a
+# module constant put every user in the operator's timezone.
 DEFAULT_DURATION = datetime.timedelta(hours=1)
 
 EXTRACT_PROMPT = (
-    "You extract calendar events from an email the user (Morgan) has SENT.\n\n"
+    "You extract calendar events from an email the account owner has SENT.\n\n"
     "Extract an event ONLY when the email commits to a specific calendar item "
     "with a CONCRETE date AND clock time (e.g. 'Tuesday July 21 at 3pm', "
     "'tomorrow 10:00', 'the 20th at 14:30'). Resolve relative dates using the "
@@ -60,11 +62,11 @@ def _log(msg):
     sys.stderr.write(f"[schedule_from_sent] {msg}\n")
 
 
-def extract_events(client, email, identity=None):
+def extract_events(client, email, identity=None, timezone="UTC"):
     today = datetime.date.today()
     user_content = (
         f"Today: {today.isoformat()} ({today.strftime('%A')}). "
-        f"Timezone: {TIMEZONE}.\n\n"
+        f"Timezone: {timezone}.\n\n"
         f"Sent email:\n"
         f"To: {email.get('to', '')}\n"
         f"Subject: {email.get('subject', '')}\n"
@@ -115,7 +117,7 @@ def create_event(account, event):
         "summary": event["summary"],
         "startIso": event["start"],
         "endIso": event["end"],
-        "timeZone": TIMEZONE,
+        "timeZone": account.timezone,
         "location": event["location"],
         "description": event["description"],
     }
@@ -151,7 +153,8 @@ def run(account, sent_emails):
     created = []
     for email in sent_emails:
         try:
-            events = extract_events(client, email, account.identity)
+            events = extract_events(client, email, account.identity,
+                                    timezone=account.timezone)
         except Exception as err:
             _log(f"extract failed for {email.get('id')}: {err}")
             notify_error(f"schedule_from_sent: event extraction failed for sent email {email.get('id')}", err, account.telegram)

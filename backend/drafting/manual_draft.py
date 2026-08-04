@@ -1,9 +1,15 @@
-"""Manual draft mode: triggered by forwarding an email to BOT_ALIAS.
+"""Manual draft mode: triggered by forwarding an email to the account's bot alias.
 
-User forwards an email to danielmorganrivers+bot@gmail.com with optional context
-typed at the top. Parser splits out the user context and the original message
-metadata. Drafter generates a reply on the ORIGINAL thread (looked up by
-from+subject) using the agentic drafter with calendar + email tools.
+A user forwards an email to their own plus-alias (user+bot@gmail.com) with
+optional context typed at the top. Parser splits out the user context and the
+original message metadata. Drafter generates a reply on the ORIGINAL thread
+(looked up by from+subject) using the agentic drafter with calendar + email
+tools.
+
+The alias is derived per account rather than hardcoded. It used to be the box
+owner's literal address, checked against every account's mail, so no other user
+could trigger the path and the owner's alias could fire inside someone else's
+mailbox.
 """
 
 import re
@@ -19,7 +25,7 @@ from backend.integrations.gmail_gcal.node_runner import node_env
 FIND_THREAD = paths.node_script("find_thread.mjs")
 GET_THREAD = paths.node_script("get_thread.mjs")
 
-BOT_ALIAS = "danielmorganrivers+bot@gmail.com"
+BOT_TAG = "bot"
 
 FORWARD_MARKER = re.compile(r'-{3,}\s*Forwarded message\s*-{1,}', re.IGNORECASE)
 HEADER_RE = re.compile(r'^([A-Za-z-]+):\s*(.+)$')
@@ -27,15 +33,25 @@ ADDRESS_RE = re.compile(r'<([^>]+)>')
 
 DRAFTER_WITH_CONTEXT = (
     "\n\nWrite a reply email that follows the voice profile above. "
-    "Morgan has supplied his own context for how to respond — let that guide tone and content, "
-    "while staying true to the voice profile. "
+    "The account owner has supplied their own context for how to respond, so let that guide "
+    "tone and content, while staying true to the voice profile. "
     "Output the email body only, including the greeting and sign-off as the profile dictates. "
     "No subject line. No commentary. No markdown fences. Plain text only."
 )
 
 
-def is_bot_request(email):
-    return BOT_ALIAS in (email.get("to") or "").lower()
+def bot_alias(account):
+    """The plus-alias this account forwards to. Single source of the derivation,
+    used both to recognise a request and to explain the feature in the UI."""
+    local, _, domain = account.primary_email.partition("@")
+    assert local and domain, (
+        f"account {account.id!r} has no mail address to derive a bot alias from"
+    )
+    return f"{local}+{BOT_TAG}@{domain}".lower()
+
+
+def is_bot_request(email, account):
+    return bot_alias(account) in (email.get("to") or "").lower()
 
 
 def parse_forward(body):
@@ -108,11 +124,12 @@ def parse_from_thread(account, forwarded_email):
     messages = thread.get("messages") or []
     if len(messages) < 2:
         return None
+    alias = bot_alias(account)
     prior = None
     for m in reversed(messages):
         if m.get("id") == self_id:
             continue
-        if BOT_ALIAS in (m.get("to") or "").lower():
+        if alias in (m.get("to") or "").lower():
             continue
         prior = m
         break
@@ -145,19 +162,26 @@ def reply_subject(subj):
 
 def draft_with_context(client, voice, parsed, account, thread_id=None, on_iteration=None):
     sys_prompt = voice + DRAFTER_WITH_CONTEXT
+    owner = account.display_name
+    # The owner's own instructions are trusted; the forwarded email is not, so
+    # only the latter is fenced.
     context_section = (
-        f"Morgan's context for this reply:\n{parsed['context']}\n\n"
+        f"{owner}'s context for this reply:\n{parsed['context']}\n\n"
         if parsed["context"] else
-        "Morgan did not supply additional context — use only the email content + voice profile.\n\n"
+        f"{owner} did not supply additional context, so use only the email content "
+        "and the voice profile.\n\n"
     )
     user_prompt = (
-        f"Original email Morgan received:\n"
-        f"From: {parsed['original_from']}\n"
-        f"Date: {parsed['original_date']}\n"
-        f"Subject: {parsed['original_subject']}\n\n"
-        f"{parsed['original_body']}\n\n"
-        f"{context_section}"
-        "Draft the reply."
+        f"Original email {owner} received:\n"
+        + agentic_drafter.untrusted(
+            f"From: {parsed['original_from']}\n"
+            f"Date: {parsed['original_date']}\n"
+            f"Subject: {parsed['original_subject']}\n\n"
+            f"{parsed['original_body']}"
+        )
+        + "\n\n"
+        + context_section
+        + "Draft the reply."
     )
     return agentic_drafter.draft(client, sys_prompt, user_prompt,
                                  thread_id=thread_id, on_iteration=on_iteration,
@@ -214,9 +238,7 @@ def process_draft_request(account, forwarded_email):
         )
         return None
 
-    assert draft_replies.VOICE_PROFILE.exists(), \
-        f"Voice profile not found at {draft_replies.VOICE_PROFILE}"
-    voice = draft_replies.VOICE_PROFILE.read_text()
+    voice = draft_replies.voice_profile_for(account)
 
     thread_info = find_thread(account, parsed["original_email"], parsed["original_subject"])
     client = agentic_drafter.make_client(draft_replies.DEEPSEEK_API_KEY)

@@ -14,7 +14,9 @@ import pytest
 
 from backend.accounts import account
 from backend.onboarding import watch_renew
-from backend.onboarding import onboarding_server as ob
+from backend.onboarding import provisioning as ob
+
+REDIRECT = "https://example.test/auth/callback"
 
 
 def _use_store(tmp_path, monkeypatch):
@@ -43,11 +45,62 @@ def test_register_account_writes_inactive_loadable_entry(tmp_path, monkeypatch):
     assert account.get_account("alice@example.com").id == "alice@example.com"
 
 
-def test_register_account_requires_notification_target(tmp_path, monkeypatch):
+def test_set_telegram_updates_chat_id_only(tmp_path, monkeypatch):
     _use_store(tmp_path, monkeypatch)
-    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
-    with pytest.raises(AssertionError):
-        account.register_account("bob@x.com", "Bob", "Fox", "accounts/bob@x.com/.gmail-mcp")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-1")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    account.register_account("a@x.com", "A", "N", "d/a/.gmail-mcp",
+                             telegram_token="entry-token")
+
+    acct = account.set_telegram("a@x.com", chat_id="chat-2")
+    assert acct.telegram.chat_id == "chat-2"
+    assert acct.telegram.token == "entry-token"      # untouched
+    assert account.account_for_email("a@x.com").telegram.chat_id == "chat-2"
+
+
+def test_delete_account_removes_entry_and_the_creds_it_owns(tmp_path, monkeypatch):
+    _use_store(tmp_path, monkeypatch)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-1")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    creds = tmp_path / "a@x.com" / ".gmail-mcp"
+    creds.mkdir(parents=True)
+    (creds / "credentials.json").write_text("{}")
+    monkeypatch.setattr(account.paths, "REPO_ROOT", tmp_path)
+    account.register_account("a@x.com", "A", "N", "a@x.com/.gmail-mcp")
+
+    assert account.delete_account("a@x.com") is True
+    assert account.all_accounts() == []
+    assert not creds.exists()                        # refresh token not left behind
+    assert account.delete_account("a@x.com") is False
+
+
+def test_delete_account_never_removes_shared_box_paths(tmp_path, monkeypatch):
+    """The seeded owner points at the top-level .gmail-mcp and state/, which
+    belong to the box. Deleting that entry must drop the row and nothing else."""
+    _use_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(account.paths, "REPO_ROOT", tmp_path)
+    shared_creds = tmp_path / ".gmail-mcp"
+    shared_creds.mkdir()
+    shared_state = tmp_path / "state" / "state.json"
+    shared_state.parent.mkdir()
+    shared_state.write_text("{}")
+    account.register_account("owner@x.com", "O", "W", ".gmail-mcp",
+                             telegram_chat_id="c", state_file="state/state.json")
+
+    assert account.delete_account("owner@x.com") is True
+    assert shared_creds.exists() and shared_state.exists()
+
+
+def test_register_account_without_chat_has_no_notification_target(tmp_path, monkeypatch):
+    """A Google consent carries no Telegram chat, and no environment value may
+    stand in for one: the env fallback that used to live here sent every new
+    signup's draft notifications to the box owner's chat."""
+    _use_store(tmp_path, monkeypatch)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "owners-own-chat")
+    acct = account.register_account("bob@x.com", "Bob", "Fox",
+                                    "accounts/bob@x.com/.gmail-mcp")
+    assert acct.telegram is None
+    assert account.account_for_email("bob@x.com").telegram is None
 
 
 def test_register_account_idempotent_preserves_plan_and_polar(tmp_path, monkeypatch):
@@ -109,20 +162,20 @@ def test_renew_does_not_rewind_existing_cursor(tmp_path, monkeypatch):
 
 
 def test_callback_rejects_state_mismatch(monkeypatch):
-    with pytest.raises(ob.OnboardError) as ei:
-        ob.handle_callback({"code": "c", "state": "abc"}, cookie_state="different")
+    with pytest.raises(ob.ProvisionError) as ei:
+        ob.handle_callback({"code": "c", "state": "abc"}, "different", REDIRECT)
     assert ei.value.code == 403
 
 
 def test_callback_rejects_missing_cookie(monkeypatch):
-    with pytest.raises(ob.OnboardError) as ei:
-        ob.handle_callback({"code": "c", "state": "abc"}, cookie_state=None)
+    with pytest.raises(ob.ProvisionError) as ei:
+        ob.handle_callback({"code": "c", "state": "abc"}, None, REDIRECT)
     assert ei.value.code == 403
 
 
 def test_callback_surfaces_consent_denial(monkeypatch):
-    with pytest.raises(ob.OnboardError) as ei:
-        ob.handle_callback({"error": "access_denied"}, cookie_state="x")
+    with pytest.raises(ob.ProvisionError) as ei:
+        ob.handle_callback({"error": "access_denied"}, "x", REDIRECT)
     assert ei.value.code == 400
 
 
@@ -132,22 +185,24 @@ def test_callback_happy_path_provisions_and_redirects(monkeypatch):
     class Acct:
         id = "e@x.com"
 
-    def fake_provision(code):
+    def fake_provision(code, redirect_uri):
         seen["code"] = code
+        seen["redirect"] = redirect_uri
         return Acct()
 
     monkeypatch.setattr(ob, "provision", fake_provision)
     monkeypatch.delenv("POLAR_SANDBOX", raising=False)
     monkeypatch.setenv("POLAR_CHECKOUT_URL", "https://polar.sh/checkout/abc")
-    loc = ob.handle_callback({"code": "the-code", "state": "s"}, cookie_state="s")
-    assert seen["code"] == "the-code"
+    acct, loc = ob.handle_callback({"code": "the-code", "state": "s"}, "s", REDIRECT)
+    assert acct.id == "e@x.com"
+    assert seen["code"] == "the-code" and seen["redirect"] == REDIRECT
     assert loc == "https://polar.sh/checkout/abc?customer_email=e%40x.com"
 
 
 def test_checkout_redirect_falls_back_without_polar(monkeypatch):
     monkeypatch.delenv("POLAR_SANDBOX", raising=False)
     monkeypatch.setenv("POLAR_CHECKOUT_URL", "")
-    assert ob.checkout_redirect("z@x.com") == "/onboard/success"
+    assert ob.checkout_redirect("z@x.com", fallback="/dashboard") == "/dashboard"
 
 
 def test_checkout_redirect_uses_sandbox_url_when_toggled(monkeypatch):

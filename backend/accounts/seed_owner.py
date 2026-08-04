@@ -1,0 +1,94 @@
+"""One-time: write the box owner into the account manifest.
+
+Before this existed, a box with no manifest fell back to an implicit account.
+That fallback ended the instant anyone signed up -- the manifest then existed,
+so the fallback stopped, and the owner (who had no entry) silently vanished from
+routing. The fix is to make the owner an ordinary entry: row one, active, with
+the same creds and history cursor the box is already using.
+
+Idempotent. Running it twice is a no-op beyond rewriting the same values, and it
+will not clobber a plan_status that billing has since changed -- except for
+forcing the owner active, which is the point (the owner runs the box; they are
+not a Polar customer).
+
+    python -m backend.accounts.seed_owner          # write it
+    python -m backend.accounts.seed_owner --show   # print what it would write
+"""
+
+import sys
+from pathlib import Path
+
+from backend import paths
+from backend.accounts import account
+from backend.drafting import draft_replies
+
+
+def _relative_if_inside(path):
+    """Store paths relative to the app root when they live under it, so the
+    manifest survives the directory being renamed (as /opt/email_summary ->
+    /opt/letterlock just was). account._resolve() reads both forms."""
+    try:
+        return str(Path(path).resolve().relative_to(paths.REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def owner_entry_args():
+    """The register_account() call the seed makes, derived from owner_account()
+    so the identity, Telegram target, and creds come from one place.
+
+    The owner is also the only account that points at the operator's personal
+    voice profile. Everyone else gets the neutral default: a signup must not be
+    drafted in, and signed with, the box owner's voice."""
+    owner = account.owner_account()
+    identity = owner.identity
+    assert identity.emails, (
+        "owner identity has no email address; pseudonymizer.USER_EMAILS is empty"
+    )
+    assert owner.creds_dir, (
+        "owner has no Gmail creds directory; set GMAIL_MCP_DIR in .env"
+    )
+    args = {
+        "email": identity.emails[0],
+        "first": identity.first,
+        "last": identity.last,
+        "creds_dir": _relative_if_inside(owner.creds_dir),
+        "first_aliases": tuple(identity.first_aliases),
+        "telegram_chat_id": owner.telegram.chat_id,
+        "state_file": _relative_if_inside(owner.state.path),
+        "plan_status": "active",
+        "timezone": owner.timezone,
+        "auto_schedule": owner.auto_schedule,
+    }
+    voice = draft_replies.OWNER_VOICE_PROFILE
+    if voice.exists():
+        args["voice_file"] = _relative_if_inside(voice)
+    return args
+
+
+def seed():
+    args = owner_entry_args()
+    acct = account.register_account(**args)
+    # register_account preserves an existing plan_status, so an owner who signed
+    # in through the web UI first (and landed inactive) still ends up active.
+    if acct.plan_status != "active":
+        prior = account.set_plan_status(acct.id, "active")
+        print(f"plan_status {prior} -> active")
+        acct = account.account_for_email(acct.id)
+    return acct
+
+
+def main(argv):
+    if "--show" in argv:
+        for k, v in owner_entry_args().items():
+            print(f"{k}: {v}")
+        return 0
+    acct = seed()
+    print(f"seeded {acct.id} ({acct.plan_status}) into {account.MANIFEST}")
+    print(f"  creds:  {acct.creds_dir}")
+    print(f"  state:  {acct.state.path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
