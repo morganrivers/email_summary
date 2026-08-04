@@ -1,0 +1,50 @@
+LETTERLOCK SOFT-LAUNCH TO-DO
+Ordered by execution sequence. Dates assume you move fast. Adjust freely.
+
+=== GATE: CONFIRM THE TECH BEFORE CLAIMING IT ===
+- [DUE July 30th] Verify TEE inference is actually live and returning correct results end-to-end before writing any copy that claims it. If it slips, launch anyway but move the TEE line to the "coming soon" column and do NOT claim it present-tense.
+- [DUE July 30th] Write down, in one paragraph for your own reference, the exact boundary of what is attested today: inference runs in the provider's enclave (provider never sees plaintext outside it) vs. your own stack, which is NOT yet fully attested. This paragraph is the source of truth for every claim on the page.
+
+=== BUILD THE PAGE ===
+- [DUE July 30th] Point letterlock.ai at a landing page and wire up email capture (Formspree, ConvertKit, Beehiiv, or a plain form to a sheet — whatever you can ship in an hour).
+- [DUE July 30th] Write the "why" statement: your reasons for building this, who it's for, the value. Lead with the competitor gap — they call it "E2E" while reading your mail to build profiles; yours decrypts only inside a hardware enclave. This is the core of the page.
+- [DUE July 30th] Write the transparency ledger as three columns: PROVEN TODAY (TEE inference, encryption at rest, open-source no-logging, TLS in transit) / LEGALLY PROMISED TODAY (EU-binding commitment not to log or alter the deployed code) / PROVABLE SOON (full end-to-end attestation of your own stack). This ledger is your real differentiator — nobody else is this honest about the line.
+- [DUE July 30th] Write your bio. Include the satellite/defense background — it is genuine credibility signal for this audience. Keep it factual, not boastful.
+- [DUE July 30th] Add a plain "this is a beta / pre-launch" statement. The page must not read as if the product is finished.
+- [DUE July 30th] HONESTY CHECK 1: copy says "we don't log," never "we can't log." Open source proves intent, not deployment, until your own stack is attested.
+- [DUE July 30th] HONESTY CHECK 2: copy says "TEE inference," never "fully attested end-to-end." The enclave covers the inference step, not your whole stack yet.
+- [DUE July 31st] Prepare a short, honest answer to the obvious hard question from a technical audience: "TEEs have been physically broken (TEE.fail, WireTap, 2025-2026 memory-bus attacks) — why trust one?" Your honest answer: TEE raises the bar enormously vs. plaintext-on-a-normal-server, it is defense-in-depth alongside encryption + legal binding + open source, and physical bus-interposition attacks require physical access to the datacenter hardware. Have this ready before you post anywhere technical.
+
+=== LAUNCH THE PAGE ===
+- [DUE July 31st] Publish the page. Test the email capture yourself first with a real submission.
+- [DUE July 31st] Link your open-source repo prominently from the page (the repo IS the proof for the no-logging claim).
+
+=== DIRECTORY SUBMISSIONS (pre-launch / waitlist tier first) ===
+Do these in one focused afternoon. Free tiers only. Each is a backlink + a discovery channel.
+- [DUE July 31st] BetaList (betalist.com) — the canonical pre-launch waitlist directory. Free tier, but review can take weeks, so submit FIRST so it's in the queue.
+- [DUE July 31st] Launching Next (launchingnext.com) — long-lived free directory listing, closest direct substitute to BetaList for pre-launch.
+- [DUE July 31st] StartupBase (startupbase.io) — Product-Hunt-style directory, every approved product gets a listing.
+- [DUE July 31st] Uneed (uneed.best) — founder-friendly, longer-term discoverability via daily newsletter.
+- [DUE July 31st] BetaPage (betapage.co) — closest cousin to BetaList, similar early-adopter audience.
+- [DUE August 1st] Peerlist Launchpad — weekly cadence, developer/maker audience; good fit for a technical privacy product.
+- [DUE August 1st] SaaSHub and AlternativeTo — list Letterlock as a privacy-first alternative to the mainstream AI email assistants; positions you directly against the "fake E2E" incumbents.
+- HOLD (do NOT do yet): Product Hunt and Hacker News "Show HN." These are 24-hour spikes for an already-live product and the HN audience is harsh on anything half-built. Save both for actual product launch, not the waitlist. [target: at real launch, not now]
+
+=== COMMUNITY OUTREACH = VALIDATION, NOT JUST PROMOTION ===
+In every one of these, listen for the threat model ("what are you actually afraid of happening to your data?") since you said you don't know your market well yet. The test: does the competitor-gap framing make people light up, or shrug? Stay non-salesy — for this audience, honesty IS the marketing.
+- [DUE July 31st] Message David. Ask specifically for names of other people to talk to about security. Get referrals, not just his opinion.
+- [DUE August 1st] Post to r/privacy (1.7M members) — share your story and the honest ledger, NOT a pitch. Read their self-promotion rules first; they ban salesy posts hard.
+- [DUE August 1st] Post to r/SideProject and r/SaaS "share your startup" threads — more forgiving than r/startups for a pre-launch MVP.
+- [DUE August 1st] Privacy Guides forum (discuss.privacyguides.net) — the largest personal-privacy community. Introduce the project honestly; this crowd will stress-test your claims, which is exactly the validation you want.
+- [DUE August 2nd] Phala Discord — your existing example; engage as a builder using TEE inference, ask about their attestation approach for your own-stack roadmap.
+- [DUE August 2nd] Oasis Network / Secret Network / confidential-computing (DeCC) communities — active TEE+privacy builder crowd; find them via their Discords and the monthly DeCC X Spaces. Good for both feedback and threat-model conversations.
+- [DUE August 2nd] r/netsec — technical, skeptical; only post here AFTER you've prepared the TEE-attack answer above. Great signal if this crowd takes the claim seriously.
+- [DUE August 3rd] Berlin in-person connections — reach out to set up coffee/calls this week. In-person threat-model conversations are the highest-signal validation you'll get.
+- [DUE August 3rd] Search for people complaining online about AI email tools reading their mail or about misleading "E2E" claims (r/privacy, X, Hacker News comments). Reply helpfully and share the page ONLY where genuinely relevant. Do not spam.
+
+=== OPTIONAL ===
+- [DUE August 3rd] Decide whether to stand up a Discord server. Only do it if you can seed it with your "why" and be present daily — an empty server reads worse than none.
+
+=== ONGOING DISCIPLINE ===
+- Every build day is also an outreach day.
+- Never round a claim up. The moment you're tempted to say "can't" instead of "don't," or "fully attested" instead of "TEE inference," stop. That precision is your entire edge over the incumbents.
