@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/email_summary
-ExecStart=/opt/email_summary/venv/bin/python -m backend.billing.billing_poller
-Environment=PATH=/opt/email_summary/venv/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/opt/letterlock
+ExecStart=/opt/letterlock/venv/bin/python -m backend.billing.billing_poller
+Environment=PATH=/opt/letterlock/venv/bin:/usr/local/bin:/usr/bin:/bin
 SyslogIdentifier=billing-poller

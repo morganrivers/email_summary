@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/email_summary
-ExecStart=/opt/email_summary/venv/bin/python -m backend.daemons.gmail_hook_server
+WorkingDirectory=/opt/letterlock
+ExecStart=/opt/letterlock/venv/bin/python -m backend.daemons.gmail_hook_server
 Restart=always
 RestartSec=3
 SyslogIdentifier=email-webhook

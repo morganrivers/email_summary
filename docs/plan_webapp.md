@@ -1,9 +1,9 @@
-# Knightdrafter web UI — plan (single-container design)
+# Letterlock web UI — plan (single-container design)
 
-Brand: **Knightdrafter**, domain `knightdrafter.com`. Wedge: privacy ("the
+Brand: **Letterlock**, domain `letterlock.ai`. Wedge: privacy ("the
 operator cannot read your mail").
 
-Move the entire Knightdrafter interface (onboarding, accounting, settings, voice DNA)
+Move the entire Letterlock interface (onboarding, accounting, settings, voice DNA)
 off email and into a **tiny server-rendered HTML web UI that lives inside the
 enclave container**, not a separate webapp.
 
@@ -14,8 +14,9 @@ Bot repo (the enclave): `~/Code/TEE_email_bot-worktree/voicedna`.
 This plan mostly adds code **to the bot repo**; `~/Code/mailbotwebsite` holds
 this plan and any scratch/mockups.
 
-Brand confirmed: **Knightdrafter** (`knightdrafter.com`). "mailbot", "Faraday",
-and "Fortress" all retired. Buy `nightdrafter.com` and redirect it.
+Brand confirmed: **Letterlock** (`letterlock.ai`). "mailbot", "Faraday",
+"Fortress", and "Knightdrafter" all retired. `letterlockai.com` redirects to
+`letterlock.ai`.
 
 ---
 
@@ -64,7 +65,7 @@ justification, so folding it into the enclave *removes* complexity:
       `layout()` wrapper (titlebar/nav/footer) + per-page bodies.
 - [ ] Static assets: serve one `app.css` (copied from frontdoor, rebranded) and
       nothing else. No JS bundle.
-- [ ] Systemd unit `deploy/hetzner/faraday-web.service`; add to `deploy.sh`
+- [ ] Systemd unit `deploy/hetzner/letterlock-web.service`; add to `deploy.sh`
       restart list. In the Nix/Phala image it's just another process in the
       container (add to the supervisor/entrypoint).
 
@@ -72,7 +73,7 @@ justification, so folding it into the enclave *removes* complexity:
 
 ## Track U2 — Retro theme (copy from frontdoor)
 
-- [ ] Copy `src/app.css` verbatim; rebrand "TLDR" to "Knightdrafter". Verdana 12px,
+- [ ] Copy `src/app.css` verbatim; rebrand "TLDR" to "Letterlock". Verdana 12px,
       #1a237e navy, #7722bb diamonds, gradient titlebar, `.form-row` /
       `.form-submit`.
 - [ ] Recreate `+layout.svelte`'s chrome as a static `layout()` HTML wrapper:
@@ -247,7 +248,7 @@ and displays status.
 
 ## Open items to confirm before build
 
-- Brand name resolved: **Knightdrafter** / `knightdrafter.com`.
+- Brand name resolved: **Letterlock** / `letterlock.ai`.
 - Exact minimal Gmail scope the bot requires (check `gmail_lib.mjs`) — minimize
   for CASA restricted-scope review.
 - Whether to add a tiny template helper vs plain string templates (dep vs

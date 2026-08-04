@@ -18,9 +18,9 @@ Rules carried over from the voice profile, applied to marketing register:
 
 ### 1a. Product name: settled
 
-The name is **Knightdrafter**, at `knightdrafter.com`. Buy `nightdrafter.com`
-alongside it and redirect, since the two are homophones and a competitor should
-not own the other spelling.
+The name is **Letterlock**, at `letterlock.ai`. `letterlockai.com` is held
+alongside it and redirects to `letterlock.ai`, so the obvious mistyping of the
+domain does not land on someone else.
 
 Both earlier candidates are dead, and for the same reason each time: the name
 was already occupied in this exact category.
@@ -33,20 +33,19 @@ was already occupied in this exact category.
   wrong anyway: a fortress keeps attackers out, while the differentiated claim
   is that the operator on the inside cannot look in.
 
-Two things to hold to, given "Knight" is the weaker half of the name:
+Two things to hold to, given "lock" is doing the security work in the name:
 
-- Keep the visual identity off knights, helms, shields, and armor. `inboxknight.com`
-  is an AI Gmail assistant using Knight across its pricing tiers, so the imagery
-  is the part that would create confusion. Its rights look thin (a waitlist since
-  2024, no shipped product, no registration found), but there is no reason to walk
-  toward it. Run TSDR and EUIPO before printing anything.
-- Armor connotes impenetrability, and the threat model has honest gaps (Scaleway
-  sees masked text, masking recall is not 100 percent, Google sees everything
-  regardless). Let the copy carry the security claim, qualified, rather than the
-  name. See the honesty ladder in section 2.
+- Keep the visual identity off padlocks, vaults, chains, and safes. Every
+  security product uses that imagery, so it identifies the category rather than
+  the product, and it invites the comparison to encrypted-mail vendors whose
+  claim is stronger than ours. Run TSDR and EUIPO before printing anything.
+- A lock connotes impenetrability, and the threat model has gaps that are stated
+  plainly (Scaleway sees masked text, masking recall is not 100 percent, Google
+  sees everything regardless). Let the copy carry the security claim, qualified,
+  rather than the name. See the honesty ladder in section 2.
 
-Known cost, accepted: the silent K has to be spelled out every time the domain is
-said aloud, which is a real tax on an email product.
+Known cost, accepted: `.ai` is not the default guess for a domain, so the TLD
+has to be said explicitly every time the name is spoken.
 
 ### 1b. Gmail in the tagline
 
@@ -110,7 +109,7 @@ Always ship these with the boundary in the same sentence.
 
 Suggested replacement for the front-page superlative:
 
-> Knightdrafter is open-source agentic email that runs where the operator cannot look.
+> Letterlock is open-source agentic email that runs where the operator cannot look.
 
 That is defensible today. "Never leaks" is not.
 
@@ -145,7 +144,7 @@ of the marketing claim is one component ahead of the build.
   isolation is a property of your code, and attestation says nothing about
   whether your code is correct. This deserves a paragraph on the About page,
   because a security-literate reader will ask.
-- Google sees everything anyway. The honest framing is "Knightdrafter adds no new
+- Google sees everything anyway. The honest framing is "Letterlock adds no new
   party who can read your mail", not "your mail is private". The former is
   true and still valuable. The latter invites a dunk.
 
@@ -170,7 +169,7 @@ specific one.
 
 **One line (bylines, launch sites, forum signatures):**
 
-> Morgan Rivers builds Knightdrafter. Previously an electro-optic engineer on
+> Morgan Rivers builds Letterlock. Previously an electro-optic engineer on
 > satellite systems, and a researcher on critical-infrastructure resilience
 > at ALLFED.
 
@@ -199,7 +198,7 @@ specific one.
 > that looks efficient in normal times is the thing that turns a local
 > failure into a general one.
 >
-> Knightdrafter is the same argument applied to email.
+> Letterlock is the same argument applied to email.
 
 The last line is the reason the bio belongs on the site at all. The physics
 credential is not the point. The infrastructure-fragility credential is the
@@ -211,13 +210,13 @@ point, because it explains why you specifically noticed this problem.
 
 **Ten seconds:**
 
-> Knightdrafter is an open-source AI assistant for Gmail that runs inside a hardware
+> Letterlock is an open-source AI assistant for Gmail that runs inside a hardware
 > enclave, so I cannot read your email even if I wanted to.
 
 **Thirty seconds:**
 
 > Every AI email assistant today asks you to trust a company's privacy policy.
-> Knightdrafter replaces that with a hardware proof. It runs inside an Intel TDX
+> Letterlock replaces that with a hardware proof. It runs inside an Intel TDX
 > enclave, which produces a signed report saying exactly which code is running,
 > and the code is public so you can check the hash yourself. It drafts replies,
 > checks your calendar, and summarises your inbox. It never sends anything
@@ -236,7 +235,7 @@ point, because it explains why you specifically noticed this problem.
 > silos was, and the models good enough to be useful are also good enough to be
 > used offensively.
 >
-> Knightdrafter is the same product built so that the operator is not a trusted
+> Letterlock is the same product built so that the operator is not a trusted
 > party. It runs in a hardware enclave that proves which code it is executing,
 > the code is open source, and personal identifiers are stripped before
 > anything reaches a model. It works with Gmail, it drafts but never sends, and
@@ -251,7 +250,7 @@ diagnosis in the middle is the strongest thing you have written so far, so it
 should stay near the top rather than being buried under features.
 
 ```
-Knightdrafter is agentic email that the operator cannot read.
+Letterlock is agentic email that the operator cannot read.
 
 Open source. Runs in a hardware enclave. Works with Gmail.
 
@@ -272,7 +271,7 @@ more effective.
 
 The fix is not to hide the code.
 
-Knightdrafter runs inside an Intel TDX enclave, a region of the processor that the
+Letterlock runs inside an Intel TDX enclave, a region of the processor that the
 host operating system, the cloud provider, and I cannot inspect. At boot the
 enclave signs a report naming the exact code it is running. The source is
 public and the build is reproducible, so you can rebuild it and check that the
@@ -313,7 +312,7 @@ offers from a solo pre-launch product read as either desperate or dishonest.
 **Page:**
 
 ```
-Knightdrafter is not open yet.
+Letterlock is not open yet.
 
 I am building an AI assistant for Gmail that runs inside a hardware enclave,
 so that the person operating it (me) cannot read your mail. The code is open
@@ -366,7 +365,7 @@ Recommended: the third. It is specific to you, and nobody else can write it.
    acquirable, and subpoenable. Code that is attested is none of those.
 5. Why the answer is not secrecy. Closed source means the claim reduces to
    trusting the operator, which is exactly the thing being replaced.
-6. What Knightdrafter actually is, and what it is not yet. Include the Scaleway gap
+6. What Letterlock actually is, and what it is not yet. Include the Scaleway gap
    here. Ending a manifesto on an admitted limitation is unusual and is the
    most persuasive move available to you.
 7. One line asking for the waitlist. One line only.
@@ -541,13 +540,13 @@ Show HN, awesome-selfhosted, r/SideProject.
 
 **Short description, ~200 characters:**
 
-> Knightdrafter drafts your Gmail replies, handles scheduling, and summarises your
+> Letterlock drafts your Gmail replies, handles scheduling, and summarises your
 > inbox. It runs inside an Intel TDX enclave and publishes an attestation of
 > the exact open-source code it is executing.
 
 **Show HN title:**
 
-> Show HN: Knightdrafter, an open-source Gmail assistant running in a TDX enclave
+> Show HN: Letterlock, an open-source Gmail assistant running in a TDX enclave
 
 Show HN body should lead with architecture, not benefits, and should include
 the Scaleway limitation in the first three paragraphs. That crowd will find it

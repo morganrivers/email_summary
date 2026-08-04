@@ -1,0 +1,23 @@
+[Unit]
+Description=Letterlock web UI (Caddy -> 127.0.0.1:8790)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/letterlock
+ExecStart=/opt/letterlock/venv/bin/python -m frontend.web_server
+Restart=always
+RestartSec=5
+# No EnvironmentFile: the app reads .env itself through load_dotenv, and
+# systemd's parser is stricter than python-dotenv's (no `export`, different
+# quoting), so a single line it disliked took this unit down while every other
+# service read the same file happily. PATH matches the other units because the
+# OAuth flow shells out to node.
+Environment=PATH=/opt/letterlock/venv/bin:/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=letterlock-web
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

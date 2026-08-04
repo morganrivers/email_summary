@@ -13,18 +13,23 @@ import http.cookies
 import os
 import time
 
-SESSION_COOKIE = "knightdrafter_session"
+SESSION_COOKIE = "letterlock_session"
 SESSION_TTL = 86400 * 30
 
 _secret = None
 
 
+def secret_configured():
+    """Whether a session secret is available. The deploy preflight calls this so
+    it and the running server agree on what 'configured' means."""
+    return bool(os.environ.get("SESSION_SECRET", ""))
+
+
 def _get_secret():
     global _secret
     if _secret is None:
-        s = os.environ.get("SESSION_SECRET", "")
-        assert s, "SESSION_SECRET must be set"
-        _secret = s.encode()
+        assert secret_configured(), "SESSION_SECRET must be set"
+        _secret = os.environ["SESSION_SECRET"].encode()
     return _secret
 
 

@@ -4,6 +4,19 @@ Every module resolves shared paths through here instead of its own
 ``Path(__file__).parent``, so relocating code between packages never breaks the
 location of ``.env``, the Node bridge scripts, the account store, or runtime
 scratch (the wake FIFO and lock files).
+
+Layout under the app root (``/opt/letterlock`` on the box):
+
+    backend/ frontend/ deploy/   code, and the only thing deploy.sh writes
+    .env  .gmail-mcp/            secrets, at the top
+    state/                       mutable runtime scratch, one directory
+    database/                    account store
+    config/                      operator-supplied prompts, synced from
+                                 ~/.system_files by deploy.sh
+
+Runtime scratch is grouped under ``state/`` rather than dropped beside the
+source: a deploy can then reason about "code" and "not code" by directory
+instead of by filename.
 """
 
 from pathlib import Path
@@ -13,8 +26,14 @@ BACKEND_DIR = REPO_ROOT / "backend"
 
 ENV_FILE = REPO_ROOT / ".env"
 GMAIL_GCAL_DIR = BACKEND_DIR / "integrations" / "gmail_gcal"
+STATIC_DIR = REPO_ROOT / "frontend" / "static"
 DATABASE_DIR = REPO_ROOT / "database"
-RUN_DIR = REPO_ROOT
+RUN_DIR = REPO_ROOT / "state"
+CONFIG_DIR = REPO_ROOT / "config"
+
+# Where these files lived before the app got its own config directory. A dev
+# checkout still reads them from here, so only the box needs config/ populated.
+LEGACY_CONFIG_DIR = Path.home() / ".system_files"
 
 
 def node_script(name):
@@ -22,3 +41,19 @@ def node_script(name):
     path = GMAIL_GCAL_DIR / name
     assert path.suffix == ".mjs", f"node_script expects a .mjs file, got {name!r}"
     return path
+
+
+def config_file(name):
+    """Operator-supplied config (the summary prompt, the voice profile). Prefers
+    the deployed copy under config/ and falls back to ~/.system_files, so the
+    same code path serves the box and a laptop checkout."""
+    deployed = CONFIG_DIR / name
+    return deployed if deployed.exists() else LEGACY_CONFIG_DIR / name
+
+
+def ensure_run_dir():
+    """Create the runtime scratch directory on first write. Called by the things
+    that write into it rather than at import, so importing a module never has a
+    filesystem side effect."""
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    return RUN_DIR

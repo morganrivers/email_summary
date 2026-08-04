@@ -5,11 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/email_summary
-ExecStart=/opt/email_summary/venv/bin/python -m backend.daemons.daemon_loop
+WorkingDirectory=/opt/letterlock
+ExecStart=/opt/letterlock/venv/bin/python -m backend.daemons.daemon_loop
 Restart=always
 RestartSec=3
-Environment=PATH=/opt/email_summary/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/opt/letterlock/venv/bin:/usr/local/bin:/usr/bin:/bin
 SyslogIdentifier=email-daemon
 
 [Install]

@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/email_summary
-ExecStart=/opt/email_summary/venv/bin/python -m backend.onboarding.watch_renew
-Environment=GMAIL_MCP_DIR=/opt/email_summary/.gmail-mcp
-Environment=PATH=/opt/email_summary/venv/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/opt/letterlock
+ExecStart=/opt/letterlock/venv/bin/python -m backend.onboarding.watch_renew
+Environment=GMAIL_MCP_DIR=/opt/letterlock/.gmail-mcp
+Environment=PATH=/opt/letterlock/venv/bin:/usr/local/bin:/usr/bin:/bin
 SyslogIdentifier=gmail-watch
