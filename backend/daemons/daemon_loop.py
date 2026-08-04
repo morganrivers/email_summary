@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Always-on email-drafter daemon.
 
-Blocks on a FIFO for wake signals from gmail-hook.php. On wake, fetches new
-emails via state.lastHistoryId and runs them through manual_draft / draft_replies.
+Blocks on a FIFO for wake signals from gmail_hook_server. On wake, fetches new
+emails via state.lastHistoryId and runs them through manual_draft /
+draft_replies.
 
-Runs as morganrivers (NFSN daemon), so no permission hacks. The webhook PHP
-(running as 'web') only opens the FIFO for write and writes one byte — that
-unblocks our read and we process the delta.
+The webhook runs as the same user under systemd, so the FIFO is 0600. It was
+0666 back when the webhook was PHP running as a different user; leaving it world
+-writable now just lets any local account wake the daemon.
 
 A re-wake during processing is fine: the webhook spools the account id to
 wake_queue before poking the FIFO, and the read end stays open for the whole
@@ -44,12 +45,13 @@ def log(msg):
 
 
 def ensure_fifo():
+    paths.ensure_run_dir()
     if FIFO_PATH.exists():
         if not stat.S_ISFIFO(FIFO_PATH.stat().st_mode):
             FIFO_PATH.unlink()
     if not FIFO_PATH.exists():
-        os.mkfifo(str(FIFO_PATH), 0o666)
-    os.chmod(str(FIFO_PATH), 0o666)
+        os.mkfifo(str(FIFO_PATH), 0o600)
+    os.chmod(str(FIFO_PATH), 0o600)
 
 
 def _run_account(acct):

@@ -20,10 +20,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from standardwebhooks import Webhook
 
-from backend.billing.billing import PolarBilling, log, select_env
+from backend import site
+from backend.billing.billing import PolarBilling, log, webhook_secret
 
-WEBHOOK_PATH = "/polar/webhook"
+WEBHOOK_PATH = site.POLAR_WEBHOOK_PATH
 _SIG_HEADERS = ("webhook-id", "webhook-timestamp", "webhook-signature")
+
+# A Polar event payload is small; the endpoint is public and unauthenticated
+# until the signature check, so the declared length is bounded before the read.
+MAX_BODY = 256 * 1024
 
 
 def process_webhook(raw, headers, verifier, billing):
@@ -73,7 +78,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") != WEBHOOK_PATH:
             return self._reply(404, '{"error":"not found"}')
 
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._reply(400, '{"error":"bad content-length"}')
+        if length < 0 or length > MAX_BODY:
+            return self._reply(413, '{"error":"body too large"}')
         raw = self.rfile.read(length) if length else b""
 
         headers = {h: self.headers.get(h, "") for h in _SIG_HEADERS}
@@ -84,12 +94,12 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     Handler.billing = PolarBilling()
     Handler.billing.log_startup("billing-webhook")
-    secret = select_env("POLAR_WEBHOOK_SECRET", Handler.billing.sandbox)
+    secret = webhook_secret()
     assert secret, "POLAR_WEBHOOK_SECRET required"
     Handler.verifier = Webhook(base64.b64encode(secret.encode("utf-8")).decode("utf-8"))
 
     host = os.environ.get("BILLING_WEBHOOK_HOST", "127.0.0.1")
-    port = int(os.environ.get("BILLING_WEBHOOK_PORT", "8788"))
+    port = int(os.environ.get("BILLING_WEBHOOK_PORT", str(site.BILLING_WEBHOOK_PORT)))
     server = ThreadingHTTPServer((host, port), Handler)
     log(f"billing-webhook listening on {host}:{port}{WEBHOOK_PATH}")
     server.serve_forever()

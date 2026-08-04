@@ -22,7 +22,11 @@ THINKING = {"type": "enabled"}
 # caller sends (40 emails) rather than the typical one.
 JSON_MAX_TOKENS = 16000
 
-LANGSMITH_ENABLED = True
+# Off unless deliberately switched on. Tracing ships every prompt and tool
+# result to a third-party observability service, which is a claim the product
+# pages do not make; an API key happening to be present in the environment is
+# not consent to send other people's mail there.
+LANGSMITH_ENABLED = os.environ.get("LANGSMITH_TRACING", "0") == "1"
 
 
 def make_client(api_key):

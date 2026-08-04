@@ -5,25 +5,20 @@
 
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
-import path from 'path';
 import fs from 'fs';
-import os from 'os';
 import readline from 'readline';
 
-import { SCOPES, CONFIG_DIR, OAUTH_PATH, CREDENTIALS_PATH } from './gmail_lib.mjs';
+import {
+    SCOPES, CONFIG_DIR, CREDENTIALS_PATH, OAUTH_REDIRECT_URI, loadOAuthKeys,
+} from './gmail_lib.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const requireBase = os.userInfo().username === 'dmrivers'
-    ? path.join(os.homedir(), 'gmail-mcp-server', 'package.json')
-    : fileURLToPath(import.meta.url);
-const require = createRequire(requireBase);
+const require = createRequire(fileURLToPath(import.meta.url));
 
 const { OAuth2Client } = require('google-auth-library');
 
 async function manualAuth() {
-    const keys = JSON.parse(fs.readFileSync(OAUTH_PATH, 'utf8'));
-    const k = keys.installed || keys.web;
-    const client = new OAuth2Client(k.client_id, k.client_secret, 'http://localhost:3000/oauth2callback');
+    const k = loadOAuthKeys();
+    const client = new OAuth2Client(k.client_id, k.client_secret, OAUTH_REDIRECT_URI);
 
     const authUrl = client.generateAuthUrl({
         access_type: 'offline',
@@ -56,10 +51,10 @@ async function manualAuth() {
             const { tokens } = await client.getToken(code);
 
             if (!fs.existsSync(CONFIG_DIR)) {
-                fs.mkdirSync(CONFIG_DIR, { recursive: true });
+                fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
             }
 
-            fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(tokens, null, 2));
+            fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(tokens, null, 2), { mode: 0o600 });
             console.log('\n✓ Success! Credentials saved to:', CREDENTIALS_PATH);
             console.log('\nYou can now run email_summary.py');
 

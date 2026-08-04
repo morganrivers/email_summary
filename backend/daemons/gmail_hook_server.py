@@ -6,7 +6,15 @@ hostname and reverse-proxies to this listener on 127.0.0.1:WEBHOOK_PORT.
 
 Google Pub/Sub attaches an OIDC bearer JWT to every push. We verify it via
 Google's tokeninfo endpoint (no local crypto), enforcing issuer, audience,
-the pushing service account, and expiry. We then decode the message body
+the pushing service account, and expiry.
+
+The endpoint is public, so the claims are screened locally before that network
+call: anything whose payload does not already carry the right issuer, audience,
+service account, and an unexpired exp is rejected without touching Google. Only
+a token that could plausibly be genuine costs a request, which is what stops an
+anonymous flood from turning into an outbound flood and getting us throttled
+(and the real pushes rejected with it). Verified tokens are cached until they
+expire so Pub/Sub's own retries cost nothing either. We then decode the message body
 ({emailAddress, historyId}), resolve emailAddress to a registered account via
 account.get_account, enqueue that account id on the wake spool, and poke the
 FIFO so the daemon processes only that user's mailbox. The historyId is not
@@ -28,6 +36,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from backend import paths
+from backend import site
 from backend.accounts import account
 from backend.daemons import wake_queue
 
@@ -35,15 +44,19 @@ load_dotenv(paths.ENV_FILE)
 
 FIFO_PATH = paths.RUN_DIR / "wake.fifo"
 HOST = os.environ.get("WEBHOOK_HOST", "127.0.0.1")
-PORT = int(os.environ.get("WEBHOOK_PORT", "8787"))
+PORT = int(os.environ.get("WEBHOOK_PORT", str(site.GMAIL_PUSH_PORT)))
 
-EXPECTED_AUD = os.environ.get("WEBHOOK_AUD", "https://hezner.morganrivers.com/")
+EXPECTED_AUD = os.environ.get("WEBHOOK_AUD", site.pubsub_audience())
 EXPECTED_ISSUERS = frozenset({"https://accounts.google.com", "accounts.google.com"})
 PUBSUB_SERVICE_ACCOUNT = os.environ.get(
     "PUBSUB_SERVICE_ACCOUNT",
     "pubsub-pusher-coastal-mender-4@coastal-mender-462719-q3.iam.gserviceaccount.com",
 )
 TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo?id_token="
+
+# A Pub/Sub push envelope is a few kilobytes. Reading an attacker-declared
+# Content-Length unbounded is a free way to make us allocate.
+MAX_BODY = 256 * 1024
 
 
 def log(msg):
@@ -58,7 +71,71 @@ class HookError(Exception):
         self.msg = msg
 
 
+# jwt -> exp, for tokens tokeninfo has already vouched for. Pub/Sub retries the
+# same token on any non-2xx, and a token is good for an hour.
+_VERIFIED = {}
+_VERIFIED_MAX = 512
+
+
+def check_claims(claims):
+    """Every claim rule, in one place, so the local screen and the verified
+    response are judged identically. Returns None or the reason to reject."""
+    if not isinstance(claims, dict) or "error" in claims:
+        return "malformed claims"
+    if claims.get("iss") not in EXPECTED_ISSUERS:
+        return f"bad iss: {claims.get('iss')}"
+    if claims.get("aud") != EXPECTED_AUD:
+        return f"bad aud: {claims.get('aud')}"
+    if claims.get("email") != PUBSUB_SERVICE_ACCOUNT:
+        return f"bad email: {claims.get('email')}"
+    if str(claims.get("email_verified")).lower() != "true":
+        return "email not verified"
+    try:
+        exp = int(claims.get("exp", 0))
+    except (TypeError, ValueError):
+        return "bad exp"
+    if exp < time.time():
+        return "token expired"
+    return None
+
+
+def peek_claims(jwt):
+    """The JWT's payload without verifying its signature. Only ever used to
+    reject early: a forged payload still has to survive tokeninfo afterwards."""
+    parts = jwt.split(".")
+    if len(parts) != 3:
+        return None
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(payload).decode())
+    except Exception:
+        return None
+
+
+def _cache_verified(jwt, claims):
+    if len(_VERIFIED) >= _VERIFIED_MAX:
+        now = time.time()
+        for token, exp in list(_VERIFIED.items()):
+            if exp < now:
+                del _VERIFIED[token]
+        if len(_VERIFIED) >= _VERIFIED_MAX:
+            _VERIFIED.clear()
+    _VERIFIED[jwt] = int(claims.get("exp", 0))
+
+
 def verify_jwt(jwt):
+    cached_exp = _VERIFIED.get(jwt)
+    if cached_exp is not None:
+        if cached_exp > time.time():
+            return {"cached": True}
+        del _VERIFIED[jwt]
+
+    # Cheap screen first: no network for anything that cannot be genuine.
+    reason = check_claims(peek_claims(jwt))
+    if reason is not None:
+        raise HookError(401, f"rejected before tokeninfo ({reason})")
+
     url = TOKENINFO_URL + urllib.parse.quote(jwt, safe="")
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
@@ -67,18 +144,10 @@ def verify_jwt(jwt):
         raise HookError(401, f"tokeninfo rejected JWT: {err.code}")
     except Exception as err:
         raise HookError(503, f"tokeninfo network failure: {err}")
-    if not isinstance(claims, dict) or "error" in claims:
-        raise HookError(401, "tokeninfo rejected JWT")
-    if claims.get("iss") not in EXPECTED_ISSUERS:
-        raise HookError(401, f"bad iss: {claims.get('iss')}")
-    if claims.get("aud") != EXPECTED_AUD:
-        raise HookError(401, f"bad aud: {claims.get('aud')}")
-    if claims.get("email") != PUBSUB_SERVICE_ACCOUNT:
-        raise HookError(401, f"bad email: {claims.get('email')}")
-    if str(claims.get("email_verified")).lower() != "true":
-        raise HookError(401, "email not verified")
-    if int(claims.get("exp", 0)) < time.time():
-        raise HookError(401, "token expired")
+    reason = check_claims(claims)
+    if reason is not None:
+        raise HookError(401, reason)
+    _cache_verified(jwt, claims)
     return claims
 
 
@@ -137,7 +206,12 @@ class Handler(BaseHTTPRequestHandler):
             verify_jwt(jwt)
         except HookError as err:
             return self._reject(err.code, err.msg)
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            return self._reject(400, "bad Content-Length")
+        if length < 0 or length > MAX_BODY:
+            return self._reject(413, f"body too large ({length} bytes)")
         body = self.rfile.read(length) if length else b""
         log("OK verified, routing push")
         route_push(body)

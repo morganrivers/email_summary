@@ -5,38 +5,41 @@ import fs from 'fs';
 import http from 'http';
 import os from 'os';
 
-const requireBase = os.userInfo().username === 'dmrivers'
-    ? path.join(os.homedir(), 'gmail-mcp-server', 'package.json')
-    : fileURLToPath(import.meta.url);
-const require = createRequire(requireBase);
+const require = createRequire(fileURLToPath(import.meta.url));
 
 const { OAuth2Client } = require('google-auth-library');
 const { google } = require('googleapis');
-const open = require('open');
 
 export const CONFIG_DIR = process.env.GMAIL_MCP_DIR || path.join(os.homedir(), '.gmail-mcp');
 export const OAUTH_PATH = path.join(CONFIG_DIR, 'gcp-oauth.keys.json');
 export const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'credentials.json');
 
-// Shared OAuth app keys (client_id/secret) for the hosted onboarding flow.
-// GMAIL_OAUTH_KEYS points at one app's keys used for every user's consent;
-// falls back to the per-account OAUTH_PATH so the single-tenant box is unchanged.
-export const OAUTH_KEYS_PATH = process.env.GMAIL_OAUTH_KEYS || OAUTH_PATH;
+// One OAuth app serves every user, so its client_secret lives in exactly one
+// file. It used to be copied into each account's creds directory, which turned
+// a single leaked user directory into a leak of the whole app.
+// Order: explicit env, then the box-level keys beside the app, then (for a
+// single-tenant checkout with no box-level copy) the account's own directory.
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const SHARED_KEYS = path.join(APP_ROOT, '.gmail-mcp', 'gcp-oauth.keys.json');
+export const OAUTH_KEYS_PATH = process.env.GMAIL_OAUTH_KEYS
+    || (fs.existsSync(SHARED_KEYS) ? SHARED_KEYS : OAUTH_PATH);
 
 // Public redirect URI Google sends the consent code back to. The hosted web
 // flow registers this exact value; the localhost default is the loopback used
-// by the CLI browserAuth re-auth path.
+// by the manual_auth CLI.
 export const OAUTH_REDIRECT_URI = process.env.GMAIL_OAUTH_REDIRECT_URI
     || 'http://localhost:3000/oauth2callback';
 
 // openid/email/profile grant the login identity (name + email) alongside the
 // Gmail/Calendar scopes, so one consent yields both the account and the token.
+// Ask for nothing beyond what the code calls: gmail.settings.basic was
+// requested and never used, and an unused scope is only ever a bigger loss when
+// a token leaks.
 export const SCOPES = [
     'openid',
     'email',
     'profile',
     'https://www.googleapis.com/auth/gmail.modify',
-    'https://www.googleapis.com/auth/gmail.settings.basic',
     'https://www.googleapis.com/auth/calendar.events',
 ];
 
@@ -76,16 +79,32 @@ export function extractText(part) {
 }
 
 export async function loadClient() {
-    const keys = JSON.parse(fs.readFileSync(OAUTH_PATH, 'utf8'));
-    const k = keys.installed || keys.web;
-    const client = new OAuth2Client(k.client_id, k.client_secret, 'http://localhost:3000/oauth2callback');
+    const k = loadOAuthKeys();
+    const client = new OAuth2Client(k.client_id, k.client_secret, OAUTH_REDIRECT_URI);
     if (fs.existsSync(CREDENTIALS_PATH)) {
         client.setCredentials(JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8')));
     }
     return client;
 }
 
+// Opening a browser is only ever right on a laptop. On the server it bound
+// :3000 and waited forever for a callback that could not arrive, so one user
+// with a revoked grant burned every subprocess timeout and collided with any
+// other account doing the same. manual_auth.mjs sets this deliberately.
+const INTERACTIVE_AUTH = process.env.GMAIL_INTERACTIVE_AUTH === '1';
+
+export class ReauthRequired extends Error {
+    constructor(credsDir) {
+        super(`Gmail credentials at ${credsDir} are no longer valid; the account must re-consent`);
+        this.name = 'ReauthRequired';
+        this.credsDir = credsDir;
+    }
+}
+
 async function browserAuth(client) {
+    // Imported here rather than at module load: `open` is only reachable on the
+    // interactive path, and every server-side script imports this file.
+    const { default: open } = await import('open');
     const server = http.createServer();
     server.listen(3000);
     return new Promise((resolve, reject) => {
@@ -96,7 +115,7 @@ async function browserAuth(client) {
         });
         log('Tokens expired. Opening browser for re-auth...');
         log('Auth URL: ' + authUrl);
-        open.default(authUrl).catch(() => log('Could not open browser automatically — visit the URL above.'));
+        open(authUrl).catch(() => log('Could not open browser automatically; visit the URL above.'));
         server.on('request', async (req, res) => {
             if (!req.url?.startsWith('/oauth2callback')) return;
             const url = new URL(req.url, 'http://localhost:3000');
@@ -105,7 +124,7 @@ async function browserAuth(client) {
             try {
                 const { tokens } = await client.getToken(code);
                 client.setCredentials(tokens);
-                fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(tokens, null, 2));
+                fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(tokens, null, 2), { mode: 0o600 });
                 res.writeHead(200);
                 res.end('Authenticated! You can close this window.');
                 server.close();
@@ -119,16 +138,21 @@ async function browserAuth(client) {
     });
 }
 
+function isAuthFailure(err) {
+    return err.code === 401
+        || err.message?.includes('invalid_grant')
+        || err.message?.includes('Token has been expired')
+        || err.message?.includes('No access, refresh token');
+}
+
 export async function ensureAuth(client) {
     try {
         const gmail = google.gmail({ version: 'v1', auth: client });
         await gmail.users.getProfile({ userId: 'me' });
     } catch (err) {
-        if (err.code === 401 || err.message?.includes('invalid_grant') || err.message?.includes('Token has been expired')) {
-            await browserAuth(client);
-        } else {
-            throw err;
-        }
+        if (!isAuthFailure(err)) throw err;
+        if (!INTERACTIVE_AUTH) throw new ReauthRequired(CONFIG_DIR);
+        await browserAuth(client);
     }
 }
 

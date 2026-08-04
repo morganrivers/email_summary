@@ -24,6 +24,7 @@ LOCK_FILE = paths.RUN_DIR / "wake_queue.lock"
 
 def enqueue(account_id):
     assert account_id, "cannot enqueue an empty account id"
+    paths.ensure_run_dir()
     with open(LOCK_FILE, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         with open(QUEUE_FILE, "a") as qf:
@@ -32,6 +33,7 @@ def enqueue(account_id):
 
 def drain():
     """Return the deduped list of queued account ids and clear the spool."""
+    paths.ensure_run_dir()
     with open(LOCK_FILE, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         if not QUEUE_FILE.exists():

@@ -63,6 +63,14 @@ def checkout_url(email, fallback="/dashboard"):
     return f"{base}{sep}customer_email={urllib.parse.quote(email)}"
 
 
+def webhook_secret():
+    """The Polar webhook signing secret for the active environment. Read through
+    the same suffix switch as the API token, so the verifier and the API client
+    can never end up on opposite sides of the sandbox toggle. The webhook service
+    and the deploy preflight both call this."""
+    return select_env("POLAR_WEBHOOK_SECRET", sandbox_enabled())
+
+
 def subscription_entitled(status):
     """The one rule for 'this subscription grants access', shared by the webhook
     and the poller. Entitled while active or trialing; past_due / canceled /
