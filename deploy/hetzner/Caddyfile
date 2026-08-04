@@ -3,8 +3,8 @@
 #   python -m deploy.render_caddyfile > deploy/hetzner/Caddyfile
 
 hezner.morganrivers.com {
-	handle /polar/webhook {
-		reverse_proxy 127.0.0.1:8788
+	handle /letterlock/polar/webhook {
+		reverse_proxy 127.0.0.1:8789
 	}
 	# The catch-all keeps the Gmail Pub/Sub push (POST /) on the webhook. Serving
 	# a landing page from this site root would require repointing the push
@@ -15,8 +15,8 @@ hezner.morganrivers.com {
 }
 
 letterlock.morganrivers.com {
-	handle /polar/webhook {
-		reverse_proxy 127.0.0.1:8788
+	handle /letterlock/polar/webhook {
+		reverse_proxy 127.0.0.1:8789
 	}
 	handle {
 		reverse_proxy 127.0.0.1:8790

@@ -36,12 +36,27 @@ ALIAS_HOSTS = tuple(
 )
 
 # Loopback ports each service binds. Caddy is the only thing in front of them.
+# 8788 is deliberately skipped: another product on this box (the Kitchen Search
+# license signer, /opt/ks_signer) has bound it since long before Letterlock, and
+# taking it made billing-webhook crash-loop on EADDRINUSE with no entitlement
+# ever reaching an account.
 GMAIL_PUSH_PORT = 8787
-BILLING_WEBHOOK_PORT = 8788
+BILLING_WEBHOOK_PORT = 8789
 WEB_PORT = 8790
 
 OAUTH_CALLBACK_PATH = "/auth/callback"
-POLAR_WEBHOOK_PATH = "/polar/webhook"
+
+# Namespaced for the same reason as the port. The other product's signer serves
+# the bare /polar/webhook on this host, and both products sell from one Polar
+# organization, so an unqualified path means whichever service Caddy happens to
+# route wins and the other silently never hears about a payment. Changing this
+# means re-registering the endpoint in the Polar dashboard.
+POLAR_WEBHOOK_PATH = "/letterlock/polar/webhook"
+
+# Where Polar returns a buyer after a successful checkout. Without a success URL
+# the hosted checkout ends on Polar's own receipt page and the buyer never comes
+# back, which is what it did.
+CHECKOUT_RETURN_PATH = "/billing/return"
 
 
 def _url(host, path):
@@ -67,6 +82,13 @@ def polar_webhook_url():
     """Endpoint to register in the Polar dashboard. Caddy routes this path on
     both hosts, so either works; API_HOST is the one with DNS today."""
     return api_url(POLAR_WEBHOOK_PATH)
+
+
+def checkout_success_url():
+    """Where Polar sends the buyer after payment. `{CHECKOUT_ID}` is interpolated
+    by Polar, so the return handler can read the checkout back and link the
+    customer without waiting for the webhook."""
+    return app_url(f"{CHECKOUT_RETURN_PATH}?checkout_id={{CHECKOUT_ID}}")
 
 
 def pubsub_audience():

@@ -22,6 +22,7 @@ import urllib.parse
 from dotenv import load_dotenv
 
 from backend import paths
+from backend import site
 from backend.accounts import account
 from backend.billing import polar_api
 
@@ -51,16 +52,49 @@ def sandbox_enabled():
     return os.environ.get("POLAR_SANDBOX", "0") == "1"
 
 
-def checkout_url(email, fallback="/dashboard"):
-    """Polar-hosted checkout link prefilled with the signed-in user's address.
-    Sandbox and production checkouts live on different domains, so this reads
-    through the same suffix switch as the credentials. Shared by the web app and
-    the onboarding flow; both used to carry their own copy of this."""
+def product_id():
+    """The Polar product being sold, for API-minted checkouts. Optional: without
+    it we fall back to a static dashboard checkout link."""
+    return select_env("POLAR_PRODUCT_ID", sandbox_enabled())
+
+
+def _static_checkout_url(email, fallback):
+    """A checkout link created in the Polar dashboard, prefilled with the buyer's
+    address. Where the buyer lands after paying is a field on the link, so this
+    path cannot guarantee they come back to us."""
     base = select_env("POLAR_CHECKOUT_URL", sandbox_enabled())
     if not base:
         return fallback
     sep = "&" if "?" in base else "?"
     return f"{base}{sep}customer_email={urllib.parse.quote(email)}"
+
+
+def checkout_url(email, fallback="/dashboard"):
+    """Where to send a user to pay. Shared by the web app and the onboarding
+    flow; both used to carry their own copy of this.
+
+    Prefers a checkout session minted through the API, because that carries
+    site.checkout_success_url() and so brings the buyer back to us afterwards. A
+    static dashboard link ends on Polar's own receipt page unless someone
+    remembers to fill in a success-URL field, which is exactly how a paid buyer
+    got stranded there. Falls back to the static link when no product id is
+    configured or the API call fails: a checkout the user can complete beats no
+    checkout at all, even without the return trip."""
+    pid = product_id()
+    if not pid:
+        return _static_checkout_url(email, fallback)
+    try:
+        token = select_env("POLAR_API_TOKEN", sandbox_enabled())
+        status, body = polar_api.create_checkout(
+            pid, site.checkout_success_url(), email, token,
+        )
+    except AssertionError as err:
+        log(f"checkout session unavailable ({err}); using the static link")
+        return _static_checkout_url(email, fallback)
+    if status not in (200, 201) or not isinstance(body, dict) or not body.get("url"):
+        log(f"create_checkout failed: {status} {body}; using the static link")
+        return _static_checkout_url(email, fallback)
+    return body["url"]
 
 
 def webhook_secret():
@@ -156,6 +190,35 @@ class PolarBilling:
         if acct is None:
             return f"no local account for event type={etype}"
         return self._apply(acct, target)
+
+    # A checkout Polar considers finished. `confirmed` is the moment payment
+    # succeeded; `succeeded` is the terminal state once the order is written.
+    PAID_CHECKOUT_STATUSES = frozenset({"confirmed", "succeeded"})
+
+    def confirm_checkout(self, checkout_id, acct):
+        """Settle entitlement for the buyer who just came back from checkout, and
+        link their Polar customer to the account.
+
+        This does not replace the webhook; it removes the dependency on it for the
+        one case the user is watching. The buyer is signed in and standing in front
+        of us, so asking Polar directly whether that checkout was paid is both
+        faster and immune to a webhook that is misrouted, unregistered, or
+        retrying. Returns (paid, detail).
+        """
+        assert acct is not None, "confirm_checkout needs the signed-in account"
+        if not checkout_id:
+            return False, "no checkout id on the return"
+        status, body = polar_api.get_checkout(checkout_id, self.token)
+        if status != 200 or not isinstance(body, dict):
+            log(f"get_checkout {checkout_id} failed: {status}")
+            return False, f"could not read checkout {checkout_id}"
+        state = body.get("status")
+        customer_id = self._customer_id(body)
+        if customer_id and acct.polar_customer_id != customer_id:
+            acct = account.set_polar_customer_id(acct.id, customer_id)
+        if state not in self.PAID_CHECKOUT_STATUSES:
+            return False, f"checkout status={state}"
+        return True, self._apply(acct, "active")
 
     def portal_url(self, acct):
         """Polar-hosted customer-portal link for one account, or None when the

@@ -398,6 +398,23 @@ def set_telegram(account_id, chat_id=None, token=None, clear=False):
     return _account_from_entry(entry)
 
 
+def set_polar_customer_id(account_id, customer_id):
+    """Link an account to its Polar customer and return the loaded Account. Sole
+    writer of polar_customer_id.
+
+    account_for_customer_id() and portal_url() have always read this field, but
+    nothing wrote it, so every account carried None: the customer-portal link
+    could never render and every billing event had to be resolved by matching the
+    pay-email against the Gmail address. The checkout return sets it."""
+    assert customer_id, "set_polar_customer_id needs a customer id"
+    data = _read_manifest()
+    assert data is not None, "cannot link a Polar customer without an accounts manifest"
+    entry = _entry_for(data, account_id)
+    entry["polar_customer_id"] = str(customer_id)
+    _write_manifest(data)
+    return _account_from_entry(entry)
+
+
 def set_voice(account_id, voice_file=None, clear=False):
     """Persist which file holds an account's voice profile and return the loaded
     Account. Sole writer of voice_file, for the same reason as set_telegram:

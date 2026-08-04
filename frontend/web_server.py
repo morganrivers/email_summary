@@ -32,6 +32,7 @@ Authenticated:
   POST /settings/telegram/confirm  claim the chat that posted the code
   POST /settings/telegram/unlink   drop the linked chat
   GET  /billing          plan status + Polar portal link
+  GET  /billing/return   where Polar returns a buyer; settles entitlement
   GET  /billing/portal   mint a Polar customer session, redirect to the portal
   GET  /account          account info + danger-zone delete
   POST /account/delete   delete account entry
@@ -925,6 +926,69 @@ def _page_settings(acct, saved=False, link_code=None, error=None, notice=None,
     return _layout("Settings", body, active="/settings", user_email=acct.id)
 
 
+def _confirm_checkout(acct, checkout_id):
+    """Settle entitlement for a buyer returning from Polar. Never raises: they
+    have paid, and an exception here would show them an error page over a
+    successful payment."""
+    global _BILLING
+    if _BILLING is None:
+        try:
+            _BILLING = billing.PolarBilling()
+        except AssertionError as err:
+            return False, f"polar not configured: {err}"
+    try:
+        return _BILLING.confirm_checkout(checkout_id, acct)
+    except Exception as err:
+        return False, f"{type(err).__name__}: {err}"
+
+
+def _page_checkout_return(acct, paid):
+    """Landing page after Polar. Two outcomes, and the pending one must not claim
+    the payment failed: the money may well have moved while the entitlement flip
+    is still in flight behind a webhook."""
+    if paid or acct.plan_status == "active":
+        body = """
+<h2>You're set up</h2>
+
+<div class="form-success" style="margin-bottom:12px;">
+  Payment received and your subscription is active.
+</div>
+
+<p>Letterlock is now watching your inbox. When an email arrives that warrants a
+personal reply, a draft appears in Gmail.</p>
+
+<p>Two things worth doing now:</p>
+
+<ul>
+  <li><a href="/voice">Voice DNA</a> — generate your writing profile from your sent
+      mail, so drafts sound like you instead of like the neutral default.</li>
+  <li><a href="/settings">Settings</a> — link Telegram to get a message when a
+      draft is ready, and set your timezone.</li>
+</ul>
+
+<hr>
+<a href="/dashboard">Go to your dashboard &rarr;</a>
+"""
+        return _layout("Welcome", body, active="/billing", user_email=acct.id)
+
+    body = """
+<h2>Payment received</h2>
+
+<div class="notice" style="margin-bottom:12px;">
+  Polar has your payment. We are waiting on the confirmation that switches your
+  account on, which normally takes a few seconds.
+</div>
+
+<p>Reload this page in a moment. If it still says this after a few minutes, the
+payment is safe and <a href="/contact">telling us</a> is the fastest way to get it
+sorted.</p>
+
+<hr>
+<a href="/billing">Check billing status &rarr;</a>
+"""
+    return _layout("Payment received", body, active="/billing", user_email=acct.id)
+
+
 def _page_billing(acct, error=None):
     plan_badge = (
         '<span class="status-ok">ACTIVE</span>'
@@ -1173,6 +1237,17 @@ class Handler(BaseHTTPRequestHandler):
             if acct is None:
                 return
             return self._send(200, _page_billing(acct))
+
+        if path == "/billing/return":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+            paid, detail = _confirm_checkout(acct, query.get("checkout_id"))
+            log(f"checkout return for {acct.id}: paid={paid} {detail}")
+            # Reload either way: the webhook may have flipped the plan already.
+            acct = account.account_for_email(acct.id, include_inactive=True) or acct
+            return self._send(200, _page_checkout_return(acct, paid))
 
         if path == "/billing/portal":
             acct = self._require_auth()

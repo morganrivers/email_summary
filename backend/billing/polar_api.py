@@ -51,6 +51,29 @@ def get_customer(customer_id, token):
     return _request("GET", f"/v1/customers/{customer_id}", token=token)
 
 
+def create_checkout(product_id, success_url, customer_email, token):
+    """Mint a hosted checkout session. Preferred over a static dashboard checkout
+    link because the success URL then comes from backend/site.py rather than a
+    field in the Polar dashboard, so the app and the place Polar returns the buyer
+    to cannot drift apart. The response carries `url` (where to send the buyer)
+    and `id`."""
+    assert token, "backend API token required to create a checkout"
+    assert product_id, "product_id required to create a checkout"
+    assert success_url, "success_url required to create a checkout"
+    payload = {"products": [product_id], "success_url": success_url}
+    if customer_email:
+        payload["customer_email"] = customer_email
+    return _request("POST", "/v1/checkouts/", payload=payload, token=token)
+
+
+def get_checkout(checkout_id, token):
+    """Read a checkout back after the buyer returns, for its status and the
+    customer it created."""
+    assert token, "backend API token required to read a checkout"
+    assert checkout_id, "checkout_id required to read a checkout"
+    return _request("GET", f"/v1/checkouts/{checkout_id}", token=token)
+
+
 def create_customer_session(customer_id, token):
     """Mint a short-lived customer session. The response carries
     customer_portal_url, the only link that authenticates a user into the
