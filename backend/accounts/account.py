@@ -25,9 +25,9 @@ Store schema (database/accounts.json), one object per user:
       "polar_customer_id": "<optional; set at checkout for exact billing link>"
     }
 Writers: register_account (introduce), set_plan_status (billing gate),
-set_telegram (notification target), set_settings (user preferences),
-delete_account (remove). Nothing outside this module edits the manifest, so the
-sealed-store swap has one seam.
+set_telegram (notification target), set_settings (user preferences), set_voice
+(voice profile pointer), delete_account (remove). Nothing outside this module
+edits the manifest, so the sealed-store swap has one seam.
 
 Relative creds_dir/state_file paths resolve against the repo root. The manifest
 holds per-user PII and tokens, so it is git-ignored, written 0600 inside a 0700
@@ -398,6 +398,24 @@ def set_telegram(account_id, chat_id=None, token=None, clear=False):
     return _account_from_entry(entry)
 
 
+def set_voice(account_id, voice_file=None, clear=False):
+    """Persist which file holds an account's voice profile and return the loaded
+    Account. Sole writer of voice_file, for the same reason as set_telegram:
+    backend.drafting.voice_dna owns the document, this owns the pointer to it.
+    clear=True drops the pointer, which puts the account back on the default
+    profile."""
+    assert clear or voice_file, "set_voice needs a voice_file or clear"
+    data = _read_manifest()
+    assert data is not None, "cannot set a voice profile without an accounts manifest"
+    entry = _entry_for(data, account_id)
+    if clear:
+        entry.pop("voice_file", None)
+    else:
+        entry["voice_file"] = str(voice_file)
+    _write_manifest(data)
+    return _account_from_entry(entry)
+
+
 def set_settings(account_id, timezone=None, auto_schedule=None):
     """Persist the per-user preferences the web UI owns and return the loaded
     Account. Sole writer of them, for the same reason as set_telegram."""
@@ -422,12 +440,15 @@ def _owned_paths(entry):
 
     Anything outside it is shared: the seeded owner points at the top-level
     .gmail-mcp and state/, which belong to the box and outlive any one entry, so
-    deleting the owner's account must not wipe the box's Gmail tokens. Keying on
-    the entry's own directory rather than on the store root keeps that true even
-    if the store were ever configured to sit at the app root."""
+    deleting the owner's account must not wipe the box's Gmail tokens. The same
+    rule covers the voice profile: a generated one lives in the account's own
+    directory and goes, while the operator's copy under config/ is only unlinked
+    from. Keying on the entry's own directory rather than on the store root keeps
+    that true even if the store were ever configured to sit at the app root."""
     home = ACCOUNTS_DIR / entry["id"]
     owned = []
-    for value in (entry.get("creds_dir"), entry.get("state_file")):
+    for value in (entry.get("creds_dir"), entry.get("state_file"),
+                  entry.get("voice_file")):
         if not value:
             continue
         path = _resolve(value)

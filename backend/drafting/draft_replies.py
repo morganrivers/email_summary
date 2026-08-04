@@ -20,18 +20,13 @@ from dotenv import load_dotenv
 
 from backend import paths
 from backend.drafting import agentic_drafter
+from backend.drafting import voice_dna
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal.node_runner import node_env
 from backend.integrations.telegram import send_telegram
 
 FETCH_SCRIPT = paths.node_script("fetch_emails.mjs")
 DRAFT_SCRIPT = paths.node_script("create_draft.mjs")
-
-# The operator's own profile, and a neutral one for everybody else. There used
-# to be a single global VOICE_PROFILE, which meant every user's mail was drafted
-# in the box owner's voice and signed with the owner's name.
-OWNER_VOICE_PROFILE = paths.config_file("voice-dna-email.md")
-DEFAULT_VOICE_PROFILE = Path(__file__).parent / "default_voice.md"
 
 load_dotenv(paths.ENV_FILE)
 
@@ -78,19 +73,12 @@ DRAFTER_INSTRUCTION = (
 
 
 def voice_profile_for(account):
-    """The voice profile that applies to one account, as text.
+    """The voice profile that applies to one account, as the drafter sees it.
 
-    Single source of the resolution order: the account's own profile if it has
-    one, else the neutral default. The operator's personal profile is reachable
-    only through their own manifest entry (seed_owner points voice_file at it),
-    never as an implicit fallback for other users."""
-    candidate = getattr(account, "voice_file", None)
-    if candidate and Path(candidate).exists():
-        return Path(candidate).read_text()
-    assert DEFAULT_VOICE_PROFILE.exists(), (
-        f"default voice profile missing at {DEFAULT_VOICE_PROFILE}"
-    )
-    return DEFAULT_VOICE_PROFILE.read_text()
+    Resolution, generation, and custody live in voice_dna, which the web UI
+    writes through as well. This stays as the name the drafting path calls, so
+    the store has one entry point rather than two callers reaching into it."""
+    return voice_dna.resolve(account)
 
 
 def thread_participation_line(email):

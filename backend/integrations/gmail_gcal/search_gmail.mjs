@@ -17,7 +17,7 @@ function parseArgs(argv) {
         if (!args.query) throw new Error('--query required');
         const client = await loadClient();
         await ensureAuth(client);
-        const results = await searchMessages(client, args.query, Math.min(args.maxResults, 10));
+        const results = await searchMessages(client, args.query, args.maxResults);
         process.stdout.write(JSON.stringify(results));
     } catch (err) {
         log('Error: ' + err.message);

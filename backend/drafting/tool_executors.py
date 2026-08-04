@@ -35,12 +35,23 @@ def _run_node(script, args, creds_dir=None):
         return {"error": f"{script.name} returned invalid JSON: {e}"}
 
 
+def run_search(query, max_results, creds_dir=None):
+    """Sole subprocess boundary to search_gmail.mjs: a list of messages, or an
+    error dict. The tool-facing cap lives in search_emails rather than here,
+    because it is a property of the tool (the drafter must not pull an unbounded
+    number of messages into a prompt) and not of the search. Voice synthesis
+    reads a wider sample of the user's own sent mail through this same seam."""
+    assert query, "run_search needs a query"
+    assert max_results > 0, f"max_results must be positive, got {max_results}"
+    return _run_node(SEARCH_GMAIL, ["--query", query, "--max", str(max_results)], creds_dir)
+
+
 def search_emails(args, creds_dir=None):
     query = args.get("query")
     if not query:
         return {"error": "query is required"}
     max_results = min(int(args.get("max_results", 5)), 10)
-    out = _run_node(SEARCH_GMAIL, ["--query", query, "--max", str(max_results)], creds_dir)
+    out = run_search(query, max_results, creds_dir)
     if isinstance(out, dict) and "error" in out:
         return out
     return {"results": out, "count": len(out)}

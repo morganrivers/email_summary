@@ -51,6 +51,17 @@ def config_file(name):
     return deployed if deployed.exists() else LEGACY_CONFIG_DIR / name
 
 
+def relative_if_inside(path):
+    """A manifest-ready form of `path`: relative to the app root when it lives
+    under it, absolute otherwise. Storing the relative form means the manifest
+    survives the directory being renamed (as /opt/email_summary ->
+    /opt/letterlock was). account._resolve() reads both forms."""
+    try:
+        return str(Path(path).resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def ensure_run_dir():
     """Create the runtime scratch directory on first write. Called by the things
     that write into it rather than at import, so importing a module never has a

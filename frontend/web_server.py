@@ -1,4 +1,4 @@
-"""Knightdrafter web UI (Tracks U1, U2, U3, U4, U6, U7, U8, U9, U11).
+"""Letterlock web UI (Tracks U1, U2, U3, U4, U6, U7, U8, U9, U11).
 
 Minimal stdlib HTTP server. Caddy terminates TLS and reverse-proxies.
 Run as: python -m frontend.web_server
@@ -12,7 +12,8 @@ Public:
   GET  /pricing          pricing + comparison table
   GET  /contact          contact form
   POST /contact          handle contact form
-  GET  /static/app.css   stylesheet
+  GET  /static/<name>    stylesheet + brand icons (see STATIC_TYPES)
+  GET  /favicon.ico      brand icon at the conventional path
 
 Auth:
   GET  /auth/login       mint PKCE state, redirect to Google
@@ -21,9 +22,15 @@ Auth:
 
 Authenticated:
   GET  /dashboard        account status + attestation check
-  GET  /voice            voice DNA status
-  GET  /settings         settings (telegram, inference provider)
-  POST /settings         save settings
+  GET  /voice            voice profile, as editable plaintext
+  POST /voice            save the edited profile
+  POST /voice/generate   build a profile from the account's sent mail
+  POST /voice/reset      drop the profile, back to the default
+  GET  /settings         settings (telegram link, timezone, auto-scheduling)
+  POST /settings         save timezone + auto-scheduling
+  POST /settings/telegram/start    mint a one-time chat link code
+  POST /settings/telegram/confirm  claim the chat that posted the code
+  POST /settings/telegram/unlink   drop the linked chat
   GET  /billing          plan status + Polar portal link
   GET  /billing/portal   mint a Polar customer session, redirect to the portal
   GET  /account          account info + danger-zone delete
@@ -31,39 +38,91 @@ Authenticated:
 """
 
 import http.cookies
-import json
 import os
 import secrets
-import shutil
-import subprocess
 import sys
-import tempfile
+import time
 import urllib.parse
+import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 from dotenv import load_dotenv
 
 from backend import paths
+from backend import site
 from backend.accounts import account
 from backend.billing import billing
-from backend.onboarding import watch_renew
+from backend.drafting import voice_dna
+from backend.integrations import telegram
+from backend.onboarding import provisioning
 from frontend import session as sess
 
 load_dotenv(paths.ENV_FILE)
 
-OAUTH_HELPER = paths.node_script("oauth_helper.mjs")
-
 HOST = os.environ.get("WEB_HOST", "127.0.0.1")
-PORT = int(os.environ.get("WEB_PORT", "8790"))
-REDIRECT_URI = os.environ.get(
-    "WEB_OAUTH_REDIRECT_URI", "https://knightdrafter.com/auth/callback"
-)
-STATE_COOKIE = "knightdrafter_oauth_state"
+PORT = int(os.environ.get("WEB_PORT", str(site.WEB_PORT)))
+REDIRECT_URI = os.environ.get("WEB_OAUTH_REDIRECT_URI", site.oauth_callback_url())
+STATE_COOKIE = "letterlock_oauth_state"
 STATE_TTL = 600
 
-_CSS_PATH = Path(__file__).parent / "app.css"
-_CSS_CACHE = None
+# Every page is server-rendered from our own templates with no third-party
+# assets, so the policy can be as tight as "nothing but us, and no framing".
+SECURITY_HEADERS = [
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "same-origin"),
+    # The pages carry inline style attributes and one inline script (the footer
+    # clock), so the policy has to allow both. Tightening style-src/script-src
+    # past this silently strips the layout: the browser drops every style="".
+    ("Content-Security-Policy",
+     "default-src 'none'; img-src 'self' data:; "
+     "style-src 'self' 'unsafe-inline'; script-src 'unsafe-inline'; "
+     "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"),
+    ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
+]
+
+# A settings form post is a few hundred bytes; the voice profile textarea is the
+# one large form, bounded by voice_dna.MAX_PROFILE_CHARS before url-encoding.
+MAX_BODY = 128 * 1024
+
+# How often the voice page re-checks a running generation, in seconds.
+VOICE_POLL_SECONDS = 5
+
+# Everything servable under /static/, by filename. The map is the allow-list:
+# a request that is not a key here never touches the filesystem, so no path
+# component from the URL is ever joined onto a directory.
+STATIC_TYPES = {
+    "app.css": "text/css; charset=utf-8",
+    "favicon.ico": "image/x-icon",
+    "favicon-32.png": "image/png",
+    "icon-512.png": "image/png",
+    "apple-touch-icon.png": "image/png",
+    "mark.png": "image/png",
+}
+_STATIC_CACHE = {}
+
+# account id -> (link code, expiry). In-process and short-lived on purpose: a
+# code is only meaningful between rendering the page and the user pressing the
+# confirm button, and a restart just means starting the link again.
+_LINK_CODES = {}
+LINK_TTL = 900
+
+
+def _put_link_code(account_id):
+    code = telegram.new_link_code()
+    _LINK_CODES[account_id] = (code, time.time() + LINK_TTL)
+    return code
+
+
+def _get_link_code(account_id):
+    entry = _LINK_CODES.get(account_id)
+    if not entry:
+        return None
+    code, expiry = entry
+    if expiry < time.time():
+        del _LINK_CODES[account_id]
+        return None
+    return code
 
 
 def log(msg):
@@ -71,52 +130,8 @@ def log(msg):
     sys.stderr.flush()
 
 
-class WebError(Exception):
-    def __init__(self, code, msg):
-        super().__init__(msg)
-        self.code = code
-        self.msg = msg
-
-
-def _run_oauth_helper(args):
-    result = subprocess.run(
-        ["node", str(OAUTH_HELPER), *args],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
-    )
-    if result.returncode != 0:
-        raise WebError(502, f"oauth_helper {args[0]} failed: {result.stderr.decode().strip()}")
-    return result.stdout.decode()
-
-
-def _build_auth_url(state):
-    return _run_oauth_helper(
-        ["auth-url", "--state", state, "--redirect", REDIRECT_URI]
-    ).strip()
-
-
-def _exchange_and_provision(code):
-    account.ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(dir=account.ACCOUNTS_DIR, prefix=".staging-"))
-    try:
-        out = _run_oauth_helper(
-            ["exchange", "--code", code, "--redirect", REDIRECT_URI,
-             "--creds-dir", str(staging)]
-        )
-        profile = json.loads(out)
-        email = profile["email"]
-        creds_abs = account.ACCOUNTS_DIR / email / ".gmail-mcp"
-        creds_abs.mkdir(parents=True, exist_ok=True)
-        for name in ("gcp-oauth.keys.json", "credentials.json"):
-            shutil.move(str(staging / name), str(creds_abs / name))
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
-    creds_rel = creds_abs.relative_to(paths.REPO_ROOT)
-    acct = account.register_account(
-        email, profile["first"], profile["last"], str(creds_rel)
-    )
-    watch_renew.renew_account(acct, log=lambda m: log(m))
-    log(f"provisioned {acct.id}")
-    return acct
+# The OAuth sequence (auth url, code exchange, creds custody, registration,
+# watch) lives in backend.onboarding.provisioning, which is its only copy.
 
 
 _BILLING = None
@@ -136,15 +151,40 @@ def _portal_url(acct):
     return _BILLING.portal_url(acct)
 
 
-def _checkout_redirect(email):
-    return billing.checkout_url(email)
+def _valid_timezone(name):
+    try:
+        zoneinfo.ZoneInfo(name)
+    except Exception:
+        return False
+    return True
 
 
-def _css():
-    global _CSS_CACHE
-    if _CSS_CACHE is None:
-        _CSS_CACHE = _CSS_PATH.read_bytes()
-    return _CSS_CACHE
+def _deliver_contact(name, email, message):
+    """Put a contact message somewhere a person will see it. The form used to
+    write one stderr line and tell the sender we would get back to them, which
+    made it a form that quietly discarded mail."""
+    log(f"contact form: name={name!r} email={email!r} msg={message[:80]!r}")
+    text = (
+        "✉️ <b>Contact form</b>\n"
+        f"From: {_h(name or 'anonymous')} &lt;{_h(email or 'no address given')}&gt;\n\n"
+        f"{_h(message[:3000])}"
+    )
+    if not telegram.send_telegram(text, telegram.operator_target()):
+        log("contact form: no operator Telegram target; message is in the log only")
+
+
+def _static(name):
+    """Bytes and content type for an asset, or (None, None) if it is not one of
+    ours. Read once and held: the files are small and only change on deploy,
+    which restarts the service."""
+    ctype = STATIC_TYPES.get(name)
+    if ctype is None:
+        return None, None
+    if name not in _STATIC_CACHE:
+        path = paths.STATIC_DIR / name
+        assert path.is_file(), f"missing static asset: {path}"
+        _STATIC_CACHE[name] = path.read_bytes()
+    return _STATIC_CACHE[name], ctype
 
 
 def _h(text):
@@ -155,7 +195,7 @@ def _h(text):
             .replace('"', "&quot;"))
 
 
-def _layout(title, body, active=None, user_email=None):
+def _layout(title, body, active=None, user_email=None, refresh=None):
     public_nav = [
         ("/", "Home"),
         ("/about", "About"),
@@ -185,22 +225,31 @@ def _layout(title, body, active=None, user_email=None):
         )
     else:
         nav_html += (
-            '<span class="right"><a href="/auth/login">Sign in with Google</a></span>'
+            '<span class="right"><a href="/auth/login">Sign in</a></span>'
         )
+    # Only ever set by a page waiting on background work, and only as an integer
+    # of seconds, so the header cannot carry anything but a delay.
+    refresh_html = ""
+    if refresh is not None:
+        refresh_html = f'<meta http-equiv="refresh" content="{int(refresh)}">\n'
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_h(title)} | Knightdrafter</title>
+{refresh_html}<title>{_h(title)} | Letterlock</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#0f1730">
 </head>
 <body>
 <div id="page">
   <div id="titlebar">
     <div class="brand">
-      <a href="/"><span class="mark" aria-hidden="true">&#9601;&#9600;&#9600;&#9601;</span> Knightdrafter</a>
-      <span class="tagline">the most secure AI agent for Gmail</span>
+      <a href="/"><img class="mark" src="/static/mark.png" alt="" width="23" height="14"> Letterlock</a>
+      <span class="tagline">the most secure AI assistant for Gmail</span>
     </div>
   </div>
   <div id="navbar">{nav_html}</div>
@@ -208,7 +257,7 @@ def _layout(title, body, active=None, user_email=None):
 {body}
   </div>
   <div id="footer">
-    <span>&copy; 2026 Knightdrafter &nbsp;|&nbsp; <a href="/about">About</a> &nbsp;|&nbsp; <a href="/faq">FAQ</a> &nbsp;|&nbsp; <a href="https://knightdrafter.com">knightdrafter.com</a></span>
+    <span>&copy; 2026 Letterlock</span>
     <span class="footer-right">
       <span id="utc-clock"></span>
     </span>
@@ -230,18 +279,11 @@ def _layout(title, body, active=None, user_email=None):
 
 def _page_home():
     body = """
-<h2>The most secure, powerful Gmail AI assistant</h2>
-
-<p>Most Gmail AI tools process your email on servers you have to trust. Knightdrafter is different.</p>
-
-<p>Your email is processed inside a TEE (Trusted Execution Environment): a locked region
-of the processor that nobody, including us, can inspect. Before any text reaches the AI
-model, personally identifying information is stripped and replaced with placeholders.
-The model sees tokens, not your real data.</p>
-
-<p>All code is open source. Anyone can verify, independently, that our server runs
-exactly the published code. This is a technical claim backed by hardware attestation,
-not a policy promise.</p>
+<p>Responding to emails is a pain. Many tools are available, but when you choose an AI
+assistant entrusted with your email, you are risking the privacy of you and everyone that
+emails you. Letterlock solves both problems at once: Letterlock waits for emails and
+securely searches your inbox and Google calendar for relevant information before drafting
+a reply, saving hours a week in drafting replies to emails.</p>
 
 <div style="text-align:center;padding:16px 0;">
   <a href="/auth/login" class="cta-btn">&#187; Connect your Gmail</a>
@@ -249,27 +291,38 @@ not a policy promise.</p>
   <a href="/about" style="font-size:11px;">How it works &rarr;</a>
 </div>
 
-<hr>
+<h2>How secure is Letterlock?</h2>
+
+<p>With ever more powerful AI agents, email security requires several layers of defense.
+Letterlock uses the same security protocols as Signal messenger and Swiss Banks, to ensure
+defense-in-depth. Email data is never saved on Letterlock servers. Compute is done in
+secure enclaves, and Letterlock's security algorithms are constantly monitoring for
+suspicious activity. Email access tokens requires simultaneous access to an encrypted
+secure enclave as well as Letterlock's EU-based verifier server. As a separate layer of
+defense, personally identifying information or private information is stripped before AI
+inference is run on a separate, secure enclave inference provider, which verifiably cannot
+store your email data.</p>
+
+<h2>Why doesn't Letterlock send emails?</h2>
+
+<p>The world doesn't need more AI slop. Letterlock provides useful information in a draft
+form, but doesn't send. By default, letterlock matches the length of your emails, and is
+configured to avoid overclaiming or hallucinating email content.</p>
 
 <h2>Features</h2>
 
-<div class="info-box">
-<ul class="feature-list">
-  <li>Automatic draft creation: the agent reads the thread, searches your email history for context, and writes a reply in your voice</li>
-  <li>Google Calendar integration: checks your availability, books meetings, and creates events on confirmation</li>
+<ul style="font-size:11px;line-height:1.9;padding-left:18px;">
+  <li>Automatic draft creation: Letterlock reads the thread, searches your email history for context, and writes a reply in your voice</li>
+  <li>Google Calendar integration: checks your availability, and creates events from your sent mail when auto-scheduling is enabled</li>
   <li>Telegram notifications when a draft is ready</li>
-  <li>Optional full agent trace: the draft email includes a log of every tool called and every source consulted</li>
-  <li>Open-source models served in the EU (Llama 3, Mistral, DeepSeek R1, Qwen)</li>
-  <li>All code open source and auditable</li>
+  <li>Daily summary of your inbox and calendar when configured, skipping unimportant emails and highlighting urgent ones</li>
 </ul>
-</div>
 
 <div class="tee-box">
 <strong>What is a TEE?</strong> A Trusted Execution Environment is a locked compartment inside a
 processor chip. Code running inside cannot be read or modified by the host operating system,
 the cloud provider, or us. At boot, the enclave produces a signed attestation report containing
-a hash of the code it is running. Anyone can verify that hash against our published source code.
-This is what "provably runs the published code" means.
+a hash of the code it is running. Anyone can verify that hash against the published source code.
 </div>
 
 <hr>
@@ -285,75 +338,53 @@ This is what "provably runs the published code" means.
 
 def _page_about():
     body = """
-<h2>What is Knightdrafter?</h2>
+<h2>What is Letterlock?</h2>
 
-<p>Knightdrafter is a Gmail AI assistant that drafts replies, checks your calendar, and summarises
-your inbox. It is not a general-purpose assistant. It only works with Gmail.</p>
+<p>Letterlock is a Gmail AI assistant that drafts replies, checks your calendar, and
+summarises your inbox.</p>
 
 <p>The assistant is open source, runs in a Trusted Execution Environment (TEE), and strips
-personally identifying information from your email before any text reaches the AI model.
-These three properties together are what makes the security claim verifiable rather than
-just a policy statement.</p>
-
-<hr>
+personally identifying information from your email before any text reaches the AI model.</p>
 
 <h2>How the security works</h2>
 
 <div class="tee-box">
 <strong>What is a TEE?</strong><br>
-A Trusted Execution Environment is an isolated, hardware-enforced region of a processor.
-Code that runs there cannot be read or modified by the operating system, the cloud provider,
-or the server operator (us). Think of it as a vault inside the chip itself, not a software
-container or a virtual machine. Both can be inspected or tampered with by someone with
-root access. A TEE cannot.<br><br>
-At boot, the TEE produces an attestation report: a signed cryptographic document stating
-exactly which code is running. The signature chains back to the chip manufacturer (Intel,
-for TDX-based enclaves). The hash in the report can be compared against our published
-source code. If they match, you have hardware-backed proof that our server is running
-exactly that code. If they do not match, the Key Management Service refuses to release
-the secrets and the server does not start.
+A Trusted Execution Environment is a hardware-enforced region of a processor. Code running
+there cannot be read or modified by the operating system, the cloud provider, or the server
+operator. At boot it produces an attestation report: a signed statement of which code is
+running, chaining back to the chip manufacturer (Intel, for TDX). Compare that hash against
+our published source and you know what the server is running. If it does not match, the Key
+Management Service withholds the secrets and the server does not start.
 </div>
 
 <h2>The masking pipeline</h2>
 
-<p>Before your email content leaves the enclave to reach the AI model, a masking step runs.
-It identifies personally identifying information: your name, email addresses, phone numbers,
-and contact names pulled from your OAuth profile. Each piece of information is replaced with
-a placeholder token such as <code>[NAME_1]</code> or <code>[EMAIL_2]</code>.</p>
+<p>Before your email content leaves the enclave, a masking step replaces identifying
+information (your name, email addresses, phone numbers, and contact names from your OAuth
+profile) with placeholder tokens such as <code>[PERSON1]</code> or <code>[EMAIL2]</code>.
+The model sees the masked text; the mapping stays inside the enclave and is restored before
+the draft is written to Gmail.</p>
 
-<p>The AI model receives the masked text. The token mapping stays inside the enclave and is
-never logged or transmitted. After the model responds, the tokens are restored before the
-draft is written to Gmail.</p>
-
-<p>The masking logic is open source. You can read the code, run the test corpus, and
-verify the recall metrics yourself. The recall is not 100%, and we publish that
-honestly. The highest-stakes values (your name and email addresses) are scrubbed
-deterministically by literal match, not only by the NER model, so the irreducible
-residual is bounded.</p>
+<p>The masking logic is open source, and the test corpus publishes its recall. Recall is not
+100%, but your own name and email addresses are matched literally rather than only by the
+NER model, so those are always caught.</p>
 
 <h2>Your OAuth token</h2>
 
-<p>Your Gmail refresh token grants full read/write access to your mailbox. It is the
-load-bearing secret the whole TEE exists to protect. It lives only inside the enclave,
-stored in an encrypted volume whose key is released by the KMS only after the attestation
+<p>Your Gmail refresh token grants read/write access to your mailbox. It lives inside the
+enclave, in an encrypted volume whose key is released by the KMS only after the attestation
 report passes verification. The key is never on the host filesystem.</p>
+
+<p>You can revoke it at any time from your
+<a href="https://myaccount.google.com/permissions">Google account permissions</a> page, and
+deleting your Letterlock account removes all encrypted data.</p>
 
 <h2>Open source</h2>
 
-<p>All code is public. The masking logic, the draft pipeline, the attestation setup,
-the billing integration, and this web server. You can read it, audit it, and rebuild
-the enclave image yourself. A reproducible Nix build means anyone can rebuild from
-source and derive the same image hash that the attestation report contains.</p>
-
-<h2>What Knightdrafter does not do</h2>
-
-<ul style="font-size:11px;line-height:1.9;">
-  <li>Knightdrafter does not send email. It creates drafts. You review and send.</li>
-  <li>Knightdrafter does not work with Outlook, Apple Mail, or ProtonMail.</li>
-  <li>Knightdrafter does not browse the web, write code, or manage files.</li>
-  <li>Knightdrafter does not store your email content persistently.</li>
-  <li>Knightdrafter does not use US-based AI providers. All inference runs on EU-hosted open-weight models.</li>
-</ul>
+<p>All code is public: the masking logic, the draft pipeline, the attestation setup, the
+billing integration, and this web server. A reproducible Nix build means anyone can rebuild
+from source and derive the same image hash that the attestation report contains.</p>
 
 <hr>
 
@@ -371,36 +402,25 @@ def _page_faq():
 <details>
 <summary>What is a TEE and why does it matter for email privacy?</summary>
 <div class="answer">
-<p>A TEE (Trusted Execution Environment) is a locked compartment inside a processor chip.
-Code running inside a TEE cannot be read or modified by the operating system, the cloud
-provider, or the server operator. It is not a software container (Docker) or a virtual
-machine. Both of those can be inspected by someone with root access to the host. A TEE
-cannot.</p>
-<p>At boot, the TEE produces a signed attestation report. This report contains a hash of
-the code running inside and a signature that chains back to the chip manufacturer (Intel,
-for TDX). Anyone can verify that hash against our published source code. If the hashes
-match, you have hardware-backed proof that the server is running the code we published.
-The Key Management Service will not release your secrets to a server running different code.</p>
-<p>For email, this matters because the OAuth token that grants access to your Gmail account
-lives only inside the enclave. The host cannot read it. We cannot read it. The only code
-that touches it is the code whose hash is published and verifiable.</p>
+<p>It is a locked compartment inside the processor that the operating system, the cloud
+provider, and we ourselves cannot read into. Your Gmail token lives only in there.
+<a href="/about">About</a> explains the attestation that makes this checkable rather than
+a promise.</p>
 </div>
 </details>
 
 <details>
-<summary>Does Knightdrafter train on my emails?</summary>
+<summary>Does Letterlock train on my emails?</summary>
 <div class="answer">
-<p>No. The models Knightdrafter uses are open-weight models served by Scaleway (France). We have
-no training relationship with Scaleway and no ability to train on your data. Additionally,
-the AI model never sees your raw email: personally identifying information is stripped before
-the masked text leaves the enclave.</p>
+<p>No. We have no training relationship with the model provider and no ability to train on
+your data. The model never sees your raw email in the first place.</p>
 </div>
 </details>
 
 <details>
 <summary>Which AI models are available?</summary>
 <div class="answer">
-<p>Knightdrafter uses open-weight models served in the EU by Scaleway. Current options include
+<p>Letterlock uses open-weight models served in the EU by Scaleway. Current options include
 Llama 3.1 70B, Llama 3.1 405B, Mistral Large 2, DeepSeek R1, and Qwen 2.5 72B. All are
 open-source models with published weights. Because the masking always runs, the choice of
 model does not affect whether your raw PII is exposed.</p>
@@ -408,82 +428,58 @@ model does not affect whether your raw PII is exposed.</p>
 </details>
 
 <details>
-<summary>What can Knightdrafter do?</summary>
+<summary>Can a malicious email manipulate the assistant?</summary>
 <div class="answer">
-<ul style="margin:0 0 8px 0;padding-left:18px;line-height:1.9;">
-  <li>Draft replies to emails, searching your thread history for context</li>
-  <li>Read your Google Calendar to check availability before drafting a scheduling reply</li>
-  <li>Create Google Calendar events on confirmation</li>
-  <li>Send Telegram notifications when a draft is ready</li>
-  <li>Include a full trace of agent actions inside the draft email (optional)</li>
-</ul>
+<p>The drafter can search your mailbox for context, so an email written to look like
+instructions is a possible attack: get the assistant to pull something out of your mail and
+put it in a reply addressed back to the sender.</p>
+<p>Email content and tool results are fenced and marked as untrusted data rather than
+instructions. Letterlock also never sends: every draft waits in your Drafts folder until you
+read it and press send.</p>
 </div>
 </details>
 
 <details>
-<summary>What can Knightdrafter not do?</summary>
+<summary>How do I get Telegram notifications?</summary>
 <div class="answer">
-<ul style="margin:0 0 8px 0;padding-left:18px;line-height:1.9;">
-  <li>Knightdrafter does not send email autonomously. It creates drafts only.</li>
-  <li>Knightdrafter only works with Gmail. Not Outlook, Apple Mail, or ProtonMail.</li>
-  <li>Knightdrafter does not browse the web, write code, or manage files.</li>
-  <li>Knightdrafter does not support phone calls, SMS, or Slack.</li>
-</ul>
-</div>
-</details>
-
-<details>
-<summary>What is the agent trace feature?</summary>
-<div class="answer">
-<p>When enabled, the draft email includes a log of every tool the agent called: the threads
-it searched, the calendar events it checked, and any intermediate decisions. You can read
-it to understand why the draft says what it says. This makes the agent's reasoning auditable
-at the level of individual emails, not just at the level of published code.</p>
+<p>Open <a href="/settings">Settings</a> and follow the linking steps: we show you a
+one-time code, you send it to the Letterlock bot, and we read the chat back from the bot. That is how
+we know the chat is yours.</p>
 </div>
 </details>
 
 <details>
 <summary>Where is my data stored?</summary>
 <div class="answer">
-<p>Your Gmail OAuth token is stored inside the enclave in an encrypted volume (LUKS2).
-The encryption key is released by the KMS only after the enclave's attestation report
-passes verification. The key is never accessible on the host filesystem.</p>
-<p>No email content is stored permanently. The masking token mapping lives in memory
-for the duration of one request and is discarded. Draft logs are not retained.</p>
+<p>Email bodies are not stored at all once a draft is written, and the masking mapping is
+discarded with them. The only thing kept is your Gmail token, in an encrypted volume the
+host cannot open (see <a href="/about">About</a>).</p>
 </div>
 </details>
 
 <details>
 <summary>How does the PII masking work?</summary>
 <div class="answer">
-<p>Before email content leaves the enclave, a masking step identifies personally identifying
-information: your name, email addresses, phone numbers, and contact names from your OAuth
-profile. It also runs a named-entity recogniser (spaCy) to catch values not on the known list.</p>
-<p>Each identified value is replaced with a placeholder such as <code>[NAME_1]</code> or
-<code>[EMAIL_2]</code>. The AI model receives the masked text. The mapping is restored
-after the model responds.</p>
-<p>The recall is not 100%, and we publish that honestly in the open masking test corpus.
-Your name and email addresses are scrubbed by deterministic literal match (not only by NER),
-so the highest-stakes identifiers are always caught regardless of what the NER model misses.</p>
+<p>Identifying values are replaced with placeholders such as <code>[PERSON1]</code> before
+anything leaves the enclave, and restored afterwards. A named-entity recogniser catches
+what the known-values list misses. See <a href="/about">About</a> for the detail, including
+what recall the open test corpus measures.</p>
 </div>
 </details>
 
 <details>
 <summary>What does it cost?</summary>
 <div class="answer">
-<p>Knightdrafter costs 20 euros per month. Payment is handled by Polar (EU-based). No free trial
-is available. There is no free tier because the computational cost of running a TEE-backed
-email agent is fixed regardless of usage.</p>
+<p>&euro;20 a month, billed by Polar. There is no free tier: model calls cost money on every
+email processed. <a href="/pricing">Pricing</a> compares this against the alternatives.</p>
 </div>
 </details>
 
 <details>
 <summary>Is the code open source?</summary>
 <div class="answer">
-<p>Yes. The masking logic, the draft pipeline, the attestation setup, the billing
-integration, and this web server are all public. You can read the code, run the test
-suite, and rebuild the enclave image from source. A reproducible Nix build means anyone
-can rebuild and derive the same image hash that the attestation report contains.</p>
+<p>Yes, all of it. You can read it, run the test suite, and rebuild the enclave image
+yourself.</p>
 </div>
 </details>
 
@@ -491,9 +487,8 @@ can rebuild and derive the same image hash that the attestation report contains.
 <summary>What is the jurisdiction?</summary>
 <div class="answer">
 <p>Inference runs on Scaleway (France). The TEE substrate is Phala Cloud (Intel TDX).
-Both are EU or EU-aligned. No US cloud provider touches your data or your email content.
-This means no CLOUD Act exposure and no need for Standard Contractual Clauses for the
-inference path.</p>
+Both are EU or EU-aligned. This means no CLOUD Act exposure and no need for Standard
+Contractual Clauses for the inference path.</p>
 </div>
 </details>
 
@@ -519,9 +514,9 @@ def _page_pricing():
   </div>
 </div>
 
-<h2>How Knightdrafter compares</h2>
+<h2>How Letterlock compares</h2>
 
-<p style="font-size:11px;color:#555;margin-bottom:8px;">
+<p style="font-size:11px;color:#555;">
 The table below compares tools that combine email with AI or strong privacy. Prices are
 approximate and may change.
 </p>
@@ -588,61 +583,42 @@ approximate and may change.
 </tr>
 <tr>
   <td>Gmail + Gemini</td>
-  <td>Free</td>
+  <td>from $19.99/mo</td>
   <td>Google infrastructure</td>
   <td>Claims no (Workspace)</td>
   <td>US</td>
-  <td>Free, but it's Google</td>
+  <td>On-demand writing help inside Gmail itself</td>
 </tr>
 <tr class="highlight">
-  <td><strong>Knightdrafter</strong></td>
+  <td><strong>Letterlock</strong></td>
   <td><strong>&euro;20/mo</strong></td>
   <td><strong>TEE enclave + PII masking</strong></td>
   <td><strong>No, open source</strong></td>
   <td><strong>EU</strong></td>
-  <td><strong>Provably secure AI email (Gmail only)</strong></td>
+  <td><strong>Verifiably secure AI email (Gmail only)</strong></td>
 </tr>
 </tbody>
 </table>
 
-<p style="font-size:10px;color:#666;margin-top:4px;">
-The key distinction: Knightdrafter's security is verifiable. The attestation report is a
-cryptographic proof that the server runs the published open-source code. Other tools
-require you to trust their word.
+<p style="font-size:11px;color:#555;">
+The key distinction: Letterlock's security is verifiable. The attestation report shows that
+the server runs the published open-source code. Other tools require you to trust their word.
 </p>
-
-<hr>
-
-<h2>Who Knightdrafter is for</h2>
-
-<div class="info-box">
-<p><strong>Choose Knightdrafter if:</strong> you want a Gmail AI assistant and security is a priority.
-You want to verify, independently, that the code processing your email matches what was published.
-You accept Gmail only (no Outlook, no ProtonMail). You want draft-only (no autonomous sending).</p>
-</div>
-
-<div class="info-box">
-<p><strong>Do not choose Knightdrafter if:</strong> you use Outlook, Apple Mail, or another provider.
-You need a general-purpose AI assistant. You need something that browses the web, writes code,
-or manages files. You need on-device processing with no server involved.
-You need more than ~100 drafts per month (see <a href="/faq">FAQ</a> on trial limits).</p>
-</div>
 
 <h2>What is included</h2>
 
 <ul style="font-size:11px;line-height:1.9;padding-left:18px;">
   <li>Automatic draft creation with email history search for context</li>
-  <li>Google Calendar read and event creation</li>
-  <li>Telegram notifications</li>
-  <li>Full agent trace in drafts (optional)</li>
-  <li>Voice DNA: the assistant learns your writing style from sample emails</li>
+  <li>Google Calendar read, plus event creation from your sent mail when enabled</li>
+  <li>Telegram notifications and a daily inbox summary</li>
+  <li>A per-account voice profile, so drafts sound like you</li>
   <li>All open-source EU-hosted models (Llama 3, Mistral, DeepSeek R1, Qwen)</li>
   <li>On-demand attestation: verify the server is running the published code at any time</li>
 </ul>
 
 <hr>
 <div style="text-align:center;padding:10px 0;">
-  <a href="/auth/login" class="cta-btn">&#187; Connect your Gmail (&euro;20/mo)</a>
+  <a href="/auth/login" class="cta-btn">&#187; Sign up (&euro;20/mo)</a>
 </div>
 """
     return _layout("Pricing", body, active="/pricing")
@@ -651,13 +627,13 @@ You need more than ~100 drafts per month (see <a href="/faq">FAQ</a> on trial li
 def _page_contact(msg=None, error=None):
     status_html = ""
     if msg:
-        status_html = f'<div class="form-success">{_h(msg)}</div>'
+        status_html = f'<div class="form-success" style="margin-bottom:10px;">{_h(msg)}</div>'
     if error:
-        status_html = f'<div class="form-error">{_h(error)}</div>'
+        status_html = f'<div class="form-error" style="margin-bottom:10px;">{_h(error)}</div>'
     body = f"""
 <h2>Contact</h2>
 
-<div class="contact-form">
+<div class="contact-form" style="max-width:520px;">
   <form method="post" action="/contact">
     <div class="form-row">
       <label for="name">Name</label>
@@ -709,11 +685,9 @@ it drafts a response and saves it to your Gmail Drafts folder. You review and se
 Drafts only. The assistant never sends email autonomously.
 </p>
 
-<hr>
-
 <h2>Quick links</h2>
 
-<ul style="font-size:11px;line-height:2;">
+<ul style="font-size:11px;line-height:1.9;padding-left:18px;">
   <li><a href="/voice">Voice DNA</a> (teach the assistant your writing style)</li>
   <li><a href="/settings">Settings</a> (Telegram target, inference model)</li>
   <li><a href="/billing">Billing</a> (plan status and Polar portal)</li>
@@ -723,31 +697,109 @@ Drafts only. The assistant never sends email autonomously.
     return _layout("Dashboard", body, active="/dashboard", user_email=acct.id)
 
 
-def _page_voice(acct):
+def _page_voice(acct, error=None, notice=None):
+    """The voice profile, as editable plaintext.
+
+    The textarea holds the profile document itself rather than a form of fields:
+    it is what the drafter reads, so showing anything else would be showing a
+    summary of the thing that actually matters. Generating overwrites it, which is
+    why the page says so before the button rather than after.
+
+    voice_dna.HARD_CONSTRAINTS is deliberately not in the box. Those rules are
+    the product's, they are appended to every profile, and a user editing their
+    voice must not be able to delete a rule the drafter enforces anyway."""
+    own = voice_dna.load(acct)
+    job = voice_dna.status(acct.id)
+    running = bool(job and job["state"] == "running")
+    if job and job["state"] == "failed" and not error:
+        error = job["error"]
+    if job and job["state"] == "done" and not notice:
+        notice = "Profile generated from your sent mail. Read it over and edit anything that is off."
+    if job and not running:
+        voice_dna.clear_status(acct.id)
+
+    status_badge = (
+        '<span class="status-ok">SET</span>' if own
+        else '<span class="status-warn">USING DEFAULT</span>'
+    )
+    error_html = (
+        f'<div class="form-error" style="margin-bottom:10px;">{_h(error)}</div>'
+        if error else ""
+    )
+    notice_html = (
+        f'<div class="form-success" style="margin-bottom:10px;">{_h(notice)}</div>'
+        if notice else ""
+    )
+
+    if running:
+        # A meta refresh rather than a fetch loop: the page carries no scripts of
+        # its own and the CSP has no reason to start allowing any.
+        return _layout("Voice DNA", """
+<h2>Voice DNA</h2>
+<div class="info-box">
+  <p><b>Reading your sent mail and writing your profile.</b></p>
+  <p>
+    This takes a minute or two: we sample recent emails you have written, then
+    build the profile from them. The page refreshes itself.
+  </p>
+</div>
+<hr>
+<a href="/dashboard">&larr; Back to dashboard</a>
+""", active="/voice", user_email=acct.id, refresh=VOICE_POLL_SECONDS)
+
+    editable = own or voice_dna.default_text()
+    reset_html = ""
+    if own:
+        reset_html = """
+<form method="post" action="/voice/reset" style="display:inline;margin-left:8px;">
+  <button type="submit" class="form-submit">Revert to default</button>
+</form>
+"""
     body = f"""
 <h2>Voice DNA</h2>
 
-<p style="font-size:11px;">
-The assistant learns your writing style from a few sample emails. Once configured,
-it uses your voice when drafting replies rather than a generic style.
+{error_html}{notice_html}
+
+<p>
+Your voice profile tells the assistant how you write, so replies sound like you.
 </p>
 
-<div class="notice">
-  Voice DNA setup runs through the assistant itself. After connecting your Gmail,
-  the assistant will send you an email asking for sample emails or a paste of
-  examples. Reply to that email to complete the setup.
+<table class="data-table" style="width:auto;min-width:280px;">
+<tbody>
+<tr><td style="font-weight:bold;width:160px;">Your profile</td><td>{status_badge}</td></tr>
+</tbody>
+</table>
+
+<h3>Generate from your sent mail</h3>
+
+<p>
+We read recent emails you have sent, keep the ones long enough to show how you
+write, and turn them into the profile below. Nothing is sent anywhere else, and
+generating <b>replaces whatever is in the box</b>.
+</p>
+
+<form method="post" action="/voice/generate" style="display:inline">
+  <button type="submit" class="form-submit">Generate from sent mail</button>
+</form>
+{reset_html}
+
+<hr>
+
+<h3>Edit the profile</h3>
+
+<p>
+This is the text the assistant reads before every draft. Edit it freely: plain
+prose works better than a form. Letterlock always adds its own output rules
+(plain text, no em-dashes, never invent facts), so you do not need to write those.
+</p>
+
+<div class="contact-form" style="max-width:100%;">
+  <form method="post" action="/voice">
+    <textarea name="profile" rows="26" style="width:100%;font-family:monospace;font-size:12px;"
+              maxlength="{voice_dna.MAX_PROFILE_CHARS}">{_h(editable)}</textarea>
+    <button type="submit" class="form-submit">Save profile</button>
+  </form>
 </div>
-
-<p style="font-size:11px;">
-If you have not received that email yet, it will arrive within a few minutes of
-a new email landing in your inbox.
-</p>
-
-<p style="font-size:11px;">
-Until voice DNA is set, drafts are framed as a guessed voice with a note to
-correct any mismatch. This preserves the human-in-the-loop review that the
-setup step would otherwise provide.
-</p>
 
 <hr>
 <a href="/dashboard">&larr; Back to dashboard</a>
@@ -755,24 +807,112 @@ setup step would otherwise provide.
     return _layout("Voice DNA", body, active="/voice", user_email=acct.id)
 
 
-def _page_settings(acct, saved=False):
-    telegram = acct.telegram
-    chat_id = telegram.chat_id if telegram else ""
+def _telegram_section(acct, link_code=None, error=None, notice=None):
+    """The Telegram block of the settings page.
+
+    Linking is a round trip through the bot rather than a chat-ID text field: the
+    user posts a one-time code, and we read the chat id back off the bot. A typed
+    chat id proves nothing about who owns it."""
+    error_html = (
+        f'<div class="form-error" style="margin-bottom:10px;">{_h(error)}</div>'
+        if error else ""
+    )
+    notice_html = (
+        f'<div class="form-success" style="margin-bottom:10px;">{_h(notice)}</div>'
+        if notice else ""
+    )
+
+    if link_code:
+        username = telegram.bot_username()
+        open_link = (
+            f'<a href="https://t.me/{_h(username)}" target="_blank" rel="noopener">'
+            f'@{_h(username)}</a>'
+            if username else "our Telegram bot"
+        )
+        return f"""
+<h3>Telegram</h3>
+{error_html}{notice_html}
+<div class="info-box">
+  <p>
+    1. Open {open_link} in Telegram and press Start.<br>
+    2. Send it this code:
+  </p>
+  <p style="text-align:center;font-size:18px;font-weight:bold;letter-spacing:2px;">
+    {_h(link_code)}
+  </p>
+  <p>3. Come back here and press the button.</p>
+  <form method="post" action="/settings/telegram/confirm" style="display:inline">
+    <button type="submit" class="form-submit">I have sent the code</button>
+  </form>
+</div>
+"""
+
+    if acct.telegram:
+        return f"""
+<h3>Telegram</h3>
+{error_html}{notice_html}
+<p>
+  Linked to chat <code>{_h(acct.telegram.chat_id)}</code>. You get a message when a draft
+  is ready, plus the daily summary.
+</p>
+<form method="post" action="/settings/telegram/unlink" style="display:inline">
+  <button type="submit" class="form-submit">Unlink</button>
+</form>
+"""
+
+    return f"""
+<h3>Telegram</h3>
+{error_html}{notice_html}
+<p>
+  Link a chat to get a message when a draft is ready, plus your daily summary.
+</p>
+<form method="post" action="/settings/telegram/start" style="display:inline">
+  <button type="submit" class="form-submit">Link Telegram</button>
+</form>
+"""
+
+
+def _page_settings(acct, saved=False, link_code=None, error=None, notice=None,
+                   settings_error=None):
     saved_html = ""
     if saved:
         saved_html = '<div class="form-success" style="margin-bottom:10px;">Settings saved.</div>'
+    settings_error_html = (
+        f'<div class="form-error" style="margin-bottom:10px;">{_h(settings_error)}</div>'
+        if settings_error else ""
+    )
+    auto_checked = " checked" if acct.auto_schedule else ""
     body = f"""
 <h2>Settings</h2>
 
 {saved_html}
 
+{_telegram_section(acct, link_code=link_code, error=error, notice=notice)}
+
+<hr>
+
+<h3>Preferences</h3>
+
+{settings_error_html}
+
 <div class="contact-form" style="max-width:520px;">
   <form method="post" action="/settings">
     <div class="form-row">
-      <label>Telegram chat ID</label>
-      <input type="text" name="telegram_chat_id" value="{_h(chat_id)}" maxlength="40">
+      <label for="timezone">Timezone</label>
+      <input type="text" id="timezone" name="timezone" value="{_h(acct.timezone)}"
+             maxlength="60">
       <span style="font-size:10px;color:#666;">
-        Start a chat with your Telegram bot and send /start to get your chat ID.
+        IANA name, for example Europe/Berlin. Used for the times in calendar events.
+      </span>
+    </div>
+    <div class="form-row">
+      <label>
+        <input type="checkbox" name="auto_schedule" value="1"{auto_checked}>
+        Create calendar events from my sent mail
+      </label>
+      <span style="font-size:10px;color:#666;">
+        When an email you send commits to a date and time, add it to your primary
+        calendar. Off by default. No invitations are sent.
       </span>
     </div>
     <button type="submit" class="form-submit">Save</button>
@@ -844,8 +984,6 @@ def _page_account(acct, error=None):
 </tbody>
 </table>
 
-<hr>
-
 <h2>Danger zone</h2>
 
 <div class="notice">
@@ -875,7 +1013,7 @@ def _page_account(acct, error=None):
 def _page_deleted():
     body = """
 <h2>Account deleted</h2>
-<p>Your account and credentials have been removed. Thank you for using Knightdrafter.</p>
+<p>Your account and credentials have been removed. Thank you for using Letterlock.</p>
 <p><a href="/">Return to home</a></p>
 """
     return _layout("Account deleted", body)
@@ -897,7 +1035,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("X-Content-Type-Options", "nosniff")
+        for k, v in SECURITY_HEADERS:
+            self.send_header(k, v)
         for k, v in (extra or []):
             self.send_header(k, v)
         self.end_headers()
@@ -938,7 +1077,15 @@ class Handler(BaseHTTPRequestHandler):
         return m.value if m else None
 
     def _read_body(self):
-        length = int(self.headers.get("Content-Length", 0))
+        """Form fields from the request body, or None when the request is
+        malformed. A garbage Content-Length used to raise out of the handler,
+        and an unbounded one let a client name any allocation it liked."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return None
+        if length < 0 or length > MAX_BODY:
+            return None
         if not length:
             return {}
         raw = self.rfile.read(length).decode(errors="replace")
@@ -948,8 +1095,16 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
 
-        if path == "/static/app.css":
-            return self._send(200, _css(), ctype="text/css; charset=utf-8")
+        if path.startswith("/static/"):
+            body, ctype = _static(path[len("/static/"):])
+            if body is None:
+                return self._send(404, _page_error(404, "Page not found."))
+            return self._send(200, body, ctype=ctype,
+                              extra=[("Cache-Control", "public, max-age=86400")])
+        if path == "/favicon.ico":
+            body, ctype = _static("favicon.ico")
+            return self._send(200, body, ctype=ctype,
+                              extra=[("Cache-Control", "public, max-age=86400")])
 
         if path in ("/", ""):
             return self._send(200, _page_home())
@@ -965,8 +1120,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/auth/login":
             state = secrets.token_urlsafe(24)
             try:
-                url = _build_auth_url(state)
-            except WebError as e:
+                url = provisioning.build_auth_url(state, REDIRECT_URI)
+            except provisioning.ProvisionError as e:
                 log(f"auth/login failed: {e.msg}")
                 return self._send(e.code, _page_error(e.code, "Sign-in unavailable. Please try again later."))
             cookie = (
@@ -977,27 +1132,19 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/auth/callback":
             query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
-            err = query.get("error")
-            if err:
-                return self._send(400, _page_error(400, f"Sign-in was cancelled or denied: {_h(err)}"))
-            code = query.get("code")
-            state = query.get("state")
-            cookie_state = self._oauth_state()
-            if not code or not state:
-                return self._send(400, _page_error(400, "Missing code or state. Please try signing in again."))
-            if not cookie_state or not secrets.compare_digest(state, cookie_state):
-                return self._send(403, _page_error(403, "State mismatch. Please try signing in again."))
             try:
-                acct = _exchange_and_provision(code)
-            except WebError as e:
-                log(f"auth/callback provision failed: {e.msg}")
-                return self._send(e.code, _page_error(e.code, "Could not complete sign-in. Please try again."))
+                acct, location = provisioning.handle_callback(
+                    query, self._oauth_state(), REDIRECT_URI
+                )
+            except provisioning.ProvisionError as e:
+                log(f"auth/callback rejected: {e.msg}")
+                return self._send(e.code, _page_error(
+                    e.code, "Could not complete sign-in. Please try again."))
             except Exception as e:
                 log(f"auth/callback error: {e}")
                 return self._send(500, _page_error(500, "Sign-in failed. Please try again."))
             clear_state = f"{STATE_COOKIE}=; Path=/; Max-Age=0"
             session_cookie = sess.make_cookie(acct.id)
-            location = _checkout_redirect(acct.id)
             return self._redirect(location, extra=[
                 ("Set-Cookie", clear_state),
                 ("Set-Cookie", session_cookie),
@@ -1061,6 +1208,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/contact":
             form = self._read_body()
+            if form is None:
+                return self._send(400, _page_error(400, "Malformed request."))
             if form.get("website"):
                 return self._redirect("/contact")
             message = form.get("message", "").strip()
@@ -1068,7 +1217,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, _page_contact(error="Message is required."))
             name = form.get("name", "").strip()
             email = form.get("email", "").strip()
-            log(f"contact form: name={name!r} email={email!r} msg={message[:80]!r}")
+            _deliver_contact(name, email, message)
             return self._send(200, _page_contact(msg="Message received. We'll get back to you when we can."))
 
         if path == "/settings":
@@ -1076,31 +1225,105 @@ class Handler(BaseHTTPRequestHandler):
             if acct is None:
                 return
             form = self._read_body()
-            chat_id = form.get("telegram_chat_id", "").strip()
-            if chat_id:
-                data = account._read_manifest()
-                if data:
-                    for entry in data["accounts"]:
-                        if entry["id"].lower() == acct.id.lower():
-                            entry.setdefault("telegram", {})["chat_id"] = chat_id
-                            account.MANIFEST.write_text(json.dumps(data, indent=2))
-                            break
+            if form is None:
+                return self._send(400, _page_error(400, "Malformed request."))
+            tz = form.get("timezone", "").strip() or account.DEFAULT_TIMEZONE
+            if not _valid_timezone(tz):
+                return self._send(200, _page_settings(
+                    acct, settings_error=f"{tz} is not a known timezone name."))
+            acct = account.set_settings(
+                acct.id, timezone=tz, auto_schedule=bool(form.get("auto_schedule")),
+            )
             return self._send(200, _page_settings(acct, saved=True))
+
+        if path == "/settings/telegram/start":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            if not telegram.bot_token():
+                return self._send(200, _page_settings(acct, error=(
+                    "Telegram is not configured on this server yet.")))
+            code = _put_link_code(acct.id)
+            return self._send(200, _page_settings(acct, link_code=code))
+
+        if path == "/settings/telegram/confirm":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            code = _get_link_code(acct.id)
+            if not code:
+                return self._send(200, _page_settings(acct, error=(
+                    "That link code expired. Start again.")))
+            try:
+                chat_id = telegram.claim_chat_id(code)
+            except Exception as e:
+                log(f"telegram claim failed for {acct.id}: {e}")
+                chat_id = None
+            if not chat_id:
+                return self._send(200, _page_settings(acct, link_code=code, error=(
+                    "We have not seen that code yet. Send it to the bot, "
+                    "then press the button again.")))
+            _LINK_CODES.pop(acct.id, None)
+            acct = account.set_telegram(acct.id, chat_id=chat_id)
+            telegram.send_telegram(
+                "✅ <b>Letterlock is linked to this chat.</b>\n"
+                "You will get a message when a draft is ready, plus your daily summary.",
+                acct.telegram,
+            )
+            return self._send(200, _page_settings(
+                acct, notice="Telegram linked. We sent a test message."))
+
+        if path == "/settings/telegram/unlink":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            _LINK_CODES.pop(acct.id, None)
+            acct = account.set_telegram(acct.id, clear=True)
+            return self._send(200, _page_settings(acct, notice="Telegram unlinked."))
+
+        if path == "/voice":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            form = self._read_body()
+            if form is None:
+                return self._send(400, _page_error(400, "Malformed request."))
+            try:
+                acct = voice_dna.save(acct, form.get("profile", ""))
+            except voice_dna.VoiceError as e:
+                return self._send(200, _page_voice(acct, error=str(e)))
+            return self._send(200, _page_voice(acct, notice="Profile saved."))
+
+        if path == "/voice/generate":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            voice_dna.start(acct)
+            # Straight to the waiting page rather than rendering it here, so a
+            # refresh during generation is a GET and not a repeated POST.
+            return self._redirect("/voice")
+
+        if path == "/voice/reset":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            acct = voice_dna.clear(acct)
+            return self._send(200, _page_voice(
+                acct, notice="Profile removed. Drafts use the default profile again."))
 
         if path == "/account/delete":
             acct = self._require_auth()
             if acct is None:
                 return
             form = self._read_body()
+            if form is None:
+                return self._send(400, _page_error(400, "Malformed request."))
             confirm = form.get("confirm_email", "").strip().lower()
             if confirm != acct.id.lower():
                 return self._send(200, _page_account(acct, error="Email address did not match. Account not deleted."))
-            data = account._read_manifest()
-            if data:
-                data["accounts"] = [
-                    e for e in data["accounts"] if e["id"].lower() != acct.id.lower()
-                ]
-                account.MANIFEST.write_text(json.dumps(data, indent=2))
+            account.delete_account(acct.id)
+            _LINK_CODES.pop(acct.id, None)
+            voice_dna.clear_status(acct.id)
             clear = sess.clear_cookie()
             return self._send(200, _page_deleted(), extra=[("Set-Cookie", clear)])
 

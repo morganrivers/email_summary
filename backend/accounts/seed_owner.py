@@ -20,17 +20,7 @@ from pathlib import Path
 
 from backend import paths
 from backend.accounts import account
-from backend.drafting import draft_replies
-
-
-def _relative_if_inside(path):
-    """Store paths relative to the app root when they live under it, so the
-    manifest survives the directory being renamed (as /opt/email_summary ->
-    /opt/letterlock just was). account._resolve() reads both forms."""
-    try:
-        return str(Path(path).resolve().relative_to(paths.REPO_ROOT))
-    except ValueError:
-        return str(path)
+from backend.drafting import voice_dna
 
 
 def owner_entry_args():
@@ -52,17 +42,17 @@ def owner_entry_args():
         "email": identity.emails[0],
         "first": identity.first,
         "last": identity.last,
-        "creds_dir": _relative_if_inside(owner.creds_dir),
+        "creds_dir": paths.relative_if_inside(owner.creds_dir),
         "first_aliases": tuple(identity.first_aliases),
         "telegram_chat_id": owner.telegram.chat_id,
-        "state_file": _relative_if_inside(owner.state.path),
+        "state_file": paths.relative_if_inside(owner.state.path),
         "plan_status": "active",
         "timezone": owner.timezone,
         "auto_schedule": owner.auto_schedule,
     }
-    voice = draft_replies.OWNER_VOICE_PROFILE
+    voice = voice_dna.OWNER_PROFILE
     if voice.exists():
-        args["voice_file"] = _relative_if_inside(voice)
+        args["voice_file"] = paths.relative_if_inside(voice)
     return args
 
 

@@ -111,7 +111,10 @@ is what protects it from `--delete-after`.
   `watch_register.mjs` worker under each account's creds dir.
 - `frontend/web_server.py` — the product web UI run by the `letterlock-web`
   service, behind Caddy (`127.0.0.1:8790` on `APP_HOST`). Sign-in with Google,
-  dashboard, settings, billing. The standalone `/onboard` flow it superseded was
+  dashboard, voice DNA, settings, billing. `/voice` generates a profile from the
+  user's sent mail on a background thread (`voice_dna.start()`, page polls by
+  meta refresh) and shows it as editable plaintext.
+  The standalone `/onboard` flow it superseded was
   removed; its OAuth sequence now lives in `backend/onboarding/provisioning.py`.
   Telegram is linked by a round trip through the bot (`/settings/telegram/*`),
   never by typing a chat id.
@@ -145,9 +148,17 @@ copy.
   linking. `send_telegram(msg, target)` always takes an explicit target;
   `operator_target()` (env) is only for box-level failures, never for a user's
   mail. There is deliberately no env fallback on the per-account path.
-- `draft_replies.voice_profile_for(account)` — which voice profile applies. The
-  operator's personal profile is reachable only through their own manifest
-  entry; everyone else gets `backend/drafting/default_voice.md`.
+- `backend/drafting/voice_dna.py` — every voice profile question: where a
+  profile lives, which one applies (`resolve()`, called by
+  `draft_replies.voice_profile_for()`), and how one is generated from the
+  account's own sent mail. The operator's personal profile is reachable only
+  through their own manifest entry; everyone else gets
+  `backend/drafting/default_voice.md` until they generate or write their own,
+  which lands in `database/<id>/voice-dna.md` (never in `config/`, which the
+  deploy overwrites). `HARD_CONSTRAINTS` holds the output rules appended to
+  every profile — the em-dash ban among them, which `agentic_drafter` enforces
+  by rejecting drafts — so no profile carries its own copy and no user can edit
+  them away. `account.set_voice()` is the sole writer of the manifest pointer.
 - `agentic_drafter.untrusted()` — the fence put around anything that came from
   outside the account (email bodies, tool results) before it reaches the model,
   paired with `INJECTION_RULE` in the system prompt.
@@ -158,6 +169,12 @@ copy.
 - `draft_replies.gmail_thread_link()` — Gmail deep-link builder.
 - `draft_replies.format_draft_line()` — Telegram notification line item
   (linked sender + subject, optional reason + trace url).
+- `tools/render_brand.py` — the brand mark (envelope + padlock) and every icon
+  cut from it. Geometry and the two brand colours live there; run
+  `python -m tools.render_brand` to rewrite `frontend/static/`. The generated
+  PNGs and the `.ico` are committed, so the server never renders at runtime and
+  Pillow is not a deploy dependency. `frontend/web_server.STATIC_TYPES` is the
+  allow-list of what `/static/` will serve; add an asset to both.
 
 ## Progressive drafts
 
