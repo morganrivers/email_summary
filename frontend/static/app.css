@@ -50,17 +50,6 @@ body {
 	align-items: center;
 	position: relative;
 }
-#titlebar::after {
-	content: "";
-	position: absolute;
-	left: 0; right: 0; bottom: -3px;
-	height: 3px;
-	background:
-		linear-gradient(90deg,
-			#8a6d3b 0 6px, transparent 6px 12px) repeat-x;
-	background-size: 12px 3px;
-	opacity: 0.55;
-}
 #titlebar .brand a {
 	color: #ffffff;
 	text-decoration: none;
@@ -69,16 +58,19 @@ body {
 	font-weight: 600;
 	letter-spacing: 0.5px;
 	display: inline-flex;
-	align-items: center;
+	align-items: baseline;
 	gap: 8px;
 }
 #titlebar .brand a:hover { color: #ffffff; }
+/* Sized to the ascender of the wordmark and sat on its baseline: a replaced
+   flex item aligns by its bottom edge, so the envelope and the "L" share a
+   floor whatever the line box does. */
 #titlebar .mark {
-	color: #c9a15b;
-	font-size: 14px;
-	line-height: 1;
-	letter-spacing: -1px;
-	font-family: 'Courier New', monospace;
+	width: 23px;
+	height: 14px;
+	flex: none;
+	position: relative;
+	top: 1px;
 }
 #titlebar .tagline {
 	display: block;
