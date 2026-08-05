@@ -23,7 +23,7 @@ from pathlib import Path
 
 # The web modules read secrets at import time. Nothing here sends anything, so
 # placeholders keep a bare checkout renderable. These are set before the imports
-# below because load_dotenv() does not overwrite an existing variable -- which is
+# below because secrets.load() does not overwrite an existing variable -- which is
 # also how the empty bot token sticks: the settings page asks Telegram for the
 # bot's username, and a render must not make network calls with a real token.
 os.environ.setdefault("DEEPSEEK_API_KEY", "render-placeholder")

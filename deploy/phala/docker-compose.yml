@@ -26,14 +26,23 @@ services:
       # processes no mail at all while that box is unreachable, by design: see
       # docs/plan_token_custody.md §1 on the availability trade.
       LETTERLOCK_COSIGNER_URL: "${LETTERLOCK_COSIGNER_URL:-}"
-    # Secrets (LLM key, Telegram creds) are injected
-    # post-attestation via dstack encrypted environment variables: encrypted to
-    # the app KMS key, decrypted only inside the attested CVM, never baked into
-    # the measured image. Encrypt them with the phala CLI at deploy time; the
-    # guest sees them as env once the measurement is authorized.
-    env_file:
-      - path: /app/.env
-        required: false
+    # Secrets (the LLM keys, the Telegram creds, the Polar keys, SESSION_SECRET)
+    # are injected post-attestation via dstack encrypted environment variables:
+    # encrypted to the app KMS key, decrypted only inside the attested CVM, never
+    # baked into the measured image. Encrypt them with the phala CLI at deploy
+    # time; the guest sees them as env once the measurement is authorized.
+    #
+    # There is deliberately no `env_file: /app/.env` here. It was mounted with
+    # `required: false`, which made a cleartext secrets file on the volume a
+    # supported fallback -- a copy the KMS does not gate and the attestation does
+    # not cover. tee_boot now fails closed if that file exists at all, so adding
+    # the mount back stops the enclave from booting rather than silently
+    # weakening it. backend/secrets.py is the matching rule on the app side: it
+    # reads no file under TEE_REQUIRED.
+    #
+    # The Google OAuth client secret is the one value still read off the volume
+    # (oauth_app.py). Injecting it belongs to onboarding-exchange-4, per §8 of
+    # docs/plan_token_custody.md.
     volumes:
       - database:/app/database
       - gmail_tokens:/app/.gmail-mcp

@@ -50,9 +50,8 @@ import urllib.parse
 import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from dotenv import load_dotenv
-
 from backend import paths
+from backend import secrets as app_secrets
 from backend import site
 from backend.accounts import account
 from backend.billing import billing
@@ -63,7 +62,7 @@ from backend.masking import pseudonymizer
 from backend.onboarding import provisioning
 from frontend import session as sess
 
-load_dotenv(paths.ENV_FILE)
+app_secrets.load()
 
 HOST = os.environ.get("WEB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("WEB_PORT", str(site.WEB_PORT)))

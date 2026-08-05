@@ -42,8 +42,8 @@ Which units get deployed is derived from `deploy/hetzner/`: every `.service`
 with an `[Install]` section plus every `.timer`. Adding a unit file is all it
 takes to deploy it. Before restarting anything, `deploy/preflight.py` runs on the
 box and checks, per unit, that its entry module imports and its configuration is
-present — using the same code the service runs (`PolarBilling()`,
-`session.secret_configured()`). A unit that fails is reported and left alone
+present — through `backend/secrets.py`, which answers with the same code the
+service runs (`PolarBilling()`). A unit that fails is reported and left alone
 rather than restarted into a crash loop, so an unprovisioned service never fails
 the whole deploy. After the restart the script verifies each unit is actually
 active and exits nonzero if not.
@@ -102,11 +102,14 @@ Each entry here has a matching `--exclude` in `deploy/deploy.sh`; that exclusion
 is what protects it from `--delete-after`.
 
 - `.env` — API keys, not in git. `DEEPSEEK_API_KEY` and, to offer the
-  confidential route, `TRESOR_API_KEY` (see `llm_client.PROVIDERS`).
+  confidential route, `TRESOR_API_KEY` (see `llm_client.PROVIDERS`). Read once,
+  through `secrets.load()`. Inside the enclave this file must not exist at all;
+  the same values arrive as injected environment.
 - `.gmail-mcp/` — `gcp-oauth.keys.json`, the OAuth *app*'s client_id and
   client_secret. One app serves every user; no per-user token lives here any
   more (see `database/`). Read only through
-  `backend/integrations/gmail_gcal/oauth_app.py`.
+  `backend/integrations/gmail_gcal/oauth_app.py`, and still the one secret read
+  off a volume rather than injected (see §8 of `docs/plan_token_custody.md`).
 - `state/` — daemon runtime scratch: `state.json`, `wake.fifo`,
   `wake_queue.jsonl`, `wake_queue.lock`, `restart.flag`. Created on first write
   by `paths.ensure_run_dir()`.
@@ -170,6 +173,22 @@ service restart.
 Keep these centralized. If you need behavior that lives here, import — don't
 copy.
 
+- `backend/secrets.py` — how a secret reaches the process. `secrets.load()` is
+  the only read of `.env` (idempotent, and injected environment always wins over
+  the file), and the `*_configured()` checks are the only definition of "this
+  value is present", answered by calling the same code the services call
+  (`PolarBilling()`, `telegram.operator_target()`) wherever presence is a
+  judgement rather than a lookup, and owning the variable name itself where it
+  is not: `frontend/session.py` reads `SESSION_SECRET_ENV` from here rather than
+  the reverse, so nothing in `backend/` reaches up into `frontend/` to ask. `tee_boot.run_gate()` and
+  `deploy/preflight.py` both build on them, so the enclave's fail-closed set and
+  the deploy's skip set cannot drift apart — the old gate listed four names and
+  so booted happily without `SESSION_SECRET` or the Polar keys. Under
+  `TEE_REQUIRED` no file is read at all: secrets are injected post-attestation,
+  the compose file mounts no `.env`, and the gate refuses to boot if one exists
+  on the volume. `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` are
+  named here but deliberately not yet in `REQUIRED`, because `oauth_app.py`
+  still reads that pair off the volume; `onboarding-exchange-4` flips both.
 - `backend/site.py` — public hostnames (`APP_HOST` = the product,
   `API_HOST` = the Pub/Sub push + Polar webhook box), loopback ports, and every
   externally visible URL built from them (OAuth callbacks, Polar webhook, the

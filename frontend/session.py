@@ -10,8 +10,9 @@ account.py on each request.
 import hashlib
 import hmac
 import http.cookies
-import os
 import time
+
+from backend import secrets
 
 SESSION_COOKIE = "letterlock_session"
 SESSION_TTL = 86400 * 30
@@ -19,17 +20,14 @@ SESSION_TTL = 86400 * 30
 _secret = None
 
 
-def secret_configured():
-    """Whether a session secret is available. The deploy preflight calls this so
-    it and the running server agree on what 'configured' means."""
-    return bool(os.environ.get("SESSION_SECRET", ""))
-
-
 def _get_secret():
+    """The signing key, read through backend.secrets so this module never has an
+    opinion about where a secret comes from: whether it was injected into an
+    attested CVM or read from .env is one question, answered in one place, and
+    the boot gate and the deploy preflight ask it about this value too."""
     global _secret
     if _secret is None:
-        assert secret_configured(), "SESSION_SECRET must be set"
-        _secret = os.environ["SESSION_SECRET"].encode()
+        _secret = secrets.require(secrets.SESSION_SECRET_ENV).encode()
     return _secret
 
 

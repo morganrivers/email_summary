@@ -16,14 +16,12 @@ import html
 import datetime
 import sys
 
-from dotenv import load_dotenv
-
-from backend import paths
+from backend import secrets
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal import calendar_api
 from backend.integrations.telegram import send_telegram, notify_error
 
-load_dotenv(paths.ENV_FILE)
+secrets.load()
 
 # Per account: an event written at "3pm" means 3pm where the user is, and a
 # module constant put every user in the operator's timezone.

@@ -12,16 +12,14 @@ Telegram receives a single notification listing what was drafted.
 import re
 import html
 
-from dotenv import load_dotenv
-
-from backend import paths
+from backend import secrets
 from backend.drafting import agentic_drafter
 from backend.drafting import voice_dna
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal import drafts
 from backend.integrations.telegram import send_telegram
 
-load_dotenv(paths.ENV_FILE)
+secrets.load()
 
 CLASSIFIER_PROMPT = (
     "Decide for each email whether the recipient should personally reply.\n\n"

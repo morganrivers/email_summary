@@ -26,6 +26,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from backend import secrets
 from backend.tee import tee_boot
 from backend.tee.dstack_client import DstackClient, DstackError
 
@@ -79,7 +80,7 @@ def app_secret():
         secret = _decode_kms_key(released.get("key"))
     else:
         dev = os.environ.get(DEV_SECRET_ENV, "")
-        assert not tee_boot.tee_required(), (
+        assert not secrets.tee_required(), (
             "TEE_REQUIRED is set but there is no dstack guest agent to release "
             "the app secret. Refusing to protect refresh tokens with a key that "
             "did not come from the KMS."

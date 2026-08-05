@@ -19,14 +19,12 @@ import os
 import sys
 import urllib.parse
 
-from dotenv import load_dotenv
-
-from backend import paths
+from backend import secrets
 from backend import site
 from backend.accounts import account
 from backend.billing import polar_api
 
-load_dotenv(paths.ENV_FILE)
+secrets.load()
 
 ENTITLED_SUB_STATUSES = frozenset({"active", "trialing"})
 

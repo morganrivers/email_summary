@@ -33,14 +33,13 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from backend import paths
+from backend import secrets
 from backend import site
 from backend.accounts import account
 from backend.daemons import wake_queue
 
-load_dotenv(paths.ENV_FILE)
+secrets.load()
 
 FIFO_PATH = paths.RUN_DIR / "wake.fifo"
 HOST = os.environ.get("WEBHOOK_HOST", "127.0.0.1")

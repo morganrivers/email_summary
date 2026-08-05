@@ -21,9 +21,10 @@ Status, per track:
   `cosigner/attest.py` refuses the stub once the allowlist names a measurement
   or `TEE_REQUIRED` is set.
 - Track K (§6, Node removal) — **[BUILT, merged]**.
-- §8 (Barrier A gaps) — **[BUILT on `feat/secrets-gate-3`, not merged]**. Note
-  that branch predates both merges and will need the same treatment: it is the
-  third writer of `requirements.txt` and `CLAUDE.md`.
+- §8 (Barrier A gaps) — **[BUILT, merged]** for three of the five items: the
+  `.env` mount, the boot gate's secret list, and the eight `load_dotenv` call
+  sites. The `gcp-oauth.keys.json` injection belongs to `onboarding-exchange-4`
+  and the duplicate dependency manifest is still open; both are marked in §8.
 - §10 (front-end copy) — **[TODO]**, and each edit needs its own confirmation.
   `/about` at `web_server.py:383-386` is factually wrong as of Track I and
   says so about an arrangement that is now stronger than the claim.
@@ -740,16 +741,25 @@ against the box here.
 ## 8. Also fix while in here (Barrier A gaps)
 
 Found during this review; small, and they belong to the same threat model.
-Three of the four are `secrets-gate-3`; the `gcp-oauth.keys.json` move is
-`onboarding-exchange-4`, because it lands in the same file as the code
-exchange it belongs to.
+Three of the five are `secrets-gate-3` and have landed; the
+`gcp-oauth.keys.json` move is `onboarding-exchange-4`, because it lands in the
+same file as the code exchange it belongs to.
 
-- **`secrets-gate-3`** — `deploy/phala/docker-compose.yml:32` mounts `/app/.env` with
-  `required: false`. A file-backed `.env` is exactly the leak this design makes
-  impossible everywhere else. Under `TEE_REQUIRED` that mount should not exist.
-- **`secrets-gate-3`** — `tee_boot.REQUIRED_SECRETS` (line 40) lists four values. `SESSION_SECRET`
-  (`frontend/session.py:32`) and the Polar keys (`backend/billing/billing.py:52`)
-  are missing, so the gate passes without them.
+- **`secrets-gate-3`, done** — ~~`deploy/phala/docker-compose.yml:32` mounts
+  `/app/.env` with `required: false`.~~ Mount removed. `tee_boot.run_gate()`
+  now fails closed if `.env` exists on the volume at all, so putting the mount
+  back stops the enclave booting rather than silently weakening it.
+- **`secrets-gate-3`, done** — ~~`tee_boot.REQUIRED_SECRETS` lists four
+  values.~~ Replaced by `secrets.missing()`, which covers the LLM keys,
+  Telegram, `SESSION_SECRET` and the Polar API + webhook credentials, and
+  decides presence by calling the services' own code (`PolarBilling()`,
+  `telegram.operator_target()`) so the list cannot drift from what the services
+  need.
+- **`secrets-gate-3`, done** — ~~eight modules call
+  `load_dotenv(paths.ENV_FILE)` independently.~~ Collapsed to
+  `secrets.load()`: one read of the file, injected environment always wins over
+  it, `file_backed()` names anything that came off disk, and under
+  `TEE_REQUIRED` the file is never opened.
 - **`onboarding-exchange-4`** — `gcp-oauth.keys.json` holds the Google
   `client_secret`, read off the volume rather than from injected env. It is the
   single value with the widest blast radius and the one **not** going through
@@ -769,16 +779,22 @@ exchange it belongs to.
   off disk instead of released post-attestation — without touching the custody
   split. There is no marginal loss from the enclave holding it, since an
   attacker with enclave memory already has refresh tokens.
+
+  Half of the wiring is already in place, so this is smaller than it reads.
+  `backend/secrets.py` names the pair (`GOOGLE_CLIENT_ID_ENV`,
+  `GOOGLE_CLIENT_SECRET_ENV`), exposes `google_oauth_client()` and has
+  `google_oauth_configured()` written and tested. It is deliberately **not** in
+  `REQUIRED`: while `oauth_app.load_keys()` still reads the file, requiring the
+  injected form would refuse boot over a value nothing consults. Make
+  `load_keys()` prefer the injected pair and refuse the file under
+  `TEE_REQUIRED`, then add `google_oauth_configured` to `REQUIRED` in the same
+  commit.
 - **`secrets-gate-3`** — `deploy/phala/pyproject.toml` is a second dependency
   list and has already drifted from `requirements.txt`: it still pins presidio
   and is missing `standardwebhooks` and `certifi`. Two manifests for one
   environment is against the single-source rule, and the failure mode is a
   dependency that exists on Hetzner and not in the measured image. Collapse to
   one source, or generate one from the other in the build.
-- **`secrets-gate-3`** — eight modules call `load_dotenv(paths.ENV_FILE)` independently. Against the
-  single-source rule in CLAUDE.md. Collapse to one `backend/secrets.py`
-  accessor so "this value came from injected env, not a file" is assertable in
-  one place.
 
 ---
 
