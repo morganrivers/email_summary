@@ -253,9 +253,17 @@ phala deploy \
 ```
 
 Build `.env.tee` deliberately rather than reusing the server's `.env`. It needs
-everything `tee_boot.REQUIRED_SECRETS` gates on after `secrets-gate-3` widened
-it: the original four, plus `SESSION_SECRET` and the Polar keys. It must **not**
-contain `gcp-oauth.keys.json`; that moved to the co-signer (plan §8).
+everything `secrets.REQUIRED` gates on: the LLM keys, the Telegram pair,
+`SESSION_SECRET`, the Polar API and webhook credentials, and
+`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`. Run
+`venv/bin/python -c 'from backend import secrets; print(secrets.missing())'`
+against the same environment if you want the list checked rather than recited.
+
+That last pair is the contents of `gcp-oauth.keys.json`, injected rather than
+mounted (plan §8; it did **not** move to the co-signer, and that section says
+why). Copy the two values out of the file on the Hetzner box. There is no
+`/app/.gmail-mcp` volume in the compose any more, and the boot gate refuses to
+start if a key file turns up on the enclave volume at all.
 
 If `--kms base`, this is where `--private-key` and the on-chain authorization
 happen, and where §6.6 step 5 applies.

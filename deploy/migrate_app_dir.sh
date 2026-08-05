@@ -68,9 +68,6 @@ for f in prompt_for_email voice-dna-email.md; do
     fi
 done
 
-echo "== repointing GMAIL_MCP_DIR in .env"
-sed -i "s|^GMAIL_MCP_DIR=.*|GMAIL_MCP_DIR=$NEW_DIR/.gmail-mcp|" "$NEW_DIR/.env"
-
 echo "== rewriting the venv's baked-in paths"
 # -type f skips the python symlinks, which point at the system interpreter and
 # must not be followed by sed.

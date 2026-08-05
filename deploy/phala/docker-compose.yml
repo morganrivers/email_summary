@@ -26,8 +26,9 @@ services:
       # processes no mail at all while that box is unreachable, by design: see
       # docs/plan_token_custody.md §1 on the availability trade.
       LETTERLOCK_COSIGNER_URL: "${LETTERLOCK_COSIGNER_URL:-}"
-    # Secrets (the LLM keys, the Telegram creds, the Polar keys, SESSION_SECRET)
-    # are injected post-attestation via dstack encrypted environment variables:
+    # Secrets (the LLM keys, the Telegram creds, the Polar keys, SESSION_SECRET
+    # and the Google OAuth client) are injected post-attestation via dstack
+    # encrypted environment variables:
     # encrypted to the app KMS key, decrypted only inside the attested CVM, never
     # baked into the measured image. Encrypt them with the phala CLI at deploy
     # time; the guest sees them as env once the measurement is authorized.
@@ -40,12 +41,15 @@ services:
     # weakening it. backend/secrets.py is the matching rule on the app side: it
     # reads no file under TEE_REQUIRED.
     #
-    # The Google OAuth client secret is the one value still read off the volume
-    # (oauth_app.py). Injecting it belongs to onboarding-exchange-4, per §8 of
-    # docs/plan_token_custody.md.
+    # GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET are injected the same
+    # way, and there is deliberately no `/app/.gmail-mcp` volume any more: that
+    # mount existed to carry gcp-oauth.keys.json, the widest-blast-radius value
+    # here and the last one read off disk. oauth_app.load_keys() refuses the file
+    # under TEE_REQUIRED and the boot gate refuses to start with one present, so
+    # re-adding the volume stops the enclave booting rather than quietly putting
+    # the client secret back outside the KMS.
     volumes:
       - database:/app/database
-      - gmail_tokens:/app/.gmail-mcp
       # RA-TLS material + boot attestation record written by tee_boot; tmpfs so
       # the enclave-held private key never lands on the encrypted volume at rest.
       - type: tmpfs
@@ -55,4 +59,3 @@ services:
 
 volumes:
   database:
-  gmail_tokens:

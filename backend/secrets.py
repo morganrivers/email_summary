@@ -40,13 +40,10 @@ from backend import paths
 _TRUTHY = ("1", "true", "yes")
 
 # The shared Google OAuth app. One app serves every user, so its client_secret
-# has the widest blast radius of any value here, and it is the last one still
-# read off the volume rather than released post-attestation
-# (backend/integrations/gmail_gcal/oauth_app.py). These names are the contract
-# for injecting it instead; `onboarding-exchange-4` owns that change, per §8 of
-# docs/plan_token_custody.md, and adds google_oauth_configured() to REQUIRED
-# when oauth_app.py actually reads them. Requiring them before then would fail
-# the boot gate on a value nothing consults.
+# has the widest blast radius of any value here. It was the last secret read off
+# the volume rather than released post-attestation; ``oauth_app.load_keys()``
+# now takes this pair first and refuses the file under TEE_REQUIRED, so inside
+# the enclave these names are the only way in.
 GOOGLE_CLIENT_ID_ENV = "GOOGLE_OAUTH_CLIENT_ID"
 GOOGLE_CLIENT_SECRET_ENV = "GOOGLE_OAUTH_CLIENT_SECRET"
 
@@ -66,10 +63,18 @@ def tee_required():
     return os.environ.get("TEE_REQUIRED", "").strip().lower() in _TRUTHY
 
 
-def env_file_present():
-    """Whether a ``.env`` exists on the volume. Under TEE_REQUIRED that is a
-    provisioning error, not a fallback: see ``tee_boot.run_gate()``."""
-    return paths.ENV_FILE.exists()
+def volume_secrets():
+    """Secret files sitting on the volume, in the order they are worth naming.
+
+    Under TEE_REQUIRED every one of these is a provisioning error rather than a
+    fallback: a file the KMS does not gate and the measurement does not cover.
+    The list lives here rather than in ``tee_boot`` so the gate refuses exactly
+    the files the loaders refuse -- ``load()`` reads no ``.env`` and
+    ``oauth_app.load_keys()`` reads no key file once TEE_REQUIRED is set, and a
+    gate that enumerated its own subset would let a re-added mount through."""
+    from backend.integrations.gmail_gcal import oauth_app
+
+    return tuple(p for p in (paths.ENV_FILE, oauth_app.keys_path()) if p.exists())
 
 
 def load():
@@ -117,9 +122,10 @@ def file_backed():
 
 def google_oauth_client():
     """The shared Google OAuth app's ``(client_id, client_secret)`` from
-    injected environment, or ``None`` when it was not injected. ``oauth_app.py``
-    reads ``gcp-oauth.keys.json`` off the volume today and does not consult this
-    yet; see the note on the env names above."""
+    injected environment, or ``None`` when it was not injected. Half a pair is
+    no pair: ``oauth_app.load_keys()`` falls back to the volume file on this
+    answer, and falling back on a stray client_id would send the wrong app to
+    Google."""
     client_id = get(GOOGLE_CLIENT_ID_ENV)
     client_secret = get(GOOGLE_CLIENT_SECRET_ENV)
     if not client_id or not client_secret:
@@ -189,12 +195,19 @@ def polar_configured():
 
 
 def google_oauth_configured():
-    """Reason the Google OAuth app was not injected, or None. Deliberately not
-    in ``REQUIRED`` yet: ``oauth_app.py`` still reads the client secret off the
-    volume, so requiring the injected form would refuse boot over a value no
-    caller consults. `onboarding-exchange-4` flips both together."""
-    if google_oauth_client() is None:
-        return f"{GOOGLE_CLIENT_ID_ENV} / {GOOGLE_CLIENT_SECRET_ENV} not set"
+    """Reason nobody can sign in with Google, or None.
+
+    Asked of ``oauth_app.load_keys()`` rather than answered here, because which
+    source counts is that module's decision and it differs by environment: the
+    volume file is a valid answer on the box and a refusal inside the enclave.
+    A copy of the rule here would approve a source the reader rejects, which is
+    a gate that passes and a sign-in that 500s."""
+    from backend.integrations.gmail_gcal import oauth_app
+
+    try:
+        oauth_app.load_keys()
+    except (AssertionError, OSError, ValueError) as err:
+        return str(err)
     return None
 
 
@@ -207,6 +220,7 @@ REQUIRED = (
     session_configured,
     polar_api_configured,
     polar_webhook_configured,
+    google_oauth_configured,
 )
 
 
