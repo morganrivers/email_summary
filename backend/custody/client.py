@@ -41,6 +41,7 @@ import time
 
 import requests
 
+from backend import secrets
 from backend import site
 from backend.custody.wrapping import CustodyError
 from backend.integrations import telegram
@@ -107,7 +108,7 @@ def _client_identity():
     dev_cert = os.environ.get(CLIENT_CERT_ENV, "")
     dev_key = os.environ.get(CLIENT_KEY_ENV, "")
     if dev_cert and dev_key:
-        assert not tee_boot.tee_required(), (
+        assert not secrets.tee_required(), (
             "TEE_REQUIRED is set but the co-signer client certificate comes "
             f"from {CLIENT_CERT_ENV}. Inside a CVM it must be RA-TLS material "
             "from the guest agent, or the co-signer is authenticating a file "
@@ -117,7 +118,7 @@ def _client_identity():
         return _client_identity_cache
     dstack = DstackClient()
     if not dstack.available():
-        assert not tee_boot.tee_required(), (
+        assert not secrets.tee_required(), (
             "TEE_REQUIRED is set but there is no dstack guest agent to issue an "
             "RA-TLS client certificate."
         )

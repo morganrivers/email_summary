@@ -19,18 +19,15 @@ by setting the header directly.
 """
 
 import json
-import threading
-from http.server import ThreadingHTTPServer
 
 import pytest
 import requests
 
+import harness
 from cosigner import attest
 from cosigner import audit
-from cosigner import keys
 from cosigner import policy
 from cosigner import protocol
-from cosigner import server
 
 UID = "alice@example.com"
 SEALED = b"\x01" * 12 + b"pretend this is AES-GCM output from the enclave"
@@ -38,47 +35,36 @@ SEALED = b"\x01" * 12 + b"pretend this is AES-GCM output from the enclave"
 
 @pytest.fixture
 def cosigner(tmp_path, monkeypatch):
-    """A running co-signer with fresh keys, a fresh log, and attestation off."""
-    monkeypatch.setenv("COSIGNER_ATTESTATION", attest.DEV_INSECURE)
-    monkeypatch.delenv("TEE_REQUIRED", raising=False)
-    monkeypatch.delenv("COSIGNER_DISABLED", raising=False)
-    monkeypatch.setenv("COSIGNER_STATE_DIR", str(tmp_path / "state"))
-    keys.reset_for_test(keys.write_dev_credentials(tmp_path / "creds"))
-    audit.reset_for_test(tmp_path / "state")
-    attest.reset_for_test()
-    monkeypatch.setattr(policy, "_LAST_ALERT", {})
-    sent = []
-    monkeypatch.setattr(policy.alerts, "notify_operator", lambda text: sent.append(text))
+    """A running co-signer with fresh keys, a fresh log, and attestation off.
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    The process itself comes from `harness.running_cosigner`, which the
+    integration test in `test_custody_integration.py` also drives; what is local
+    here is only the request builder that plays Caddy's part."""
+    with harness.running_cosigner(tmp_path, monkeypatch) as proc:
+        base = proc.base
 
-    class Client:
-        alerts = sent
+        class Client:
+            alerts = proc.alerts
 
-        def post(self, path, **body):
-            return requests.post(base + path, json=body, timeout=10)
+            def post(self, path, **body):
+                return requests.post(base + path, json=body, timeout=10)
 
-        def get(self, path):
-            return requests.get(base + path, timeout=10)
+            def get(self, path):
+                return requests.get(base + path, timeout=10)
 
-        def wrap(self, uid=UID, inner=SEALED):
-            return self.post(protocol.WRAP_PATH, uid=uid, inner=protocol.b64(inner))
+            def wrap(self, uid=UID, inner=SEALED):
+                return self.post(protocol.WRAP_PATH, uid=uid, inner=protocol.b64(inner))
 
-        def unwrap(self, uid=UID, outer=None, htm="POST", htu=protocol.TOKEN_ENDPOINT,
-                   nonce=None):
-            return self.post(protocol.UNWRAP_AND_SIGN_PATH, uid=uid,
-                             outer=protocol.b64(outer), htm=htm, htu=htu, nonce=nonce)
+            def unwrap(self, uid=UID, outer=None, htm="POST", htu=protocol.TOKEN_ENDPOINT,
+                       nonce=None):
+                return self.post(protocol.UNWRAP_AND_SIGN_PATH, uid=uid,
+                                 outer=protocol.b64(outer), htm=htm, htu=htu, nonce=nonce)
 
-        def sign(self, htm="POST", htu=protocol.TOKEN_ENDPOINT, nonce=None, uid=None):
-            return self.post(protocol.SIGN_DPOP_PATH, htm=htm, htu=htu, nonce=nonce,
-                             uid=uid)
+            def sign(self, htm="POST", htu=protocol.TOKEN_ENDPOINT, nonce=None, uid=None):
+                return self.post(protocol.SIGN_DPOP_PATH, htm=htm, htu=htu, nonce=nonce,
+                                 uid=uid)
 
-    yield Client()
-    httpd.shutdown()
-    audit.reset_for_test()
+        yield Client()
 
 
 def _outer(client, uid=UID, inner=SEALED):

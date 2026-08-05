@@ -380,9 +380,12 @@ NER model, so those are always caught.</p>
 
 <h2>Your OAuth token</h2>
 
-<p>Your Gmail refresh token grants read/write access to your mailbox. It lives inside the
-enclave, in an encrypted volume whose key is released by the KMS only after the attestation
-report passes verification. The key is never on the host filesystem.</p>
+<p>Your Gmail refresh token grants read/write access to your mailbox, so it is kept under two
+locks rather than one. The enclave seals it with a key the KMS releases only after the
+attestation report passes verification, and a separate co-signer service wraps that sealed
+blob again under a key the enclave never holds. Neither half is enough on its own: the
+co-signer has never seen your token and cannot read what it unwraps, and the enclave cannot
+get past the outer layer. Neither key is on the host filesystem.</p>
 
 <p>You can revoke it at any time from your
 <a href="https://myaccount.google.com/permissions">Google account permissions</a> page, and

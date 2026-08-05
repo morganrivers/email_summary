@@ -26,12 +26,19 @@ import os
 from pathlib import Path
 
 from backend import paths, secrets, site
+from cosigner import protocol as cosigner_protocol
 
 KEYS_ENV = "GMAIL_OAUTH_KEYS"
 DEFAULT_KEYS_PATH = paths.REPO_ROOT / ".gmail-mcp" / "gcp-oauth.keys.json"
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+# The URL this box POSTs to and the only `htu` the co-signer will sign a proof
+# for are the same string, so they are one constant. Written twice they can
+# drift, and the failure is total and silent from here: the co-signer refuses
+# every proof as a wrong target, which reads as an attack rather than a typo.
+# The co-signer still holds its own copy of this file, so the check remains its
+# own judgement rather than something the enclave states on the wire.
+TOKEN_ENDPOINT = cosigner_protocol.TOKEN_ENDPOINT
 
 # openid/email/profile grant the login identity (name + email) alongside the
 # Gmail/Calendar scopes, so one consent yields both the account and the token.

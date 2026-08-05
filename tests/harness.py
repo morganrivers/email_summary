@@ -13,10 +13,13 @@ Boundaries mocked (single choke points):
 Time is frozen so masked prompts carrying a timestamp stay stable.
 """
 
+import contextlib
 import datetime as _dt
 import json
 import os
+import threading
 from collections import deque
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -151,6 +154,46 @@ def make_fake_post(rec):
         return SimpleNamespace(raise_for_status=lambda: None,
                                json=lambda: {"ok": True})
     return _post
+
+
+# --- the co-signer, actually running --------------------------------------
+
+@contextlib.contextmanager
+def running_cosigner(tmp_path, monkeypatch):
+    """The real co-signer on a real loopback socket: fresh keys, fresh audit
+    log, attestation off, operator alerts collected instead of sent.
+
+    One arrangement of the second box, used both by its own tests and by the
+    split-custody integration test. Two arrangements is how this design already
+    failed once: each half faked the other above the wire, both suites passed,
+    and the halves could not talk to each other in production
+    (docs/plan_token_custody.md §J8)."""
+    from cosigner import attest
+    from cosigner import audit
+    from cosigner import keys
+    from cosigner import policy
+    from cosigner import server
+
+    monkeypatch.setenv("COSIGNER_ATTESTATION", attest.DEV_INSECURE)
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    monkeypatch.delenv("COSIGNER_DISABLED", raising=False)
+    monkeypatch.setenv("COSIGNER_STATE_DIR", str(tmp_path / "state"))
+    keys.reset_for_test(keys.write_dev_credentials(tmp_path / "creds"))
+    audit.reset_for_test(tmp_path / "state")
+    attest.reset_for_test()
+    monkeypatch.setattr(policy, "_LAST_ALERT", {})
+    alerts = []
+    monkeypatch.setattr(policy.alerts, "notify_operator", lambda text: alerts.append(text))
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield SimpleNamespace(
+            base=f"http://127.0.0.1:{httpd.server_address[1]}", alerts=alerts,
+        )
+    finally:
+        httpd.shutdown()
+        audit.reset_for_test()
 
 
 # --- frozen time ----------------------------------------------------------
