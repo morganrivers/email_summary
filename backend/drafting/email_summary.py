@@ -18,9 +18,8 @@ import datetime
 import sys
 import traceback
 
-from dotenv import load_dotenv
-
 from backend import paths
+from backend import secrets
 from backend.accounts import account as account_mod
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal.node_runner import node_env
@@ -31,7 +30,7 @@ from backend.integrations.telegram import send_telegram, notify_error
 FETCH_SCRIPT = paths.node_script("fetch_emails.mjs")
 PROMPT_FILE = paths.config_file("prompt_for_email")
 
-load_dotenv(paths.ENV_FILE)
+secrets.load()
 
 DEFAULT_PROMPT = (
     "You write a short daily briefing from the account owner's unread email and "

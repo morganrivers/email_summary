@@ -483,25 +483,31 @@ real flow.
 
 ---
 
-## 8. Also fix while in here (Barrier A gaps)
+## 8. Also fix while in here (Barrier A gaps) — **[DONE]**
 
-Found during this review; small, and they belong to the same threat model:
+Found during this review; small, and they belong to the same threat model.
+Landed on `feat/secrets-gate-3`, independently of Tracks I–K.
 
-- `deploy/phala/docker-compose.yml:32` mounts `/app/.env` with
-  `required: false`. A file-backed `.env` is exactly the leak this design makes
-  impossible everywhere else. Under `TEE_REQUIRED` that mount should not exist.
-- `tee_boot.REQUIRED_SECRETS` (line 40) lists four values. `SESSION_SECRET`
-  (`frontend/session.py:32`) and the Polar keys (`backend/billing/billing.py:52`)
-  are missing, so the gate passes without them.
-- `gcp-oauth.keys.json` holds the Google `client_secret` and is read off the
-  volume by `gmail_lib.mjs:47`, not from injected env. It is the single value
-  with the widest blast radius and the one **not** going through the KMS path.
-  Move it to the co-signer with the DPoP key — the co-signer is already doing
-  the token exchange's crypto.
-- Eight modules call `load_dotenv(paths.ENV_FILE)` independently. Against the
-  single-source rule in CLAUDE.md. Collapse to one `backend/secrets.py`
-  accessor so "this value came from injected env, not a file" is assertable in
-  one place.
+- ~~`deploy/phala/docker-compose.yml:32` mounts `/app/.env` with
+  `required: false`.~~ Mount removed. `tee_boot.run_gate()` now fails closed if
+  `.env` exists on the volume at all, so putting the mount back stops the
+  enclave booting rather than silently weakening it.
+- ~~`tee_boot.REQUIRED_SECRETS` (line 40) lists four values.~~ Replaced by
+  `secrets.missing()`, which covers the LLM keys, Telegram, `SESSION_SECRET`,
+  the Polar API + webhook credentials and the Google OAuth client, and decides
+  presence by calling the services' own code (`PolarBilling()`,
+  `telegram.operator_target()`) so the list cannot drift from what the services
+  need.
+- `gcp-oauth.keys.json` holds the Google `client_secret`, read off the volume by
+  `gmail_lib.mjs`. **Half done:** it is now injected as
+  `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`, the file is a
+  dev/Hetzner fallback only, and `loadOAuthKeys()` refuses the file under
+  `TEE_REQUIRED`. Moving the value to the co-signer alongside the DPoP key is
+  Track J's to do, once there is a co-signer to move it to.
+- ~~Eight modules call `load_dotenv(paths.ENV_FILE)` independently.~~ Collapsed
+  to `secrets.load()`: one read of the file, injected environment always wins
+  over it, `file_backed()` names anything that came off disk, and under
+  `TEE_REQUIRED` the file is never opened.
 
 ---
 

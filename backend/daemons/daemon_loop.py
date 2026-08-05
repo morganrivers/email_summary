@@ -23,15 +23,14 @@ import signal
 import traceback
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from backend import paths
+from backend import secrets
 from backend.accounts import account as account_mod
 from backend.daemons import pipeline
 from backend.daemons import wake_queue
 from backend.integrations.telegram import notify_error
 
-load_dotenv(paths.ENV_FILE)
+secrets.load()
 
 FIFO_PATH = paths.RUN_DIR / "wake.fifo"
 RESTART_FLAG = paths.RUN_DIR / "restart.flag"

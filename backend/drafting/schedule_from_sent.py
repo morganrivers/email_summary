@@ -18,16 +18,15 @@ import datetime
 import subprocess
 import sys
 
-from dotenv import load_dotenv
-
 from backend import paths
+from backend import secrets
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal.node_runner import node_env
 from backend.integrations.telegram import send_telegram, notify_error
 
 CREATE_EVENT_SCRIPT = paths.node_script("create_event.mjs")
 
-load_dotenv(paths.ENV_FILE)
+secrets.load()
 
 # Per account: an event written at "3pm" means 3pm where the user is, and a
 # module constant put every user in the operator's timezone.

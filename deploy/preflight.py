@@ -7,10 +7,10 @@ skipped with a reason instead of being restarted into a crash loop.
 Two checks per unit:
   * its entry module imports (catches a missing dependency, e.g. a
     requirements.txt line that was never installed into venv/)
-  * its configuration is present, decided by calling the same code the service
-    itself calls -- PolarBilling() for the Polar credentials,
-    session.secret_configured() for the cookie secret. No copies of those rules
-    live here.
+  * its configuration is present, decided by backend/secrets.py, which answers
+    by calling the same code the service itself calls -- PolarBilling() for the
+    Polar credentials. No copies of those rules live here or in the TEE boot
+    gate.
 
 The unit -> module mapping is read out of the unit files' ExecStart, so the
 .service file stays the only place a unit's entry point is named. A timer is
@@ -26,47 +26,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from backend import paths
+from backend import secrets
 
 UNIT_DIR = Path(__file__).resolve().parent / "hetzner"
 _EXEC_MODULE = re.compile(r"^ExecStart=.*?\s-m\s+(\S+)", re.MULTILINE)
 
-load_dotenv(paths.ENV_FILE)
-
-
-def _polar_configured():
-    """Polar API token + organization for the active environment, plus the
-    webhook signing secret. PolarBilling's own asserts are the check."""
-    from backend.billing import billing
-
-    try:
-        billing.PolarBilling()
-    except AssertionError as err:
-        return str(err)
-    if not billing.webhook_secret():
-        return "POLAR_WEBHOOK_SECRET not set"
-    return None
-
-
-def _polar_read_configured():
-    """The poller never verifies a webhook, so it needs the token and org only."""
-    from backend.billing import billing
-
-    try:
-        billing.PolarBilling()
-    except AssertionError as err:
-        return str(err)
-    return None
-
-
-def _session_configured():
-    from frontend import session
-
-    if not session.secret_configured():
-        return "SESSION_SECRET not set"
-    return None
+secrets.load()
 
 
 def _manifest_present():
@@ -81,11 +47,14 @@ def _manifest_present():
     return None
 
 
-# module -> extra configuration check, run only after the module imports.
+# module -> extra configuration check, run only after the module imports. The
+# secret checks come from backend/secrets.py, which the TEE boot gate also
+# applies: a unit skipped here for a missing value is the same unit that would
+# fail closed in the enclave, for the same stated reason.
 CONFIG_CHECKS = {
-    "backend.billing.billing_webhook": _polar_configured,
-    "backend.billing.billing_poller": _polar_read_configured,
-    "frontend.web_server": _session_configured,
+    "backend.billing.billing_webhook": secrets.polar_configured,
+    "backend.billing.billing_poller": secrets.polar_api_configured,
+    "frontend.web_server": secrets.session_configured,
     "backend.daemons.daemon_loop": _manifest_present,
     "backend.daemons.gmail_hook_server": _manifest_present,
     "backend.onboarding.watch_renew": _manifest_present,

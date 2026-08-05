@@ -472,11 +472,27 @@ the image, because the image is public and its hash is published.
 absent:
 
 ```python
-missing = [k for k in REQUIRED_SECRETS if not os.environ.get(k)]
-if missing:
-    print(f"[tee_boot] FAIL-CLOSED: attested but secrets not injected: {missing}")
+gaps = secrets.missing()
+if gaps:
+    for reason in gaps:
+        print(f"[tee_boot] FAIL-CLOSED: attested but not provisioned: {reason}")
     return 1
 ```
+
+`backend/secrets.py` is what `missing()` consults, and it decides presence by
+calling the same code the services call (`PolarBilling()`,
+`telegram.operator_target()`) wherever presence is a judgement rather than a
+lookup. `deploy/preflight.py` applies those same checks
+per unit on the Hetzner box, so a value the deploy skips a unit for is the value
+the enclave fails closed on.
+
+Injection is the *only* route in. The compose file mounts no `.env`, and the
+gate refuses to boot if one exists on the volume at all: a cleartext secrets
+file next to the encrypted ones is a copy the KMS does not gate and the
+measurement does not cover. `secrets.load()` reads no file under `TEE_REQUIRED`
+either, and the Node bridge refuses `gcp-oauth.keys.json` there, so the Google
+OAuth client secret -- the one value with the widest blast radius -- arrives
+injected or not at all.
 
 ### 5.4 The one moment the token is exposed
 
@@ -703,7 +719,8 @@ The natural design, and it fits what is already built, is **sharding by user**:
 Two things to fix before this works, both cheap and both worth doing now:
 
 - **`SESSION_SECRET` must be derived, not random per instance.**
-  `frontend/session.py` asserts `SESSION_SECRET` is set from the environment.
+  `frontend/session.py` signs cookies with `SESSION_SECRET`, which
+  `backend/secrets.py` requires from the environment.
   If each CVM gets a different value, users get logged out whenever they land on
   a different instance, and also on every redeploy. The right source is the KMS:
   `DstackClient.get_key("tee-email-bot/session")` yields the same value for every

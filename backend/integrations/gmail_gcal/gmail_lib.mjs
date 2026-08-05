@@ -43,7 +43,24 @@ export const SCOPES = [
     'https://www.googleapis.com/auth/calendar.events',
 ];
 
+// Same names backend/secrets.py exports, which is where the Python side reads
+// them. One OAuth app serves every user, so its client_secret has the widest
+// blast radius of any value here: inside the enclave it arrives as injected
+// environment, decrypted post-attestation, and the file path below is refused
+// outright. A file on the volume is a copy the KMS does not gate.
+const TEE_REQUIRED = ['1', 'true', 'yes']
+    .includes((process.env.TEE_REQUIRED || '').trim().toLowerCase());
+
 export function loadOAuthKeys() {
+    const injected = {
+        client_id: process.env.GOOGLE_OAUTH_CLIENT_ID,
+        client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+    };
+    if (injected.client_id && injected.client_secret) return injected;
+    if (TEE_REQUIRED) {
+        throw new Error('GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET were not '
+            + 'injected; refusing to read the OAuth client secret off the volume');
+    }
     const keys = JSON.parse(fs.readFileSync(OAUTH_KEYS_PATH, 'utf8'));
     const k = keys.installed || keys.web;
     if (!k?.client_id || !k?.client_secret) {

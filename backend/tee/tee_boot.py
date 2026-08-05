@@ -30,25 +30,14 @@ import os
 import sys
 from pathlib import Path
 
+from backend import paths
+from backend import secrets
 from backend.tee.dstack_client import DstackClient, DstackError, DstackUnavailable
 
 APP_KEY_PATH = "tee-email-bot/app"
 RA_TLS_SUBJECT = "tee-email-bot"
 
-# Secrets dstack injects post-attestation (encrypted env, decrypted only inside
-# the attested CVM). Boot must not proceed without them under TEE_REQUIRED.
-REQUIRED_SECRETS = (
-    "DEEPSEEK_API_KEY",
-    "TRESOR_API_KEY",
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_CHAT_ID",
-)
-
 ATTEST_DIR = Path(os.environ.get("TEE_ATTEST_DIR", "/app/attestation"))
-
-
-def _tee_required() -> bool:
-    return os.environ.get("TEE_REQUIRED", "").strip() in ("1", "true", "yes")
 
 
 def _report_data_for_cert(cert_pem: str) -> bytes:
@@ -90,12 +79,21 @@ def _assert_expected_measurement(info: dict) -> None:
 def run_gate() -> int:
     client = DstackClient()
 
-    if not _tee_required():
+    if not secrets.tee_required():
         if client.available():
             print("[tee_boot] dstack socket present; TEE_REQUIRED unset, skipping gate.")
         else:
             print("[tee_boot] no dstack socket and TEE_REQUIRED unset (dev/non-TEE host).")
         return 0
+
+    if secrets.env_file_present():
+        print(
+            f"[tee_boot] FAIL-CLOSED: {paths.ENV_FILE} exists inside the CVM. "
+            "Secrets are injected post-attestation as encrypted environment; a "
+            "file on the volume is a copy the KMS does not gate.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         info = client.info()
@@ -117,12 +115,16 @@ def run_gate() -> int:
         print(f"[tee_boot] FAIL-CLOSED: KMS/attestation refused: {e}", file=sys.stderr)
         return 1
 
-    missing = [k for k in REQUIRED_SECRETS if not os.environ.get(k)]
-    if missing:
-        print(
-            f"[tee_boot] FAIL-CLOSED: attested but secrets not injected: {missing}",
-            file=sys.stderr,
-        )
+    # Which secrets must be present, and what "present" means, live in
+    # backend/secrets.py -- the same checks the deploy preflight runs. This was
+    # a list of four variable names here, so the gate passed without
+    # SESSION_SECRET, the Polar credentials or the Google OAuth client secret:
+    # a gate that names its own subset drifts from the services it gates.
+    gaps = secrets.missing()
+    if gaps:
+        for reason in gaps:
+            print(f"[tee_boot] FAIL-CLOSED: attested but not provisioned: {reason}",
+                  file=sys.stderr)
         return 1
 
     _write_attestation_record(info, tls, quote)

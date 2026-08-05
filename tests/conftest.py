@@ -1,7 +1,10 @@
 """Hermetic wiring for the characterization suite.
 
-.env is NEVER read: load_dotenv is neutralized and dummy secrets are forced
-into the environment BEFORE any app module imports (they read env at import).
+.env is NEVER read: backend.secrets.load -- the one loader every module now
+calls -- is marked already-done before any app module imports, load_dotenv is
+neutralized for anything outside the package, and dummy secrets are forced into
+the environment first (modules read env at import). test_secrets.py exercises
+the real loader by clearing that flag against a temporary file.
 """
 
 import json
@@ -22,6 +25,9 @@ os.environ.pop("LANGSMITH_API_KEY", None)
 
 import dotenv
 dotenv.load_dotenv = lambda *args, **kwargs: False
+
+from backend import secrets as app_secrets
+app_secrets._loaded = True
 
 import pytest
 

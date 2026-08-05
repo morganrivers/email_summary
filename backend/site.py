@@ -20,11 +20,9 @@ LETTERLOCK_ALIAS_HOSTS) and re-render the Caddyfile.
 
 import os
 
-from dotenv import load_dotenv
+from backend import secrets
 
-from backend import paths
-
-load_dotenv(paths.ENV_FILE)
+secrets.load()
 
 APP_HOST = os.environ.get("LETTERLOCK_HOST", "letterlock.morganrivers.com")
 API_HOST = os.environ.get("LETTERLOCK_API_HOST", "hezner.morganrivers.com")

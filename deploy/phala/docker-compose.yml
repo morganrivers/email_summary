@@ -21,14 +21,20 @@ services:
       # Optional belt-and-suspenders: the compose_hash the guest agent must
       # report. The KMS is the real enforcer; this catches config drift early.
       EXPECTED_COMPOSE_HASH: "${EXPECTED_COMPOSE_HASH:-}"
-    # Secrets (OAuth tokens, LLM key, Telegram creds) are injected
-    # post-attestation via dstack encrypted environment variables: encrypted to
-    # the app KMS key, decrypted only inside the attested CVM, never baked into
-    # the measured image. Encrypt them with the phala CLI at deploy time; the
-    # guest sees them as env once the measurement is authorized.
-    env_file:
-      - path: /app/.env
-        required: false
+    # Secrets (the Google OAuth client secret, the LLM keys, the Telegram creds,
+    # the Polar keys, SESSION_SECRET) are injected post-attestation via dstack
+    # encrypted environment variables: encrypted to the app KMS key, decrypted
+    # only inside the attested CVM, never baked into the measured image. Encrypt
+    # them with the phala CLI at deploy time; the guest sees them as env once the
+    # measurement is authorized.
+    #
+    # There is deliberately no `env_file: /app/.env` here. It was mounted with
+    # `required: false`, which made a cleartext secrets file on the volume a
+    # supported fallback -- a copy the KMS does not gate and the attestation does
+    # not cover. tee_boot now fails closed if that file exists at all, so adding
+    # the mount back stops the enclave from booting rather than silently
+    # weakening it. backend/secrets.py is the matching rule on the app side: it
+    # reads no file under TEE_REQUIRED.
     volumes:
       - database:/app/database
       - gmail_tokens:/app/.gmail-mcp

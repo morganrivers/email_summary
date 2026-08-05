@@ -9,7 +9,7 @@ WorkingDirectory=/opt/letterlock
 ExecStart=/opt/letterlock/venv/bin/python -m frontend.web_server
 Restart=always
 RestartSec=5
-# No EnvironmentFile: the app reads .env itself through load_dotenv, and
+# No EnvironmentFile: the app reads .env itself through backend/secrets.py, and
 # systemd's parser is stricter than python-dotenv's (no `export`, different
 # quoting), so a single line it disliked took this unit down while every other
 # service read the same file happily. PATH matches the other units because the

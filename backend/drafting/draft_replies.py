@@ -15,9 +15,8 @@ import html
 import subprocess
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from backend import paths
+from backend import secrets
 from backend.drafting import agentic_drafter
 from backend.drafting import voice_dna
 from backend.integrations import llm_client
@@ -27,7 +26,7 @@ from backend.integrations.telegram import send_telegram
 FETCH_SCRIPT = paths.node_script("fetch_emails.mjs")
 DRAFT_SCRIPT = paths.node_script("create_draft.mjs")
 
-load_dotenv(paths.ENV_FILE)
+secrets.load()
 
 CLASSIFIER_PROMPT = (
     "Decide for each email whether the recipient should personally reply.\n\n"
