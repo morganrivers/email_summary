@@ -28,10 +28,6 @@ secrets.load()
 
 APP_HOST = os.environ.get("LETTERLOCK_HOST", "letterlock.morganrivers.com")
 API_HOST = os.environ.get("LETTERLOCK_API_HOST", "hezner.morganrivers.com")
-# The co-signer holds the other half of every user's token custody. It runs on
-# the original box today, but it is named separately because the point of it is
-# that it can move under a different operator without the enclave changing.
-COSIGNER_HOST = os.environ.get("LETTERLOCK_COSIGNER_HOST", API_HOST)
 
 # The split-custody co-signer. Its own hostname, not a path on one of the two
 # above, because its site block is the only one that demands a client
@@ -60,8 +56,7 @@ WEB_PORT = 8790
 # certificate, so its site block terminates mTLS rather than proxying anonymous
 # traffic. LETTERLOCK_COSIGNER_URL overrides the whole URL for a dev box
 # running it on loopback.
-COSIGNER_PORT = 8791
-
+#
 # Defined in cosigner/protocol.py, where the server that binds it lives, and
 # re-exported here so render_caddyfile.py still reads every port from one
 # module. The import runs backend -> cosigner and never the other way, so the

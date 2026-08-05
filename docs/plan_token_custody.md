@@ -23,14 +23,23 @@ Status, per track:
   `cosigner/allowlist.json`); §7 phase 4 is what turns it on, and
   `cosigner/attest.py` refuses the stub once the allowlist names a measurement
   or `TEE_REQUIRED` is set.
-- Track K (§6, Node removal) — **[BUILT, merged]**.
+- Track K (§6, Node removal) — **[BUILT, merged]**. No `.mjs`, no
+  `package.json`, no npm branch in the deploy.
+- All five worktrees are merged, and §I8 records the two defects the merge
+  itself produced. Phase 1 is therefore done: both halves run against each other
+  end to end in `tests/test_custody_integration.py`. What is left is Phases 3-5,
+  which are operator work on the box and at Phala rather than code —
+  `docs/runbook_provisioning.md` has the commands.
 - §8 (Barrier A gaps) — **[BUILT]**, all five items. Four came with
   `secrets-gate-3`: the `.env` mount, the boot gate's secret list, the eight
   `load_dotenv` call sites and the duplicate dependency manifest. The
   `gcp-oauth.keys.json` injection is `onboarding-exchange-4`, below.
-- §10 (front-end copy) — **[TODO]**, and each edit needs its own confirmation.
-  `/about` at `web_server.py:383-386` is factually wrong as of Track I and
-  says so about an arrangement that is now stronger than the claim.
+- §10 (front-end copy) — the `/about` passage is **[DONE]**: it now states both
+  layers and deliberately says "a separate co-signer service" rather than a
+  second operator, which is only true from Phase 4. The rate limit, the audit
+  log and the availability trade are not in the copy; describing the metering
+  was declined. The landing claim and the dashboard row are still **[TODO]** and
+  still gated on individual confirmation.
 
 ---
 
@@ -261,6 +270,7 @@ Limit: this detects a wrong image, not a correct image subverted at runtime
 | Migration script | **none** | see above; no plaintext `credentials.json` to migrate |
 | Node | **removed entirely** (Track K), sequenced after custody lands | see §7 |
 | Phala | not yet rented; build dev-first, cut over later | §8 |
+| Which KMS | **`--kms base`**: an AppAuth contract on Base under an owner key we hold | Phala's default KMS lets Phala authorize an image under our app identity, which would hand it `app_secret` and therefore `K_inner`. It still reads no mail (the co-signer's allowlist is the second gate, §2), so this is depth on the first gate rather than a fix — what it buys is that the set of parties who can run code as Letterlock no longer includes Phala, and that the authorizations are publicly auditable. Costs a funded wallet, gas per upgrade, an owner key whose loss is unrecoverable, and a chain read at every CVM boot. Not revisitable: switching KMS changes `app_secret`, so every `token.bin` dies with it. Runbook Stage 0. |
 
 ---
 
@@ -398,9 +408,38 @@ proof can be attached at the moment Google binds the token.
   is gone. Any future change to draft assembly is checked only against that
   file.
 - **`deploy/phala/docker-compose.yml` passes `LETTERLOCK_COSIGNER_URL`,** while
-  `backend/site.py` also has `COSIGNER_HOST` and `cosigner_url()`. Confirm at
-  integration which one wins; two ways to name the same endpoint is exactly the
-  drift `site.py` exists to prevent.
+  `backend/site.py` also has `COSIGNER_HOST` and `cosigner_url()`. Settled:
+  `cosigner_url()` is the one builder and `LETTERLOCK_COSIGNER_URL` is an
+  override it reads, so the compose file names an input to that function rather
+  than a second way to spell the endpoint.
+
+### I8. What the merge of the five worktrees left broken
+
+Both of these were invisible to every suite that existed, for the same reason
+§J8's codec bug was: each half was tested against a fake of the other. They are
+recorded because the shape recurs, not because either fix is interesting.
+
+- **`backend/custody/client.py` called `tee_boot.tee_required()`,** which
+  `secrets-gate-3` had moved to `secrets.tee_required()` while
+  `enclave-custody-2` was writing the call. It sits in `_client_identity()`, on
+  the path taken when there is no dstack socket and no dev client certificate —
+  i.e. exactly the Hetzner box. Every co-signer call there would have raised
+  `AttributeError`, which is to say no mail for anyone, and no test reached it
+  because the fake co-signer is installed at `_request`, one level below.
+- **`backend/site.py` defined `COSIGNER_HOST` and `COSIGNER_PORT` twice each,**
+  the second assignment silently winning. Both winners were the intended ones,
+  so nothing behaved wrongly; what was wrong is that the file had two answers to
+  a question it exists to answer once.
+
+`tests/test_custody_integration.py` is the answer to the class: the enclave's
+real client against the real `cosigner.server` on a loopback socket, both crypto
+layers real, with only Google stubbed. `harness.running_cosigner()` is the one
+arrangement of that process, shared with `tests/test_cosigner.py`, so there is
+no second way to stand the co-signer up. `oauth_app.TOKEN_ENDPOINT` now
+re-exports `protocol.TOKEN_ENDPOINT` for the same reason: the URL the enclave
+POSTs to and the only `htu` the co-signer will sign for have to be one string,
+and written twice they drift into a service that refuses every proof as an
+attack.
 
 ---
 

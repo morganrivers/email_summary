@@ -24,35 +24,75 @@ between them and call it done.
 
 ---
 
-## Stage 0. One decision to make before anything is deployed
+## Stage 0. The decision, taken: `--kms base`
 
-**Which KMS governs the app.** `phala deploy` takes `--kms`, with values
-`phala` (default), `ethereum`/`eth`, or `base`. This is not a preference:
+**Which KMS governs the app.** Decided: **`--kms base`**, an AppAuth contract on
+Base under a key the operator holds. Recorded at the top of
+`deploy/phala/IMAGE_HASH.txt` and in `docs/plan_token_custody.md` §3. What
+follows is why, and what the choice costs at every deploy; it is background now,
+not an open question.
 
-- `--kms phala` — Phala's own KMS decides which measurement gets `app_secret`.
-  No wallet, no gas, no contract to deploy. There is **no AppAuth contract you
-  sign**, so `docs/tee_enclaves_and_upgrades.md` §6.6 step 5 does not exist for
-  you and the "authorize in both places" amendment (plan §2) collapses to
-  authorizing in the co-signer allowlist only.
-- `--kms base` or `--kms eth` — your own AppAuth contract on-chain, authorizing
-  measurements under a key you hold, with `--private-key` for the signing
-  transactions. This is the arrangement §5 of the TEE doc describes and the one
+### What the choice is between
+
+Something has to hold the list of code versions allowed to run as this app and
+receive its keys. The KMS reads that list before releasing anything. The only
+question is where the list lives and who may add a line.
+
+- `--kms phala` (the CLI default) — the list is managed by Phala. You sign
+  nothing, hold no key, pay no gas and deploy no contract; Phala's CLI only
+  demands `--private-key` when a chain is involved, and its own help calls
+  Ethereum and Base "on-chain KMS" as against this. Phala can add a line.
+- `--kms base` — an AppAuth contract deployed through the KMS factory and owned
+  by a wallet key you hold. Adding a version is a transaction you sign. Nobody
+  without that key can add one, Phala included, and the list plus every change
+  to it is publicly readable. This is what §5 of the TEE doc describes and what
   §6.6 was written against.
 
-Decide now, not later. `app_secret` is derived from the KMS root, so changing
-KMS changes `app_secret`, which changes `K_inner` (plan §I1), which makes every
-`token.bin` written under the old KMS impossible to open. The recovery is a
-full wipe and re-onboard. That is survivable today, when the owner is the only
-account, and it is not survivable once real users exist.
+The dstack KMS is governed on-chain either way: there is a `KmsAuth` contract,
+and the authorization backend answers every release with a live contract read.
+What `base` changes is whose contract and whose key decide for *this* app.
 
-If you want to be running this week, `--kms phala` is the smaller step, and the
-plan's core property still holds: the co-signer is on a machine Phala does not
-operate, so enclave and co-signer remain separately compromised. What you give
-up is control over *who authorizes a measurement*. Move to `--kms base` before
-onboarding anyone but yourself, and do it while a wipe is still cheap.
+### Why it is worth the extra key
 
-Record the choice at the top of `deploy/phala/IMAGE_HASH.txt` so the next
-person does not have to infer it.
+Whoever can authorize a measurement can authorize an image that receives
+`app_secret`, and `app_secret` derives `K_inner` (plan §I1), which opens the
+inner layer of every stored token.
+
+It does not open a mailbox by itself, and that is the co-signer's whole purpose:
+the outer layer only comes off for a measurement on the co-signer's own
+allowlist, which lives on the Hetzner box and which the enclave cannot edit
+(plan §2). So a hostile or compelled Phala still reads no mail. `--kms base` is
+depth on the first gate, not the difference between safe and broken. What it
+buys is that Phala leaves the set of parties who can run code under this app's
+identity, and that the history of authorized versions is something a user can
+check rather than something to be taken on trust.
+
+### What it costs, every time
+
+- A funded wallet on Base and gas per authorization. Also one more key whose
+  loss matters: lose the AppAuth owner key and no further version can ever be
+  authorized, and recovery depends entirely on how the contract is written.
+- Two authorizations per upgrade rather than one: the contract, and the
+  co-signer allowlist. The co-signer one always comes **first**, or every unwrap
+  fails and no mail moves. This is the amendment plan §2 asks for and the reason
+  §6.6 step 5 names both places.
+- A dependency on the chain being reachable when keys are released. Verified in
+  the dstack source rather than assumed: `get_app_key` calls
+  `ensure_app_boot_allowed` -> `auth_api.is_app_allowed()` on every request, and
+  the Ethereum backend answers with a live `readContract` against `ETH_RPC_URL`,
+  with no authorization cache on that path. The blast radius is bounded, though:
+  the guest agent fetches the app key once at CVM boot and derives afterwards
+  from it locally, so an RPC outage cannot stall a running enclave. It can stop a
+  restart or a redeploy from coming back. Plan for that the way the co-signer
+  dependency is planned for.
+
+### The part that cannot be changed later
+
+`app_secret` is derived from the KMS root, so changing KMS changes
+`app_secret`, which changes `K_inner`, which makes every `token.bin` written
+under the old KMS impossible to open. The recovery is a full wipe and
+re-onboard. That is why this is settled before anyone but the owner is
+onboarded, and it is why moving off `base` later is not a configuration change.
 
 ---
 
@@ -188,6 +228,22 @@ phala login          # NOT `phala auth login`, which is deprecated
 phala status
 ```
 
+Stage 0 chose `--kms base`, so this stage also needs a wallet before anything is
+deployed: an EOA on Base holding enough ETH for the AppAuth deployment and for
+one authorization per future upgrade. The CLI reads `PRIVATE_KEY` and
+`ETH_RPC_URL` (flags `--private-key` and `--rpc-url` win over them), following
+the foundry convention:
+
+```bash
+export ETH_RPC_URL=https://mainnet.base.org
+export PRIVATE_KEY=0x...        # the AppAuth owner key; back it up before use
+```
+
+That key is the authority over which code may run as Letterlock. Losing it means
+no version can ever be authorized again; a copy of it in the CVM or on the
+Hetzner box would put that authority inside a blast radius this design spends
+two machines to avoid. It belongs neither place.
+
 Verified accounts get a small CVM credit and one free instance; that may cover
 the first deploy without a card, but add payment before relying on it, because
 an unpaid instance stopping means no mail moves for anyone. Check real sizes
@@ -247,7 +303,9 @@ phala deploy \
   -n letterlock \
   -c deploy/phala/docker-compose.yml \
   -e .env.tee \
-  --kms <phala|base>          \
+  --kms base                  \
+  --private-key "$PRIVATE_KEY" \
+  --rpc-url "$ETH_RPC_URL"    \
   --instance-type <from 2.1>  \
   --wait
 ```
@@ -265,8 +323,11 @@ why). Copy the two values out of the file on the Hetzner box. There is no
 `/app/.gmail-mcp` volume in the compose any more, and the boot gate refuses to
 start if a key file turns up on the enclave volume at all.
 
-If `--kms base`, this is where `--private-key` and the on-chain authorization
-happen, and where §6.6 step 5 applies.
+This is where the AppAuth contract is deployed through the KMS factory and the
+first `compose_hash` is authorized under your key, and it is where §6.6 step 5
+starts applying to every later deploy. Record the contract address next to the
+KMS choice in `deploy/phala/IMAGE_HASH.txt`: it is what anyone verifying the
+app has to read to see which versions were ever allowed.
 
 ```bash
 phala apps
@@ -386,9 +447,10 @@ doc plus one amended step:
 2. `REGISTRY=... deploy/phala/build_and_publish.sh --push`
 3. `deploy/phala/f2_wrong_measurement_test.sh`
 4. publish `IMAGE_HASH.txt` and the compose file, tagged as a release
-5. authorize the new compose hash **in the AppAuth contract if you chose an
-   on-chain KMS, and in `/etc/letterlock/cosigner-allowlist.toml` always** —
-   the allowlist first, before the deploy
-6. `phala deploy -c deploy/phala/docker-compose.yml --wait`
+5. authorize the new compose hash **in `/etc/letterlock/cosigner-allowlist.toml`
+   first, then in the AppAuth contract on Base** — both, every time, and the
+   allowlist before the deploy or every unwrap fails
+6. `phala deploy -c deploy/phala/docker-compose.yml --wait` (with
+   `--private-key` / `--rpc-url`, as at Stage 2.5)
 7. fetch a fresh quote, check the chain and the measurement against published
    values

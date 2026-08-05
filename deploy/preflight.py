@@ -50,11 +50,27 @@ def _manifest_present():
 
 def _mail_configured():
     """What a unit that touches a mailbox needs before it is worth starting: the
-    account store, and the shared Google OAuth app every token refresh is signed
-    with. The enclave gates on the same pair through ``secrets.REQUIRED``; this
-    is the Hetzner half of it, so the box does not check a strict subset of what
-    the CVM fails closed on."""
-    return _manifest_present() or secrets.google_oauth_configured()
+    account store, the shared Google OAuth app every token refresh is signed
+    with, and custody. The enclave gates on the same OAuth pair through
+    ``secrets.REQUIRED``; this is the Hetzner half of it, so the box does not
+    check a strict subset of what the CVM fails closed on."""
+    return (_manifest_present() or secrets.google_oauth_configured()
+            or _custody_available())
+
+
+def _custody_available():
+    """Every access token now costs a co-signer round trip and there is no
+    bypass, so a mail unit on a box whose co-signer cannot start has nothing to
+    do but alert the operator on every wake.
+
+    Only answerable while the co-signer runs here. Once it moves to its own
+    operator this deploy has no standing to judge it -- reachability is not
+    checkable either, since its site block demands a client certificate this
+    script does not hold -- so the check reports nothing rather than guessing."""
+    if unit_for_module("cosigner.server") is None:
+        return None
+    reason = _cosigner_configured()
+    return f"custody unavailable: {reason}" if reason else None
 
 
 def _web_configured():
