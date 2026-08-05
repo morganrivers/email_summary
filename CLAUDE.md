@@ -115,7 +115,8 @@ Each entry here has a matching `--exclude` in `deploy/deploy.sh`; that exclusion
 is what protects it from `--delete-after`.
 
 - `.env` — API keys, not in git. `DEEPSEEK_API_KEY` and, to offer the
-  confidential route, `TRESOR_API_KEY` (see `llm_client.PROVIDERS`). Read once,
+  confidential routes, `NEARAI_API_KEY` (see `llm_client.PROVIDERS`; one key
+  serves both NEAR AI providers). Read once,
   through `secrets.load()`. Inside the enclave this file must not exist at all;
   the same values arrive as injected environment.
 - `.gmail-mcp/` — `gcp-oauth.keys.json`, the OAuth *app*'s client_id and
@@ -260,16 +261,59 @@ copy.
   object lives.
 - `llm_client.py` — the inference client + `complete()`. The provider catalog
   (`PROVIDERS`), model, thinking mode, reasoning effort, and the masking
-  boundary all live here. Two providers ship: `deepseek` (direct, the default)
-  and `tresor` (same model through a confidential-compute gateway, keyed by
-  `TRESOR_API_KEY`). A provider whose key is absent from `.env` is not offered
-  in Settings and cannot be selected. `make_client(account)` is the only
-  constructor and `resolve(account)` the only chooser; a stated per-account
-  preference is honored or it raises, never substituted, because standing in a
-  different provider would send that user's mail somewhere they did not agree
-  to. Masking applies on every provider. LangSmith tracing is off unless
-  `LANGSMITH_TRACING=1`: it ships prompts to a third party, outside whatever
-  enclave the chosen provider runs in.
+  boundary all live here. Three providers ship: `deepseek` (direct, the
+  default), and `nearai-glm` / `nearai-gpt-oss`, both keyed by `NEARAI_API_KEY`
+  and both reaching NEAR AI's *per-model* direct completions endpoints
+  (`glm-5-2.completions.near.ai`, `gpt-oss-120b.completions.near.ai`) rather
+  than the `cloud-api.near.ai` gateway — a per-model endpoint is the only shape
+  whose attestation can say which model it serves, and the gateway's
+  attestation endpoint is authenticated and answers for the fleet. A provider
+  whose key is absent from `.env` is not offered in Settings and cannot be
+  selected. `make_client(account)` is the only constructor and `resolve(account)`
+  the only chooser; a stated per-account preference is honored or it raises,
+  never substituted, because standing in a different provider would send that
+  user's mail somewhere they did not agree to. `confidential=True` now costs
+  something: the `Provider` constructor asserts such a provider names an
+  attestation endpoint, and `make_client()` will not return a client until
+  `inference_attestation.require()` has passed. Masking applies on every
+  provider. Every call is `/v1/chat/completions` and none is `/v1/responses`,
+  which is stateful and persists content server-side; `tests/test_llm_boundary.py`
+  reads the tree as an AST and fails if anything reaches for it, or if
+  `chat.completions.create` is called anywhere but here. LangSmith tracing is
+  off unless `LANGSMITH_TRACING=1`: it ships prompts to a third party, outside
+  whatever enclave the chosen provider runs in.
+- `backend/tee/quote_policy.py` — the five checks that decide whether a TDX
+  quote is one we authorized: parse and is-TDX, report_data binding,
+  measurements against an allowlist, signature chain to the Intel root through
+  PCCS collateral, TCB status and advisories. Two callers verify quotes in
+  opposite directions and must not drift: `cosigner/attest.py` checks an inbound
+  RA-TLS client certificate, `backend/integrations/inference_attestation.py`
+  checks an outbound inference provider. Each supplies only what is its own —
+  where the quote came from, and what report_data must bind. `Policy.match()`
+  takes a `scope` so one allowlist file can serve several verified things
+  without an entry for one silently authorizing another; `mr_td` may never be
+  null. `fetch_collateral()` exists because `dcap_qvl.get_collateral` is a pyo3
+  builtin that grabs the running loop when *called*, so `asyncio.run(get_...())`
+  raises "no running event loop" every time and reads as a refused attestation
+  rather than a broken one.
+- `backend/integrations/inference_attestation.py` — whether the enclave about to
+  read a user's mail is one we authorized, and the only thing that makes
+  `confidential=True` mean anything. Fetches the provider's report with a nonce
+  we generated seconds ago and requires three bindings: report_data carries the
+  response signing address (so the key that signs completions is the key the
+  quote vouches for), report_data carries our nonce (so a captured report from a
+  previously-good image cannot be replayed), and the enclave's stated
+  `model_name` matches the model the provider asks for (so a silent reroute to
+  another model fails even though every signature checks out). Verdicts cache on
+  the signing address, which changes when the enclave reboots, and a reboot is
+  when the measurement can change. `backend/integrations/inference_allowlist.json`
+  is the committed pin list, so authorizing an image is a reviewed diff.
+  `rt_mr3` moves whenever NEAR redeploys a model container — NEAR runs several
+  images behind one hostname, so expect to pin more than one per model — and a
+  drift fails closed. Re-pin with
+  `python -m backend.integrations.inference_attestation <provider>`, read the
+  diff, commit. `deploy/preflight.py` calls `configured()` so an unpinned image
+  is reported at deploy time rather than by every draft failing.
 - `backend/integrations/telegram.py` — `TelegramTarget`, sends, and chat
   linking. `send_telegram(msg, target)` always takes an explicit target;
   `operator_target()` (env) is only for box-level failures, never for a user's
