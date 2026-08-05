@@ -599,6 +599,19 @@ config flip. See Section 8.3.
 
 ### 6.6 A concrete checklist
 
+This is the *update* path and assumes a CVM that already exists, an
+authenticated CLI, and (if you chose an on-chain KMS) a deployed AppAuth
+contract. First-time provisioning of both boxes is
+`docs/runbook_provisioning.md`.
+
+Note also that step 5 gains a second place to authorize once the split-custody
+work lands: the co-signer keeps its own measurement allowlist, which the
+enclave cannot edit, and an unlisted measurement means every unwrap fails. See
+`docs/plan_token_custody.md` §2.
+
+Command note: `phala auth login` is deprecated; the command is now
+`phala login`.
+
 ```bash
 # 1. build reproducibly and record the tarball hash
 deploy/phala/build_and_publish.sh --verify
@@ -611,7 +624,9 @@ deploy/phala/f2_wrong_measurement_test.sh
 
 # 4. publish IMAGE_HASH.txt + the compose file in the repo, tagged as a release
 
-# 5. authorize the new compose_hash in your AppAuth contract  (human, on-chain)
+# 5. authorize the new compose_hash: in the co-signer allowlist ALWAYS (before
+#    the deploy), and in your AppAuth contract if you run an on-chain KMS
+#    (human, on-chain)
 
 # 6. deploy
 phala deploy -c deploy/phala/docker-compose.yml

@@ -4,6 +4,12 @@ Status: **[TODO]** — nothing here is implemented yet.
 Written 2026-08-05. Read this whole file before touching code; the decisions
 section explains why several obvious-looking shortcuts are wrong.
 
+The work is cut into five worktrees — `cosigner-service-1`,
+`enclave-custody-2`, `secrets-gate-3`, `onboarding-exchange-4`,
+`node-removal-5`. Every section below is tagged with the one that owns it.
+§7 has the branch order, the file-ownership table and the two places where
+two worktrees would otherwise collide.
+
 ---
 
 ## 0. What problem this solves
@@ -121,6 +127,17 @@ guarantee:
 4. **The co-signer persists no ciphertext.** If it ever stores `outer`
    alongside its own key, one compromise gives both halves.
 
+**The two-machine claim is false until Phase 4.** `deploy/hetzner/hardening.conf`
+is fanned out to every unit and sets `User=letterlock`, and a drop-in beats the
+unit file, so as built the co-signer runs on the same box, as the same user, as
+the enclave-side app. One compromise gets both halves. Everything above is
+therefore a description of the Phase 4 end state, not of Phases 1–3, and no
+user-facing copy (§10) may claim it before then. Two ways to close it early, in
+order of preference: give the co-signer its own account with a
+`20-cosigner.conf` drop-in overriding `User=` (drop-ins apply in lexical order,
+so it wins over `10-hardening.conf`), or accept the gap and treat Phases 1–3 as
+a dev arrangement with no security claim attached.
+
 **Where it is not a reduction: availability.** The co-signer is a new hard
 dependency, and by design there is no way around it. Down means no mail
 processed for anyone. That is a deliberate trade — a denial-of-service
@@ -229,7 +246,10 @@ Limit: this detects a wrong image, not a correct image subverted at runtime
 
 ## 4. Track I — split custody (the spine)
 
-### I1. `backend/custody/wrapping.py` (new, ~120 lines)
+Worktrees: I1–I4 are `enclave-custody-2`; I5–I6 are `onboarding-exchange-4`,
+which branches after `enclave-custody-2` merges.
+
+### I1. `backend/custody/wrapping.py` (new, ~120 lines) — `enclave-custody-2`
 
 Single source of truth for the enclave-side crypto.
 
@@ -246,7 +266,7 @@ Single source of truth for the enclave-side crypto.
 Asserts: uid non-empty and matching the manifest; `len(inner) > 28` (nonce+tag);
 never log plaintext.
 
-### I2. `backend/custody/client.py` (new, ~150 lines)
+### I2. `backend/custody/client.py` (new, ~150 lines) — `enclave-custody-2`
 
 The enclave's mTLS client to the co-signer. Sole network boundary.
 
@@ -260,7 +280,7 @@ The enclave's mTLS client to the co-signer. Sole network boundary.
   a bypass.** Alert via `telegram.operator_target()` (box-level failure — this
   is exactly what that channel is for; never the per-account path).
 
-### I3. `backend/custody/tokens.py` (new, ~180 lines)
+### I3. `backend/custody/tokens.py` (new, ~180 lines) — `enclave-custody-2`
 
 The replacement for what google-auth-library used to do internally.
 
@@ -292,7 +312,7 @@ Verified: `google-auth` 2.41.1 in the `py311` env has this. Neither
 a bring-your-own-library item in **either** language, so it is not a reason to
 stay in Node.
 
-### I4. DPoP proofs
+### I4. DPoP proofs — `enclave-custody-2` (proof construction: `cosigner-service-1`)
 
 Use [`requests-oauth2client`](https://pypi.org/project/requests-oauth2client/)
 1.8.0 (Apache-2.0, py3.9–3.14, beta). It generates proofs, handles the
@@ -303,9 +323,13 @@ enclave sends `(htm, htu, nonce)` and receives a finished proof JWT. On the
 co-signer side that is `requests_oauth2client`'s proof construction with a
 fixed key; on the enclave side it is just an HTTP header value.
 
-Add to `requirements.txt`: `requests-oauth2client==1.8.0`, `cryptography`.
+Add to `requirements.txt`: `requests-oauth2client==1.8.0`, `cryptography`, and —
+even though nothing in this worktree imports it — `google-api-python-client`,
+which Track K needs. `enclave-custody-2` is the only worktree that edits
+`requirements.txt`; adding K's pin here in the same pass is what keeps
+`node-removal-5` out of the file entirely (§7).
 
-### I5. Onboarding rewrite (the risky part)
+### I5. Onboarding rewrite (the risky part) — `onboarding-exchange-4`
 
 `backend/onboarding/provisioning.py` currently shells to `oauth_helper.mjs`
 (`run_helper`, lines 49–73). The code exchange must move to Python so the DPoP
@@ -326,7 +350,7 @@ proof can be attached at the moment Google binds the token.
   `manual_auth` was the interactive laptop path; `browserAuth()` and
   `INTERACTIVE_AUTH` in `gmail_lib.mjs` go with it.
 
-### I6. Wipe + re-onboard
+### I6. Wipe + re-onboard — `onboarding-exchange-4`
 
 - `database/accounts.json` and `database/<email>/` deleted on the box.
 - Re-run `python -m backend.accounts.seed_owner`, then sign in through
@@ -335,9 +359,35 @@ proof can be attached at the moment Google binds the token.
 - `deploy/deploy.sh` `EXCLUDES` already protects `database/` — the wipe is
   manual and deliberate, not something the deploy does.
 
+### I7. As built: what the spec left open
+
+- **PKCE verifiers are derived, not stored.** Keyed off the enclave's own secret
+  by the `state` value, so a restart between the two halves of a sign-in does
+  not strand the user mid-consent. There is no server-side session table to
+  lose, and nothing to clean up on an abandoned sign-in.
+- **`creds_dir` became `token_file` in the manifest,** as §6 predicted. Less
+  predictably, the `creds_dir=` parameter threaded through the drafter became
+  `account=`, and `identity=` was removed with it: passing both made it possible
+  to draft under one user's identity while searching another user's mail. That
+  is a multi-tenant isolation bug the port closed. Do not reintroduce a second
+  identity parameter alongside `account=`.
+- **The MIME port was verified against the implementation it replaced,** running
+  both builders over five payloads (unicode headers, quote and no-quote, each
+  half of the attribution) to byte-identical output before `create_draft.mjs`
+  was deleted. `tests/test_draft_mime.py` pins it now that the comparison target
+  is gone. Any future change to draft assembly is checked only against that
+  file.
+- **`deploy/phala/docker-compose.yml` passes `LETTERLOCK_COSIGNER_URL`,** while
+  `backend/site.py` also has `COSIGNER_HOST` and `cosigner_url()`. Confirm at
+  integration which one wins; two ways to name the same endpoint is exactly the
+  drift `site.py` exists to prevent.
+
 ---
 
-## 5. Track J — co-signer service
+## 5. Track J — co-signer service — `cosigner-service-1`
+
+Whole track, J1–J6, is one worktree. It imports nothing from `backend/`, so
+apart from one constant in `backend/site.py` it only adds files.
 
 New top-level `cosigner/` (own module, imports nothing from `backend/` so it
 can be deployed independently later). ~250 lines total.
@@ -391,9 +441,84 @@ check that the credentials load and the allowlist parses. Add the loopback port
 to `backend/site.py` and regenerate the Caddyfile
 (`python -m deploy.render_caddyfile`) — never hand-edit it.
 
+### J7. As built: what the spec left open
+
+Recorded because a future stage will hit each of these and the reasoning is not
+recoverable from the code alone.
+
+- **mTLS terminates at Caddy, so the attestation check cannot live there.** §3
+  says "behind Caddy" and §5 says "client cert verified per §2", which conflict:
+  an RA-TLS certificate is self-signed and Caddy has no way to judge it.
+  Resolved with `client_auth { mode require }` (demand a cert, verify nothing)
+  plus `header_up X-Client-Cert-Der {…certificate_der_base64}`, leaving
+  `attest.py` to run the five checks on the DER. **A request arriving without
+  that header is what a bypassed proxy looks like and is refused.** Anything
+  that later changes the proxy must preserve that header or the service fails
+  closed, which is correct but will look like an outage.
+- **The co-signer needs its own hostname.** `client_auth` is per-site, so
+  folding it onto `API_HOST` would demand a client certificate from Google's
+  Pub/Sub push as well. `COSIGNER_HOST` is separate and needs a DNS A record
+  before Phase 3. TLS-ALPN must be disabled for that site or ACME cannot renew
+  through `mode require`.
+- **`quote_oid` and the `report_data` binding are deliberately blank.** dstack's
+  certificate extension OID and what its guest agent binds `report_data` to
+  could not be confirmed from documentation, and a guessed value produces a
+  check that passes on nothing in particular. `attest.configured()` reports the
+  service unconfigured while `mode: required` and those are empty, so preflight
+  refuses to start it rather than let it fail open. Both get filled from a live
+  RA-TLS certificate at the Phala cutover; see the runbook Stage 2.
+- **The audit log is the rate limiter's state.** Grants are counted out of the
+  log rather than an in-memory dict, so the budget survives a restart and the
+  number enforced is the number the log shows. `/wrap` idempotency reads the
+  same log, which keeps invariant 4 (the co-signer stores no ciphertext)
+  intact.
+- **`cosigner/alerts.py` imports `backend.integrations.telegram` inside the
+  function.** This bends "imports nothing from `backend/`"; the alternative was
+  a second copy of the Bot API, against the single-source rule. It is the only
+  crossing, and it is the only thing to rewrite when the co-signer moves to its
+  own box.
+
+### J8. The wire contract, reconciled
+
+§7a said to freeze this before either worktree started. That did not happen, and
+the two branches shipped different contracts. **Neither merges until this is
+settled.** The union, with the enclave side's reasoning, is authoritative:
+
+| Endpoint | Notes |
+| --- | --- |
+| `POST /wrap` | as specced |
+| `POST /unwrap-and-sign` | as specced |
+| `GET /health` | as specced |
+| `GET /dpop-jwk` | built as `/dpop-key` on the co-signer; **rename to `/dpop-jwk`**. Returns the public JWK; the enclave computes the `dpop_jkt` thumbprint from the key rather than trusting a stated field, and refuses a JWK containing `d`. |
+| `POST /sign-dpop` | **missing from the co-signer entirely.** Not optional: at code-exchange time there is no uid yet, because the mailbox is unknown until Google answers, so `/unwrap-and-sign` cannot serve it — there is nothing to unwrap. The `DPoP-Nonce` retry (§I3 step 6) also needs a second proof without a second unwrap. |
+
+`/sign-dpop` is a bare signing oracle with no uid attached, so the per-user rate
+limit in `policy.py` cannot apply to it. It needs its own aggregate limit and
+its own audit rows, or it becomes the unmetered path around the metered one.
+This is the only place the built system can be made to sign without being
+counted; close it when the endpoint is added.
+
+**Who fixes it: `cosigner-service-1`, entirely.** The rename and the new
+endpoint are `cosigner/server.py`, `policy.py` and `audit.py`, all owned by that
+worktree. `enclave-custody-2` already calls the target contract against a fake
+and needs no code change.
+
+**Root cause, fix it in the same pass.** Both worktrees wrote a contract:
+`cosigner/protocol.py` on one side, an equivalent inside
+`backend/custody/client.py` on the other. Two definitions is why they diverged,
+and adding an endpoint to one without collapsing them resets the clock. Merge
+`cosigner-service-1` first, then rebase `enclave-custody-2`, delete its copy,
+and import `cosigner.protocol`. That direction is allowed: §5's rule is that the
+co-signer must not import `backend/`, and it is one-directional. Build the fake
+co-signer in `tests/test_custody.py` on the same shared definition, so a future
+contract change breaks the test rather than production.
+
 ---
 
-## 6. Track K — remove Node
+## 6. Track K — remove Node — `node-removal-5`
+
+Whole track is one worktree, branched after `enclave-custody-2` merges (it
+needs `tokens.refresh_handler_for()`). Largest of the five by a wide margin.
 
 1001 lines of `.mjs` across 11 files. After Track I, ~595 of those lines are
 already being rewritten (`gmail_lib.mjs` credential handling, `oauth_helper`,
@@ -460,15 +585,85 @@ already being rewritten (`gmail_lib.mjs` credential handling, `oauth_helper`,
 
 ## 7. Sequencing
 
+Two independent orderings. **Worktrees** are how the code gets written and are
+gated only on each other. **Phases** are how it gets switched on and are gated
+on Phala procurement. A worktree can be finished and merged long before the
+phase that turns its production path on.
+
+### 7a. Worktrees
+
+Five branches. Wave 1 starts together; wave 2 branches from `main` after
+`enclave-custody-2` merges.
+
+| Worktree | Wave | Scope | Size |
+| --- | --- | --- | --- |
+| `cosigner-service-1` | 1 | Track J entire (§5) | ~250 lines + tests |
+| `enclave-custody-2` | 1 | I1–I4 (§4) | ~450 lines + tests |
+| `secrets-gate-3` | 1 | §8 items 1, 2, 4 | ~150 lines across ~10 files |
+| `onboarding-exchange-4` | 2 | I5, I6 (§4), §8 item 3 | ~150 changed |
+| `node-removal-5` | 2 | Track K entire (§6) | ~600 new, ~1000 deleted |
+
+File ownership. A path appears under exactly one worktree; that is what makes
+the merges boring.
+
+| Worktree | Owns |
+| --- | --- |
+| `cosigner-service-1` | `cosigner/**`, `deploy/hetzner/cosigner.service`, the co-signer port constant in `backend/site.py`, regenerated `deploy/hetzner/Caddyfile`, its `deploy/preflight.py` check |
+| `enclave-custody-2` | `backend/custody/**`, `requirements.txt`, the `client_auth` call site in `backend/tee/dstack_client.py`, `tests/test_custody.py` |
+| `secrets-gate-3` | `backend/secrets.py`, the eight `load_dotenv(paths.ENV_FILE)` call sites, `backend/tee/tee_boot.py`, `deploy/phala/docker-compose.yml` |
+| `onboarding-exchange-4` | `backend/onboarding/provisioning.py`, deletion of `oauth_helper.mjs` + `manual_auth.mjs`, `gcp-oauth.keys.json` custody, `tests/test_onboarding.py` |
+| `node-removal-5` | `backend/integrations/gmail_gcal/**`, `node_runner.py`, `paths.node_script()`, `tool_executors.py`, the body of `draft_replies.submit_draft()`, `account.creds_dir`, `package*.json`, the npm branch of `deploy/deploy.sh`, the Node layer of `deploy/phala/` |
+
+Three things to settle before wave 1 opens, because each is a place two
+worktrees would otherwise write the same lines:
+
+1. **Freeze the wire contract first.** `cosigner-service-1` and
+   `enclave-custody-2` are parallel only because §5's two request shapes
+   (`POST /wrap`, `POST /unwrap-and-sign`) are fixed in advance. Write them
+   down as a schema before either branch starts, and have `enclave-custody-2`
+   test against a fake co-signer rather than the real one. Changing the
+   contract mid-flight serializes the two branches.
+2. **`requirements.txt` belongs to `enclave-custody-2` alone,** including
+   Track K's `google-api-python-client` pin (§I4). Two branches appending to
+   the same file conflict for no reason.
+3. **`gmail_lib.mjs` belongs to `node-removal-5` alone.**
+   `onboarding-exchange-4` would naturally strip `browserAuth()` and
+   `INTERACTIVE_AUTH` from it (§I5); it must not. Leave the file untouched and
+   let `node-removal-5` delete it whole — a delete/edit conflict on a file
+   being removed anyway is pure noise.
+
+`secrets-gate-3` touches few lines but many files. Merge it early rather than
+letting it sit; it is the one branch that goes stale against everything.
+
+`node-removal-5` is big enough to want splitting. The seam is `gmail_api.py`
+plus the six mechanical wrappers, then `fetch_emails` plus `create_draft`. That
+is a sequence, not a parallel pair — the second half imports the first — so
+split it only if the branch becomes unwieldy, not for throughput. Its golden
+tests against the current `.mjs` output (§6) are the first commit on the
+branch, before any port lands.
+
+The §10 front-end copy edits are **not** a worktree. Each one is gated on
+individual user confirmation and several depend on which tracks have actually
+shipped.
+
+### 7b. Phases
+
 Phala is not rented yet. Build dev-first so procurement never blocks.
+
+Phases 3–5 have an operator runbook with the actual commands:
+`docs/runbook_provisioning.md`. It assumes every worktree in 7a has merged, and
+it opens with the one decision (which KMS) that must be settled before any
+account is onboarded, because changing it later invalidates every sealed token.
 
 **Phase 1 — dev, no TEE.** `TEE_REQUIRED` unset, no dstack socket. Co-signer on
 localhost with a self-signed cert, attestation verification stubbed behind a
 flag that **asserts it is only ever off in dev**. Everything else real: nested
-wrapping, DPoP, rate limits, audit log. Tracks I + J complete and tested here.
+wrapping, DPoP, rate limits, audit log. Tracks I + J complete and tested here,
+i.e. `cosigner-service-1`, `enclave-custody-2`, `secrets-gate-3` and
+`onboarding-exchange-4` all merged.
 
-**Phase 2 — Node removal.** Track K, entirely local, no TEE dependency. Golden
-tests carry it.
+**Phase 2 — Node removal.** `node-removal-5`, entirely local, no TEE
+dependency. Golden tests carry it.
 
 **Phase 3 — deploy co-signer to Hetzner.** Real systemd unit, real
 `LoadCredentialEncrypted=`, real Caddy route. Enclave side still dev.
@@ -479,26 +674,50 @@ remove the dev-mode escape hatches. Amend §6.6 checklist to authorize the
 compose hash in both AppAuth and the co-signer allowlist.
 
 **Phase 5 — re-onboard.** Wipe `database/`, seed the owner, sign in through the
-real flow.
+real flow. This is I6, written in `onboarding-exchange-4` but only executed
+against the box here.
 
 ---
 
 ## 8. Also fix while in here (Barrier A gaps)
 
-Found during this review; small, and they belong to the same threat model:
+Found during this review; small, and they belong to the same threat model.
+Three of the four are `secrets-gate-3`; the `gcp-oauth.keys.json` move is
+`onboarding-exchange-4`, because it lands in the same file as the code
+exchange it belongs to.
 
-- `deploy/phala/docker-compose.yml:32` mounts `/app/.env` with
+- **`secrets-gate-3`** — `deploy/phala/docker-compose.yml:32` mounts `/app/.env` with
   `required: false`. A file-backed `.env` is exactly the leak this design makes
   impossible everywhere else. Under `TEE_REQUIRED` that mount should not exist.
-- `tee_boot.REQUIRED_SECRETS` (line 40) lists four values. `SESSION_SECRET`
+- **`secrets-gate-3`** — `tee_boot.REQUIRED_SECRETS` (line 40) lists four values. `SESSION_SECRET`
   (`frontend/session.py:32`) and the Polar keys (`backend/billing/billing.py:52`)
   are missing, so the gate passes without them.
-- `gcp-oauth.keys.json` holds the Google `client_secret` and is read off the
-  volume by `gmail_lib.mjs:47`, not from injected env. It is the single value
-  with the widest blast radius and the one **not** going through the KMS path.
-  Move it to the co-signer with the DPoP key — the co-signer is already doing
-  the token exchange's crypto.
-- Eight modules call `load_dotenv(paths.ENV_FILE)` independently. Against the
+- **`onboarding-exchange-4`** — `gcp-oauth.keys.json` holds the Google
+  `client_secret`, read off the volume rather than from injected env. It is the
+  single value with the widest blast radius and the one **not** going through
+  the KMS path. Every reader is now behind `oauth_app.py`, so this is a
+  one-file change.
+
+  **Correction to the original instruction, which said to move it to the
+  co-signer.** That cannot work. Google's token endpoint requires
+  `client_secret` and `refresh_token` in the *same* POST, and the enclave is
+  what makes that POST (§I3 step 5). So either the co-signer performs the
+  exchange and sees the refresh token, violating invariant 2, or it hands the
+  secret back to the enclave, which is the status quo with extra round trips.
+  Neither is worth doing.
+
+  Do this instead: inject it as a dstack encrypted environment variable and
+  delete the volume file. That fixes the actual stated defect — a secret read
+  off disk instead of released post-attestation — without touching the custody
+  split. There is no marginal loss from the enclave holding it, since an
+  attacker with enclave memory already has refresh tokens.
+- **`secrets-gate-3`** — `deploy/phala/pyproject.toml` is a second dependency
+  list and has already drifted from `requirements.txt`: it still pins presidio
+  and is missing `standardwebhooks` and `certifi`. Two manifests for one
+  environment is against the single-source rule, and the failure mode is a
+  dependency that exists on Hetzner and not in the measured image. Collapse to
+  one source, or generate one from the other in the build.
+- **`secrets-gate-3`** — eight modules call `load_dotenv(paths.ENV_FILE)` independently. Against the
   single-source rule in CLAUDE.md. Collapse to one `backend/secrets.py`
   accessor so "this value came from injected env, not a file" is assertable in
   one place.
@@ -528,7 +747,12 @@ Found during this review; small, and they belong to the same threat model:
   broker found holds the refresh token itself, which is the arrangement that
   gives one compromised box everything.
 
-## 10. Front-end copy
+## 10. Front-end copy — no worktree
+
+Deliberately not assigned to any of the five. Each edit is gated on separate
+user confirmation, and `frontend/web_server.py` would otherwise be a shared
+file across branches for changes that are one or two lines each. Do these on
+`main` after the tracks they describe have merged.
 
 **Rule: ask the user about each change individually and get confirmation before
 editing.** Do not batch these, do not apply them as a set, and do not rewrite
@@ -571,13 +795,14 @@ honest version of the claim.
 
 ## 11. Line-count estimate
 
-| Piece | Lines |
-| --- | --- |
-| `backend/custody/` (I1–I3) | ~450 |
-| onboarding rewrite (I5) | ~150 changed |
-| `cosigner/` (J1–J5) | ~250 |
-| Node → Python port (K) | ~600 new, ~1000 deleted |
-| tests | ~300 |
+| Piece | Worktree | Lines |
+| --- | --- | --- |
+| `backend/custody/` (I1–I3) | `enclave-custody-2` | ~450 |
+| onboarding rewrite (I5) | `onboarding-exchange-4` | ~150 changed |
+| `cosigner/` (J1–J5) | `cosigner-service-1` | ~250 |
+| Node → Python port (K) | `node-removal-5` | ~600 new, ~1000 deleted |
+| secrets accessor + gate (§8) | `secrets-gate-3` | ~150 changed |
+| tests | split across all five | ~300 |
 
 Net roughly break-even on line count, one language and one dependency tree
 lighter, with the trust story testable end to end.
