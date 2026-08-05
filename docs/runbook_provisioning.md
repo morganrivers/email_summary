@@ -109,14 +109,25 @@ from Google's Pub/Sub push too. Create the A record for `COSIGNER_HOST`
 (`cosigner.morganrivers.com`) pointing at the box and let it propagate before
 anything below.
 
+That record is a manual step at the DNS host and nothing in this repo creates
+it. The zone is served by NearlyFreeSpeech (`ns.phx4/phx7.nearlyfreespeech.net`);
+add `cosigner` as an A record to `89.167.32.174`, the same address
+`letterlock.` and `hezner.` already carry, with no AAAA since neither of those
+has one. Confirm with `dig +short cosigner.morganrivers.com` before reloading
+Caddy: reloading against a name that does not resolve leaves the site failing
+ACME rather than serving.
+
 TLS-ALPN must be disabled for that site or ACME cannot renew a certificate
 through `client_auth { mode require }`. The rendered Caddyfile handles this;
 confirm it survives any hand-editing you are tempted to do, and note that the
 failure shows up 60 days later as an expired certificate rather than
 immediately.
 
-The port constant lives in `backend/site.py` (worktree `cosigner-service-1`).
-Never hand-edit the Caddyfile.
+The port constant lives in `cosigner/protocol.py` (8791) and is re-exported by
+`backend/site.py`, which is what the renderer reads. Never hand-edit the
+Caddyfile. As of this writing the committed `deploy/hetzner/Caddyfile` already
+matches the renderer, so the first command below should be a no-op; if it is
+not, something drifted and that is the thing to look at before scp'ing.
 
 ```bash
 python -m deploy.render_caddyfile > deploy/hetzner/Caddyfile
@@ -130,53 +141,85 @@ ssh root@hezner.morganrivers.com \
 ### 1.2 The two credentials
 
 `cosigner/keys.py` reads both from `$CREDENTIALS_DIRECTORY`, populated by
-`LoadCredentialEncrypted=` in the unit. Generate them **on the box**: TPM-backed
-credentials only decrypt on the host that encrypted them, so generating them on
-your laptop produces files the server cannot open.
+`LoadCredentialEncrypted=` in the unit. Generate them **on the box**: a
+systemd-creds credential only decrypts on the host that encrypted it, so
+generating them on your laptop produces files the server cannot open.
+
+The paths are fixed by the two `LoadCredentialEncrypted=` lines in
+`deploy/hetzner/cosigner.service`, and the formats by `cosigner/keys.py`: the
+master is **base64 text** (`master_key()` rejects raw bytes), the DPoP key a PEM
+EC P-256 private key. The commands below are the ones in that unit's header and
+that module's docstring; if they ever disagree, the code is right.
 
 ```bash
 ssh root@hezner.morganrivers.com
-mkdir -p /etc/letterlock && chmod 700 /etc/letterlock
 
-# Outer wrapping master key (32 bytes). Never leaves this host.
-head -c 32 /dev/urandom | systemd-creds encrypt --name=cosigner-master \
-  - /etc/letterlock/cosigner-master.cred
+# /etc/credstore.encrypted already exists here, 0700 root. Create it if it does not.
+
+# Outer wrapping master key (32 bytes, base64). Never leaves this host.
+head -c 32 /dev/urandom | base64 | \
+  systemd-creds encrypt --with-key=host --name=cosigner-master \
+  - /etc/credstore.encrypted/cosigner-master
 
 # DPoP signing key, EC P-256 (plan §J2).
-openssl ecparam -name prime256v1 -genkey -noout -out /dev/shm/dpop.pem
-systemd-creds encrypt --name=cosigner-dpop \
-  /dev/shm/dpop.pem /etc/letterlock/cosigner-dpop.cred
-shred -u /dev/shm/dpop.pem
+openssl ecparam -genkey -name prime256v1 -noout | \
+  openssl pkcs8 -topk8 -nocrypt | \
+  systemd-creds encrypt --with-key=host --name=cosigner-dpop \
+  - /etc/credstore.encrypted/cosigner-dpop
 
-chmod 600 /etc/letterlock/*.cred
+chmod 600 /etc/credstore.encrypted/cosigner-*
 ```
 
-`systemd-creds encrypt` defaults to `host+tpm2`, which is what you want and
-also what makes this unrecoverable if the box dies. Two consequences:
+**`--with-key=host` is explicit because this box has no TPM.** It is a Hetzner
+vServer; `systemd-creds has-tpm2` answers `partial` with `-firmware -driver`.
+The default (`auto`) does not fail on that, it quietly encrypts with the host
+key alone and produces files that look TPM-sealed and are not. Naming the mode
+makes the weaker guarantee something chosen rather than inherited. What it
+means:
 
-- The master key cannot be backed up in usable form. Losing the box means every
-  `outer` ciphertext is dead and every user re-onboards. That is the intended
-  security property, not a bug, but decide deliberately whether you accept it
-  before you have users. The alternative is `--with-key=host`, weaker and
-  restorable from a disk image.
-- The DPoP public key thumbprint (`dpop_jkt`) must be extractable for the
-  onboarding flow (plan §I5). Print it once and record it:
+- The decrypting key is `/var/lib/systemd/credential.secret`, a file on disk.
+  Anything that restores that file restores both credentials: a disk image, a
+  snapshot, a backup of `/var`. The master key therefore **is** recoverable, and
+  is also exposed wherever those images live. Back the box up accordingly, and
+  no product copy may claim hardware sealing for the co-signer while it runs
+  here.
+- Moving the co-signer to a box with a vTPM is the fix, and it costs no
+  re-onboarding: `systemd-creds decrypt` the two files as root, re-encrypt with
+  `--with-key=host+tpm2` on the new host. The key material is unchanged, so no
+  `outer` ciphertext and no Google-bound refresh token is invalidated. That is
+  the point at which the stronger claim (lose the box, lose every token) becomes
+  true. Decide which of the two you want before you have users, not after.
+
+The DPoP public key thumbprint (`dpop_jkt`) is needed by the onboarding flow
+(plan §I5). Do not derive it by hand from the PEM: the running service publishes
+the JWK and the thumbprint together, and that is the copy the enclave uses.
 
 ```bash
-openssl ec -in /dev/shm/dpop.pem -pubout   # before you shred, if you need it now
+# after Stage 1.4, on the box
+curl -sS http://127.0.0.1:8791/dpop-jwk
 ```
 
-### 1.3 Allowlist, in dev-accept mode
+### 1.3 Allowlist, in dev-accept mode — already in the repo
 
-`cosigner/attest.py` reads its measurement allowlist from a config file, not
-env (plan §J4). No measurements exist yet. Create the file with an empty list
-and the dev flag set, and confirm the flag's assert fires if it is ever set on
-a box where `TEE_REQUIRED` is on.
+`cosigner/attest.py` reads its measurement allowlist from a config file, not env
+(plan §J4). That file is `cosigner/allowlist.json`, **committed and shipped by
+the deploy**, and it already holds `"mode": "dev-insecure"` with
+`"measurements": []`. There is nothing to create on the box. Confirm rather than
+write:
 
 ```bash
-install -m 600 /dev/null /etc/letterlock/cosigner-allowlist.toml
-# populate in Stage 2.6, not now
+grep -n '"mode"\|"measurements"' cosigner/allowlist.json
 ```
+
+`$COSIGNER_ALLOWLIST` overrides the path if the co-signer ever needs a copy
+outside the tree; nothing sets it today, and the unit does not.
+
+Two consequences of it living in the repo. First, Stage 2.6 is a **git commit
+plus a deploy**, not an edit on the server: `deploy.sh` rsyncs the tree with
+`--delete-after`, so a hand-edited allowlist on the box is reverted by the next
+push and every unwrap starts failing. Second, `attest.mode()` asserts
+`dev-insecure` is impossible once `measurements` is non-empty or `TEE_REQUIRED`
+is set, so the dev window closes itself when the file is populated.
 
 This is the one window where the co-signer will unwrap for an unattested
 client. Keep it short and do not deploy the enclave side against it.
@@ -196,13 +239,34 @@ before it restarts anything. A failing preflight leaves the unit alone rather
 than restarting it into a loop, so read its output rather than the exit code
 alone.
 
+Note what an unprovisioned co-signer costs the rest of the deploy:
+`preflight._mail_configured()` calls `_custody_available()`, so if 1.2 was
+skipped or botched, `email-daemon`, `email-webhook`, `email-summary` and
+`gmail-watch` are all reported unconfigured and left alone too. They keep
+running their old code rather than breaking, which is easy to misread as a
+successful deploy. Do 1.2 first and read the skip list.
+
 ### 1.5 Verify
 
 ```bash
 ssh root@hezner.morganrivers.com 'systemctl status cosigner.service --no-pager'
 ssh root@hezner.morganrivers.com 'journalctl -u cosigner.service -n 50 --no-pager'
-curl -sS https://<cosigner-host>/health
+ssh root@hezner.morganrivers.com 'curl -sS http://127.0.0.1:8791/health'
 ```
+
+Health goes over loopback, not the public name: the co-signer's site block is
+`client_auth { mode require }`, so `curl https://cosigner.morganrivers.com/health`
+cannot complete a handshake without a client certificate, and this laptop holds
+none. That failure is the site working. To see the public side is actually up,
+check that Caddy asks for a certificate and that ACME issued one:
+
+```bash
+openssl s_client -connect cosigner.morganrivers.com:443 </dev/null 2>&1 \
+  | grep -i 'Acceptable client certificate\|Verify return code'
+```
+
+The startup log line names the mode; `attestation=dev-insecure` plus the
+WARNING is expected until Stage 2.6 and nowhere else.
 
 Then confirm the failure mode is the designed one: stop the co-signer and check
 the mail path refuses rather than falling back (plan §I2, "no bypass").
@@ -215,6 +279,66 @@ ssh root@hezner.morganrivers.com 'systemctl start cosigner.service'
 
 If mail still gets drafted with the co-signer down, stop. A bypass exists and
 the entire design is void.
+
+### 1.6 Exercise custody end to end, still on Hetzner
+
+Optional in the sense that Stage 2 does not depend on it, and worth doing
+anyway: it debugs the wire contract, the layer order and the DPoP binding
+before a CVM is rented, so the Phala cutover has one new variable instead of
+four. Read 1.6a before deciding, because it costs a second re-onboard.
+
+Two values in `/opt/letterlock/.env`, which is server-only and which the deploy
+never overwrites:
+
+```bash
+LETTERLOCK_DEV_APP_SECRET=<32+ random chars>
+LETTERLOCK_COSIGNER_URL=http://127.0.0.1:8791
+```
+
+The first stands in for the KMS `app_secret`, since there is no guest agent
+here; `wrapping.app_secret()` asserts one or the other exists and refuses both
+when `TEE_REQUIRED` is set. The second points the custody client at the loopback
+port rather than the public name. That is necessary, not lazy: `cosigner_url()`
+would otherwise resolve to `https://cosigner.morganrivers.com`, whose site block
+demands a client certificate, and the only thing that can produce one is a
+dstack guest agent. Going through Caddy on this box is not a test you can pass.
+
+Then run Stage 3 now rather than later: the old `database/` holds cleartext
+tokens in the pre-custody format and nothing reads it any more.
+
+What passing this proves: the protocol codec agrees on both sides, `wrap` and
+`unwrap-and-sign` round trip, Google accepts a DPoP-bound refresh at the code
+exchange, the rate limit and audit rows behave, no `credentials.json` is written
+anywhere, and a draft still appears in Gmail.
+
+What it does not prove, and cannot: anything about attestation. `dev-insecure`
+accepts every client, so no measurement is checked, no quote is parsed, and
+`dcap-qvl` is not even exercised. The KMS is not involved either. Those are
+Stage 2's job and this stage says nothing about them.
+
+Two things to hold in view while it is on. `COSIGNER_BIND` defaults to
+127.0.0.1, but on loopback HTTP with `dev-insecure` there is no client
+authentication of any kind, so any local process can ask for an unwrap. The
+`cosigner` / `letterlock` user split does not help against that; it only keeps
+the app from reading the credentials directly. And the dev app secret sits in
+`.env` beside `database/<id>/token.bin`, so during this window one disk image
+contains both layers and reads every token. That is the whole reason the window
+is for your own mailbox and not for anyone else's.
+
+#### 1.6a The second re-onboard, which is not optional
+
+`K_inner` derives from `app_secret`. Under this stage that is
+`LETTERLOCK_DEV_APP_SECRET`; after the cutover it is the value the dstack KMS
+releases. Different seed, different key, so every `token.bin` written here is
+unreadable inside the enclave and cannot be migrated. Stage 3 therefore runs
+twice: once now against the dev secret, once again after 2.7 against the KMS.
+Fine for one owner account, and the reason not to onboard anyone else before the
+cutover.
+
+Delete `LETTERLOCK_DEV_APP_SECRET` from `.env` at the cutover rather than
+leaving it. It is dead weight in the enclave (`TEE_REQUIRED` makes
+`wrapping.app_secret()` refuse it) but a live key on any box where that flag is
+not set.
 
 ---
 
@@ -340,15 +464,38 @@ phala logs -f
 phala cvms attestation --json > attestation.json
 ```
 
-Take the compose hash and the measurement registers out of that file, write
-them into the co-signer's allowlist on Hetzner, clear the dev flag, restart the
-co-signer.
+Take the measurement registers out of that file and write them into
+`cosigner/allowlist.json` **in the repo**, then commit and deploy. One entry per
+authorized image, `mr_td` always pinned, `rt_mr0`–`rt_mr3` pinned or explicitly
+`null`; set `"mode": "required"` in the same commit, which is what closes the
+dev window (`attest.mode()` refuses `dev-insecure` the moment `measurements` is
+non-empty).
 
-Two fields in `cosigner/attest.py` are deliberately blank and can only be filled
-now, from a live certificate: `quote_oid` (dstack's X.509 extension OID carrying
-the quote) and whatever the guest agent binds `report_data` to. They were left
-empty rather than guessed, because a guessed OID yields a check that passes on
-nothing. While they are blank and `mode: required`, `attest.configured()`
+```bash
+$EDITOR cosigner/allowlist.json
+git commit -am 'Authorize the first enclave measurement'
+./deploy/deploy.sh                      # restarts cosigner.service
+```
+
+Editing the file on the server instead is the trap: `deploy.sh` rsyncs with
+`--delete-after`, so the next push reverts it and every unwrap fails.
+
+`mode: required` also needs `dcap-qvl` present in the box's venv —
+`attest.configured()` reports the service unconfigured without it and preflight
+will refuse to start it. It is pinned in `requirements.txt` and installed by the
+deploy when that manifest changes, so verify rather than assume:
+
+```bash
+ssh root@hezner.morganrivers.com \
+  '/opt/letterlock/venv/bin/python -c "import dcap_qvl; print(dcap_qvl.__name__)"'
+```
+
+Two fields in `cosigner/allowlist.json` are deliberately blank and can only be
+filled now, from a live certificate: `quote_oid` (dstack's X.509 extension OID
+carrying the quote) and `binding`, whatever the guest agent ties `report_data`
+to. They were left empty rather than guessed, because a guessed OID yields a
+check that passes on nothing. While they are blank and `mode: required`,
+`attest.configured()`
 reports the service unconfigured and preflight refuses to start it, so this is a
 hard gate rather than a silent fail-open. Pull one RA-TLS certificate from the
 running CVM, read the extension, and fill both.
@@ -447,9 +594,10 @@ doc plus one amended step:
 2. `REGISTRY=... deploy/phala/build_and_publish.sh --push`
 3. `deploy/phala/f2_wrong_measurement_test.sh`
 4. publish `IMAGE_HASH.txt` and the compose file, tagged as a release
-5. authorize the new compose hash **in `/etc/letterlock/cosigner-allowlist.toml`
-   first, then in the AppAuth contract on Base** — both, every time, and the
-   allowlist before the deploy or every unwrap fails
+5. authorize the new measurement **in `cosigner/allowlist.json` first (commit
+   and `./deploy/deploy.sh`, never a hand edit on the box), then in the AppAuth
+   contract on Base** — both, every time, and the allowlist before the deploy or
+   every unwrap fails
 6. `phala deploy -c deploy/phala/docker-compose.yml --wait` (with
    `--private-key` / `--rpc-url`, as at Stage 2.5)
 7. fetch a fresh quote, check the chain and the measurement against published
