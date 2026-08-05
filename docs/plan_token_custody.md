@@ -1,8 +1,19 @@
 # Plan: split-custody OAuth tokens + Node removal (Tracks I, J, K)
 
-Status: **[TODO]** — nothing here is implemented yet.
 Written 2026-08-05. Read this whole file before touching code; the decisions
 section explains why several obvious-looking shortcuts are wrong.
+
+Status, per track:
+
+- Track I (§4, split custody in the enclave) — **[TODO]**
+- Track J (§5, the co-signer service) — **[BUILT, phase 1]** `cosigner/`,
+  `deploy/hetzner/cosigner.service`, `tests/test_cosigner.py`. Runs with
+  attestation stubbed (`mode: dev-insecure` in `cosigner/allowlist.json`);
+  §7 phase 4 is what turns it on, and `cosigner/attest.py` refuses the stub
+  once the allowlist names a measurement or `TEE_REQUIRED` is set.
+- Track K (§6, Node removal) — **[TODO]**
+- §8 (Barrier A gaps) — **[TODO]**
+- §10 (front-end copy) — **[TODO]**, and each edit needs its own confirmation.
 
 ---
 
@@ -348,6 +359,15 @@ can be deployed independently later). ~250 lines total.
   for `uid` already exists (idempotency; a second wrap is either a bug or an
   attack).
 - `POST /unwrap-and-sign` `{uid, outer, htm, htu, nonce?}` → `{inner, proof}`.
+- `POST /sign-dpop` `{htm, htu, nonce?, uid?}` → `{proof}`. Not in the original
+  list and not optional: at the authorization-code exchange no uid exists yet,
+  because which mailbox consented is unknown until Google answers, so
+  `/unwrap-and-sign` cannot serve that proof — there is nothing to unwrap. The
+  `DPoP-Nonce` retry needs a second proof over the same request without paying
+  for a second unwrap. The uid is advisory (audit attribution only), which is
+  what forces the separate ceiling in J3.
+- `GET /dpop-jwk` → `{jwk, jkt}`. The public half, so the enclave can send
+  `dpop_jkt` at the code exchange. Asserts `d` is absent before serving.
 - `GET /health`.
 - mTLS required. Client cert verified per §2.
 
@@ -364,6 +384,12 @@ can be deployed independently later). ~250 lines total.
 - Per-user rate limit (default: 60 unwraps/hour — a mailbox wake needs one).
 - Aggregate ceiling across all users per hour. **This is the number that bounds
   a live enclave breach.** Start at ~3× expected peak.
+- Separate ceiling for bare `/sign-dpop`. It carries no uid, so the per-user
+  limit cannot reach it, and without one it is the unmetered path around the
+  metered one: an enclave-side attacker skips `/unwrap-and-sign` entirely, uses
+  a refresh token they already lifted, and asks here for the proof that makes it
+  work. Defaults to the unwrap ceiling, since the legitimate pattern is at most
+  one retry proof per unwrap plus onboarding.
 - Kill switch: a file or env flag that refuses everything.
 - On refusal, alert the operator. A refusal is either a bug or a breach; both
   want a human.
@@ -390,6 +416,23 @@ derives the service list by grepping for `[Install]`). Add a `preflight.py`
 check that the credentials load and the allowlist parses. Add the loopback port
 to `backend/site.py` and regenerate the Caddyfile
 (`python -m deploy.render_caddyfile`) — never hand-edit it.
+
+**Its own account, not `letterlock`.** `hardening.conf` is fanned out to every
+unit and sets `User=letterlock`; a drop-in beats the unit file, so shipping the
+service without an override would put the outer wrapping key and the DPoP key
+inside the blast radius of the web UI and the mail daemon, and the split would
+be decorative on this box. `deploy/hetzner/cosigner.service.d/20-cosigner.conf`
+overrides `User=`/`Group=` to `cosigner`, takes read access to the source
+through `SupplementaryGroups=letterlock` (the app directory is 750; the paths
+holding user data are 700/600, so group membership does not reach them), and
+resets `ReadWritePaths=` to empty because everything it writes is in
+`StateDirectory=cosigner`. `deploy.sh` installs any `<unit>.d/*.conf`, deletes
+drop-ins the repo no longer has, and creates the accounts by reading `User=`
+back out of them, so the account name has one definition.
+
+This is separation of privilege on one machine, not separation of operator.
+Phase 4 is where the second half becomes true, and §10 copy must not claim it
+before then.
 
 ---
 

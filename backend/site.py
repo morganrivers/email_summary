@@ -23,11 +23,19 @@ import os
 from dotenv import load_dotenv
 
 from backend import paths
+from cosigner import protocol as cosigner_protocol
 
 load_dotenv(paths.ENV_FILE)
 
 APP_HOST = os.environ.get("LETTERLOCK_HOST", "letterlock.morganrivers.com")
 API_HOST = os.environ.get("LETTERLOCK_API_HOST", "hezner.morganrivers.com")
+
+# The split-custody co-signer. Its own hostname, not a path on one of the two
+# above, because its site block is the only one that demands a client
+# certificate: folding it into API_HOST would make Caddy ask Google's Pub/Sub
+# push for one too. Today it resolves to the same box; the hostname is what
+# lets it move to a different one without the enclave's client changing.
+COSIGNER_HOST = os.environ.get("LETTERLOCK_COSIGNER_HOST", "cosigner.morganrivers.com")
 
 # Hosts that only redirect to APP_HOST (a bought misspelling, an old brand).
 # Comma-separated; empty until there is one to point at us.
@@ -43,6 +51,12 @@ ALIAS_HOSTS = tuple(
 GMAIL_PUSH_PORT = 8787
 BILLING_WEBHOOK_PORT = 8789
 WEB_PORT = 8790
+
+# Defined in cosigner/protocol.py, where the server that binds it lives, and
+# re-exported here so render_caddyfile.py still reads every port from one
+# module. The import runs backend -> cosigner and never the other way, so the
+# co-signer can be deployed without backend/ present.
+COSIGNER_PORT = cosigner_protocol.PORT
 
 OAUTH_CALLBACK_PATH = "/auth/callback"
 
@@ -101,6 +115,13 @@ def checkout_success_url():
     by Polar, so the return handler can read the checkout back and link the
     customer without waiting for the webhook."""
     return app_url(f"{CHECKOUT_RETURN_PATH}?checkout_id={{CHECKOUT_ID}}")
+
+
+def cosigner_url(path="/"):
+    """Where the enclave's custody client reaches the co-signer. mTLS: the
+    enclave presents its RA-TLS certificate and Caddy passes it through for
+    cosigner/attest.py to verify."""
+    return _url(COSIGNER_HOST, path)
 
 
 def pubsub_audience():

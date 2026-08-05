@@ -5,6 +5,20 @@ langsmith==0.10.5
 certifi==2025.4.26
 standardwebhooks==1.0.1
 
+# --- split custody (cosigner/, backend/custody/) ------------------------------
+# cryptography: AES-GCM and HKDF on both sides of the nested wrapping.
+# requests-oauth2client: DPoP proof construction. Neither Google auth library
+# implements DPoP, in Python or in JS, so this is bring-your-own in either
+# language. The co-signer signs the proofs; the enclave only ever handles the
+# finished header value.
+cryptography==46.0.7
+requests-oauth2client==1.8.0
+# dcap-qvl: Phala's own pure-Rust TDX quote verifier, used by cosigner/attest.py
+# to check the enclave's RA-TLS certificate against this box's allowlist. Only
+# reached when attestation is `required`; the module is imported on use, so a
+# box without it still starts and still fails closed.
+dcap-qvl==0.6.1
+
 # --- PII analyzer (optional) -------------------------------------------------
 # Off by default. Presidio imports spaCy behind it and costs ~470 MB resident
 # before a model is loaded; en_core_web_lg is ~1.1 GB more at first use, per

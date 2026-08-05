@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "The co-signer's independent copy of what it will talk to. Read by",
+    "cosigner/attest.py; not env-supplied, unlike EXPECTED_COMPOSE_HASH in",
+    "deploy/phala/docker-compose.yml, which the enclave hands to itself and",
+    "which is therefore advisory. This file is the point of the second box:",
+    "the enclave cannot edit it.",
+    "",
+    "mode: 'required' verifies the RA-TLS quote on every unseen client",
+    "certificate. 'dev-insecure' skips verification and is refused unless",
+    "measurements is empty and TEE_REQUIRED is unset -- see attest.mode().",
+    "Every row it writes to the audit log carries attested=0, so the log shows",
+    "exactly which period ran unverified.",
+    "",
+    "measurements: one entry per authorized image. A null field is an explicit",
+    "operator statement that the field is not pinned; mr_td must always be.",
+    "Populate before deploying a new compose hash, not after: an image absent",
+    "from here cannot unwrap, and no mail moves (plan §2).",
+    "",
+    "binding: how report_data ties the quote to the TLS certificate.",
+    "'pem-sha256' matches backend/tee/tee_boot._report_data_for_cert.",
+    "Confirm against a live dstack RA-TLS certificate at the Phala cutover."
+  ],
+  "mode": "dev-insecure",
+  "quote_oid": null,
+  "binding": "pem-sha256",
+  "pccs_url": "https://pccs.phala.network",
+  "allowed_tcb_status": ["UpToDate"],
+  "rejected_advisories": [],
+  "measurements": []
+}

@@ -34,3 +34,19 @@ letterlock.morganrivers.com {
 		reverse_proxy 127.0.0.1:8790
 	}
 }
+
+cosigner.morganrivers.com {
+	tls {
+		client_auth {
+			mode require
+		}
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8791 {
+			header_up X-Client-Cert-Der {http.request.tls.client.certificate_der_base64}
+		}
+	}
+}

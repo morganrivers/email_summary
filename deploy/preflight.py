@@ -32,6 +32,7 @@ from backend import paths
 
 UNIT_DIR = Path(__file__).resolve().parent / "hetzner"
 _EXEC_MODULE = re.compile(r"^ExecStart=.*?\s-m\s+(\S+)", re.MULTILINE)
+_LOAD_CREDENTIAL = re.compile(r"^LoadCredentialEncrypted=[^:]+:(\S+)", re.MULTILINE)
 
 load_dotenv(paths.ENV_FILE)
 
@@ -81,8 +82,41 @@ def _manifest_present():
     return None
 
 
+def _definitely_absent(path):
+    """Is this file certainly not there? A credential store is 0700 root-only,
+    so an unprivileged run of this script cannot see inside it. Reporting
+    "missing" from a PermissionError would skip a correctly provisioned unit;
+    only a readable directory with nothing in it is evidence."""
+    try:
+        return not Path(path).exists()
+    except PermissionError:
+        return False
+
+
+def _cosigner_configured():
+    """The co-signer needs its two sealed credentials on disk and an
+    attestation allowlist it can decide with.
+
+    The credentials are checked as the *encrypted* files the unit loads, not as
+    decrypted material: systemd only unseals them into $CREDENTIALS_DIRECTORY
+    for the running unit, so this process could never see them and a check that
+    tried would skip a correctly provisioned box forever."""
+    from cosigner import attest
+
+    unit = unit_for_module("cosigner.server")
+    if unit is None:
+        return "no unit runs cosigner.server"
+    missing = [p for p in _LOAD_CREDENTIAL.findall((UNIT_DIR / unit).read_text())
+               if _definitely_absent(p)]
+    if missing:
+        return (f"sealed credentials missing: {', '.join(missing)}; see the header of "
+                f"deploy/hetzner/{unit}")
+    return attest.configured()
+
+
 # module -> extra configuration check, run only after the module imports.
 CONFIG_CHECKS = {
+    "cosigner.server": _cosigner_configured,
     "backend.billing.billing_webhook": _polar_configured,
     "backend.billing.billing_poller": _polar_read_configured,
     "frontend.web_server": _session_configured,
@@ -106,6 +140,15 @@ def unit_module(unit):
         return None
     m = _EXEC_MODULE.search(path.read_text())
     return m.group(1) if m else None
+
+
+def unit_for_module(module):
+    """The unit file that runs a module, so a check can read the unit's own
+    settings without hardcoding its filename."""
+    for name in installed_units():
+        if unit_module(name) == module:
+            return name
+    return None
 
 
 def imports_cleanly(module):
