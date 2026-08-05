@@ -11,18 +11,19 @@ worktrees would otherwise collide.
 
 Status, per track:
 
-- Track I (§4, split custody in the enclave) — **[BUILT on
-  `feat/enclave-custody-2`, not merged]**. That branch absorbed
-  `onboarding-exchange-4` as well: I5 and I6 are in it.
+- Track I (§4, split custody in the enclave) — **[BUILT, phase 1, merged]**.
+  `feat/enclave-custody-2` absorbed `onboarding-exchange-4` as well: I5 and I6
+  are in it. I6 is written but not executed; the wipe happens at Phase 5.
 - Track J (§5, the co-signer service) — **[BUILT, phase 1, merged]**
   `cosigner/`, `deploy/hetzner/cosigner.service`, `tests/test_cosigner.py`.
   Runs with attestation stubbed (`mode: dev-insecure` in
   `cosigner/allowlist.json`); §7 phase 4 is what turns it on, and
   `cosigner/attest.py` refuses the stub once the allowlist names a measurement
   or `TEE_REQUIRED` is set.
-- Track K (§6, Node removal) — **[BUILT on `feat/enclave-custody-2`, not
-  merged]**.
-- §8 (Barrier A gaps) — **[BUILT on `feat/secrets-gate-3`, not merged]**.
+- Track K (§6, Node removal) — **[BUILT, merged]**.
+- §8 (Barrier A gaps) — **[BUILT on `feat/secrets-gate-3`, not merged]**. Note
+  that branch predates both merges and will need the same treatment: it is the
+  third writer of `requirements.txt` and `CLAUDE.md`.
 - §10 (front-end copy) — **[TODO]**, and each edit needs its own confirmation.
   `/about` at `web_server.py:383-386` is factually wrong as of Track I and
   says so about an arrangement that is now stronger than the claim.
