@@ -165,7 +165,7 @@ def inference_configured():
     failing where an operator would see it."""
     from backend.integrations import llm_client
 
-    absent = [p.key_env for p in llm_client.PROVIDERS.values() if not p.configured()]
+    absent = sorted({p.key_env for p in llm_client.PROVIDERS.values() if not p.configured()})
     return f"{', '.join(absent)} not set" if absent else None
 
 

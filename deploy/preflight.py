@@ -55,7 +55,17 @@ def _mail_configured():
     ``secrets.REQUIRED``; this is the Hetzner half of it, so the box does not
     check a strict subset of what the CVM fails closed on."""
     return (_manifest_present() or secrets.google_oauth_configured()
-            or _custody_available())
+            or _custody_available() or _inference_attestable())
+
+
+def _inference_attestable():
+    """Can every confidential provider be decided about? A provider whose
+    enclave image rotated out of the allowlist takes drafting down the moment a
+    user who chose it gets mail, so it belongs in the deploy's report rather
+    than in a daemon traceback at 3am."""
+    from backend.integrations import inference_attestation, llm_client
+
+    return inference_attestation.configured(llm_client.PROVIDERS.values())
 
 
 def _custody_available():
@@ -75,8 +85,10 @@ def _custody_available():
 
 def _web_configured():
     """The web UI signs users in with Google, so a missing OAuth app takes it
-    down as surely as a missing cookie key does."""
-    return secrets.session_configured() or secrets.google_oauth_configured()
+    down as surely as a missing cookie key does. It also generates voice
+    profiles, which builds an inference client like any mail path does."""
+    return (secrets.session_configured() or secrets.google_oauth_configured()
+            or _inference_attestable())
 
 
 def _definitely_absent(path):

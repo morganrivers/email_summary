@@ -88,7 +88,7 @@ def test_require_names_the_variable_and_not_the_value(env_file, monkeypatch):
 def _provision(monkeypatch):
     """Every secret the gate requires, present."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
-    monkeypatch.setenv("TRESOR_API_KEY", "k")
+    monkeypatch.setenv("NEARAI_API_KEY", "k")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "k")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
     monkeypatch.setenv("SESSION_SECRET", "s")

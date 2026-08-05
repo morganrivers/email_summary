@@ -1,0 +1,66 @@
+{
+  "_comment": [
+    "Which inference enclaves this box will send mail to. Read by",
+    "backend/integrations/inference_attestation.py; committed, so authorizing",
+    "an image is a reviewed diff rather than a runtime decision.",
+    "",
+    "mode: 'required' verifies the provider's TDX quote before make_client()",
+    "returns anything for a confidential provider. 'dev-insecure' skips the",
+    "check and is refused unless measurements is empty -- see Policy.mode().",
+    "",
+    "measurements: one entry per authorized image. 'scope' names the provider",
+    "the entry authorizes, so a pin for one model does not silently authorize",
+    "another. Only mr_td and rt_mr0-3 are matched; compose_hash and",
+    "os_image_hash are recorded so a diff says what changed. A null field is an",
+    "explicit statement that the register is not pinned; mr_td may never be.",
+    "",
+    "rt_mr3 is the app: it moves when the provider redeploys the model's",
+    "container, which NEAR does without announcing it. That is the pin that",
+    "will fail first, and failing is the point -- re-pin with",
+    "  python -m backend.integrations.inference_attestation <provider>",
+    "read the diff, and commit it. mr_td and rt_mr0-2 are the dstack base image",
+    "and move only on a platform upgrade.",
+    "",
+    "Recorded 2026-08-05 against dstack-nvidia-0.5.5, app_id",
+    "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b."
+  ],
+  "mode": "required",
+  "pccs_url": "https://pccs.phala.network",
+  "allowed_tcb_status": ["UpToDate"],
+  "rejected_advisories": [],
+  "measurements": [
+    {
+      "name": "NEAR AI GLM 5.2 (dstack-nvidia-0.5.5)",
+      "scope": "nearai-glm",
+      "compose_hash": "002b406e4770df733eba8f7dfce066f1c8e8d041d972cc02da8b9e3756ebca9a",
+      "os_image_hash": "9b69bb1698bacbb6985409a2c272bcb892e09cdcea63d5399c6768b67d3ff677",
+      "mr_td": "b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217",
+      "rt_mr0": "bc122d143ab768565ba5c3774ff5f03a63c89a4df7c1f5ea38d3bd173409d14f8cbdcc36d40e703cccb996a9d9687590",
+      "rt_mr1": "c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc",
+      "rt_mr2": "564622c7ddc55a53272cc9f0956d29b3f7e0dd18ede432720b71fd89e5b5d76cb0b99be7b7ff2a6a92b89b6b01643135",
+      "rt_mr3": "3e32445b952a4016a8bff11ec113c16e1277ba1d007186b120c8878bd7ec97f215632d3643eec2501cf1f0535e6683f7"
+    },
+    {
+      "name": "NEAR AI GLM 5.2 (dstack-nvidia-0.5.5, compose 9385918d)",
+      "scope": "nearai-glm",
+      "compose_hash": "9385918de0a73b861ae833d99fb5be6f7e1c8a50487a835df4f277497c206825",
+      "os_image_hash": "9b69bb1698bacbb6985409a2c272bcb892e09cdcea63d5399c6768b67d3ff677",
+      "mr_td": "b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217",
+      "rt_mr0": "bc122d143ab768565ba5c3774ff5f03a63c89a4df7c1f5ea38d3bd173409d14f8cbdcc36d40e703cccb996a9d9687590",
+      "rt_mr1": "c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc",
+      "rt_mr2": "564622c7ddc55a53272cc9f0956d29b3f7e0dd18ede432720b71fd89e5b5d76cb0b99be7b7ff2a6a92b89b6b01643135",
+      "rt_mr3": "8f993f8b7a99d5e4ea49a3413a0d6311efa6a61be3ec6cae1d13b353dd1835544084cba4b4e767c17f5c513da1857de8"
+    },
+    {
+      "name": "NEAR AI gpt-oss-120b (dstack-nvidia-0.5.5)",
+      "scope": "nearai-gpt-oss",
+      "compose_hash": "fb3d47e5ae94ddfd43721002b127ce07d3828b05687e4e5a394a7a827d0ec55c",
+      "os_image_hash": "9b69bb1698bacbb6985409a2c272bcb892e09cdcea63d5399c6768b67d3ff677",
+      "mr_td": "b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217",
+      "rt_mr0": "bc122d143ab768565ba5c3774ff5f03a63c89a4df7c1f5ea38d3bd173409d14f8cbdcc36d40e703cccb996a9d9687590",
+      "rt_mr1": "c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc",
+      "rt_mr2": "564622c7ddc55a53272cc9f0956d29b3f7e0dd18ede432720b71fd89e5b5d76cb0b99be7b7ff2a6a92b89b6b01643135",
+      "rt_mr3": "7fa327ff09d29f0837e9d5cace6b5d5d39f6eb80c111f57cb1b5e126be410e8f737b9e0a56f4e03a7f3fe5f211ee6d64"
+    }
+  ]
+}

@@ -41,6 +41,7 @@ Authenticated:
   POST /account/delete   delete account entry
 """
 
+import html
 import http.cookies
 import os
 import secrets
@@ -72,6 +73,16 @@ STATE_TTL = 600
 
 # Rendered form of billing.PLAN_PRICE_EUR, for every page that quotes a price.
 PRICE = f"&euro;{billing.PLAN_PRICE_EUR}"
+
+
+def _model_list():
+    """The FAQ's answer to "which models", rendered from the catalog rather than
+    written out again. The hardcoded list this replaced named three models the
+    catalog had not carried for months."""
+    return "".join(
+        f"<li><strong>{html.escape(p.label)}</strong> &mdash; {html.escape(p.blurb)}</li>"
+        for p in llm_client.PROVIDERS.values()
+    )
 
 # Every page is server-rendered from our own templates with no third-party
 # assets, so the policy can be as tight as "nothing but us, and no framing".
@@ -362,8 +373,8 @@ A Trusted Execution Environment is a hardware-enforced region of a processor. Co
 there cannot be read or modified by the operating system, the cloud provider, or the server
 operator. At boot it produces an attestation report: a signed statement of which code is
 running, chaining back to the chip manufacturer (Intel, for TDX). Compare that hash against
-our published source and you know what the server is running. If it does not match, the Key
-Management Service withholds the secrets and the server does not start.
+our published source and you know what the server is running. If it doesn't match, the Key
+Management Service withholds the secrets and the server doesn't start.
 </div>
 
 <h2>The masking pipeline</h2>
@@ -581,22 +592,27 @@ def _page_faq():
 <summary>What is a TEE and why does it matter for email privacy?</summary>
 <div class="answer">
 <p>A TEE (Trusted Execution Environment) is a locked compartment inside the processor that the cloud
-provider with our servers, the infererence provider for the AI agent, and Letterlock itself cannot read into.
+provider with our servers, the inference provider for the AI agent, and Letterlock itself cannot read into.
 </details>
 
 <details>
 <summary>Does Letterlock train on my emails?</summary>
 <div class="answer">
-<p>No. This would be impossible, as Letterlock and the model provider provably cannot access your emails.</p>
+<p>No. This would be impossible, as neither Letterlock nor the model provider store or look at your emails.</p>
 </div>
 </details>
 
 <details>
 <summary>Which AI models are available?</summary>
 <div class="answer">
-<p>Letterlock uses open-weight models served in the EU by Tresor.co.
-Current options include Mistral Large 2, DeepSeek R1, and Qwen 2.5 72B. All are
-open-source models with published weights. Inference directly on Deepseek is also available (for users with lower security requirements).</p>
+<p>All open-weight models with published weights. You choose in
+<a href="/settings">Settings</a>:</p>
+<ul>{_model_list()}</ul>
+<p>The confidential options run on NEAR AI, on Intel TDX machines with NVIDIA
+confidential computing. Before each session this server fetches that enclave's
+attestation, checks the hardware signature back to Intel, and compares the
+measurement against a list of images we have reviewed and committed to our
+repository. A machine that does not match is refused rather than used.</p>
 </div>
 </details>
 
@@ -631,15 +647,7 @@ read it and press send.</p>
 <details>
 <summary>Is the code open source?</summary>
 <div class="answer">
-<p>Yes, all of the code to run the service is open source. </p>
-</div>
-</details>
-
-<details>
-<summary>What is the jurisdiction?</summary>
-<div class="answer">
-<p>The code is hosted on Phala Cloud. Inference runs on Tresor.
-All servers operate from within the EU, unless you elect to use Deepseek servers for inference.</p>
+<p>Yes.</p>
 </div>
 </details>
 

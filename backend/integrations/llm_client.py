@@ -4,12 +4,25 @@ All callers route through `make_client(account)` and `complete()`, so which
 provider an account talks to, the model, the thinking toggle, the reasoning
 effort, and the masking boundary all live in exactly one place.
 
-Two providers ship. `deepseek` calls DeepSeek directly and is the default.
-`tresor` calls the same upstream model through Tresor's confidential gateway,
-where inference runs inside a hardware TEE and the request terminates TLS
-inside the attested runtime, so neither Tresor nor the model provider sees
-plaintext. Users pick per account in Settings; masking applies either way,
-because a gateway that is trusted today is still a party we do not control.
+Three providers ship. `deepseek` calls DeepSeek directly and is the default.
+`nearai-glm` and `nearai-gpt-oss` reach NEAR AI's per-model direct completions
+endpoints, each of which is a dstack CVM that publishes a TDX quote; the
+gateway at cloud-api.near.ai is deliberately not used, because a per-model
+endpoint is the only shape that lets a quote say which model it serves.
+
+A confidential provider is verified before it is used, not described as
+verified: `make_client()` will not return a client until
+`inference_attestation.require()` has checked the quote against a committed
+allowlist, and it raises rather than falling back. Users pick per account in
+Settings; masking applies to every provider, because an attested enclave is
+still a party we do not control.
+
+Every call goes through `/v1/chat/completions` and none through `/v1/responses`.
+That is a privacy choice, not a stylistic one: the responses API is stateful and
+persists conversation content server-side, which is the opposite of what an
+account picked a confidential provider for. `complete()` is the only place the
+endpoint is named, and `test_llm_boundary` fails the build if anything reaches
+for `client.responses`.
 """
 
 import json
@@ -18,6 +31,7 @@ import sys
 
 from openai import OpenAI
 
+from backend.integrations import inference_attestation
 from backend.masking import pseudonymizer
 
 
@@ -27,8 +41,12 @@ class Provider:
     rather than silently standing in for another one."""
 
     def __init__(self, name, label, base_url, model, key_env, confidential,
-                 blurb, reasoning_effort="max", thinking=None):
+                 blurb, attestation_url=None, reasoning_effort="max", thinking=None):
         assert name and base_url and model and key_env, "provider is underspecified"
+        assert not (confidential and not attestation_url), (
+            f"provider {name!r} claims to be confidential but names no attestation "
+            f"endpoint; an unverifiable claim is the thing this catalog must not carry"
+        )
         self.name = name
         self.label = label
         self.base_url = base_url
@@ -36,6 +54,7 @@ class Provider:
         self.key_env = key_env
         self.confidential = confidential
         self.blurb = blurb
+        self.attestation_url = attestation_url
         self.reasoning_effort = reasoning_effort
         self.thinking = thinking if thinking is not None else {"type": "enabled"}
 
@@ -44,6 +63,9 @@ class Provider:
 
     def configured(self):
         return bool(self.api_key())
+
+    def attests(self):
+        return bool(self.confidential and self.attestation_url)
 
 
 PROVIDERS = {
@@ -60,15 +82,29 @@ PROVIDERS = {
                    "what remains."),
         ),
         Provider(
-            name="tresor",
-            label="Tresor (confidential)",
-            base_url="https://api.trytresor.com/v1",
-            model="deepseek-v4-pro",
-            key_env="TRESOR_API_KEY",
+            name="nearai-glm",
+            label="GLM 5.2 in an enclave (confidential)",
+            base_url="https://glm-5-2.completions.near.ai/v1",
+            model="z-ai/glm-5.2",
+            key_env="NEARAI_API_KEY",
             confidential=True,
-            blurb=("Same model, reached through a hardware enclave. TLS terminates "
-                   "inside the attested runtime, so neither Tresor nor DeepSeek can "
-                   "read the request. Masking still applies."),
+            attestation_url="https://glm-5-2.completions.near.ai/v1/attestation/report",
+            blurb=("Drafts are read by a model running in a hardware enclave whose "
+                   "measurement this server checks before every session. NEAR AI "
+                   "operates the machine and cannot read what runs inside it. "
+                   "Served as FP8. Masking still applies."),
+        ),
+        Provider(
+            name="nearai-gpt-oss",
+            label="gpt-oss-120b in an enclave (confidential)",
+            base_url="https://gpt-oss-120b.completions.near.ai/v1",
+            model="openai/gpt-oss-120b",
+            key_env="NEARAI_API_KEY",
+            confidential=True,
+            attestation_url="https://gpt-oss-120b.completions.near.ai/v1/attestation/report",
+            blurb=("A smaller open-weight model in the same attested enclave setup, "
+                   "cheaper and quicker than GLM 5.2. Served as FP4, with a 131k "
+                   "context rather than 1M. Masking still applies."),
         ),
     )
 }
@@ -84,7 +120,7 @@ JSON_MAX_TOKENS = 16000
 # result to a third-party observability service, which is a claim the product
 # pages do not make; an API key happening to be present in the environment is
 # not consent to send other people's mail there. It also lands outside whatever
-# enclave the chosen provider runs in, so it defeats `tresor` when enabled.
+# enclave the chosen provider runs in, so it defeats attestation when enabled.
 LANGSMITH_ENABLED = os.environ.get("LANGSMITH_TRACING", "0") == "1"
 
 
@@ -155,8 +191,15 @@ def _traced(client):
 
 def make_client(account=None):
     """Build the client for this account's provider. Pass None only where there
-    is no account in hand (one-off tooling); everything on a mail path has one."""
+    is no account in hand (one-off tooling); everything on a mail path has one.
+
+    A confidential provider is attested here, at the one place a client can be
+    built, so no caller can reach an unverified enclave by taking a different
+    route. A failed check raises: not drafting is the correct outcome, and
+    quietly using a provider the user did not choose is not."""
     provider = resolve(account)
+    if provider.attests():
+        inference_attestation.require(provider)
     client = OpenAI(api_key=provider.api_key(), base_url=provider.base_url)
     client._ls_wrapped = False
     client = _traced(client)
