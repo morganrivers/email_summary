@@ -182,7 +182,10 @@ copy.
   is not: `frontend/session.py` reads `SESSION_SECRET_ENV` from here rather than
   the reverse, so nothing in `backend/` reaches up into `frontend/` to ask. `tee_boot.run_gate()` and
   `deploy/preflight.py` both build on them, so the enclave's fail-closed set and
-  the deploy's skip set cannot drift apart — the old gate listed four names and
+  the deploy's skip set cannot drift apart. `fingerprint()` is the third: how a
+  secret is named in a log, so a startup line can say which value the process
+  captured without printing it, and a `.env` edited under a running service is
+  visible rather than silent — the old gate listed four names and
   so booted happily without `SESSION_SECRET` or the Polar keys. Under
   `TEE_REQUIRED` no file is read at all: secrets are injected post-attestation,
   the compose file mounts no `.env`, and the gate refuses to boot if one exists

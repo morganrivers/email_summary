@@ -82,6 +82,22 @@ def test_scheduled_cancel_stays_active(tmp_path, monkeypatch):
     assert account.get_account("carol@x.com") is not None
 
 
+def test_result_explains_a_cancel_that_grants_access(tmp_path, monkeypatch):
+    # The event name and the outcome disagree here, so the line must say why:
+    # a lapsed account whose new subscription is cancel-at-period-end is still
+    # entitled, and "canceled -> active" alone reads as a bug.
+    monkeypatch.setattr(account, "MANIFEST",
+                        _manifest(tmp_path, [_entry("carol@x.com", status="inactive")]))
+    b = _billing(monkeypatch)
+    res = b.apply_event({"type": "subscription.canceled",
+                         "data": {"status": "active",
+                                  "cancel_at_period_end": True,
+                                  "customer": {"email": "carol@x.com"}}})
+    assert "inactive->active" in res
+    assert "status=active" in res
+    assert "cancel_at_period_end=True" in res
+
+
 def test_resolve_by_stored_customer_id(tmp_path, monkeypatch):
     # No email in the event: resolve via polar_customer_id (no Polar API call).
     monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [

@@ -134,10 +134,16 @@ class PolarBilling:
         )
 
     def log_startup(self, who):
-        tok = self.token
-        masked = f"{tok[:10]}...{tok[-4:]}" if len(tok) > 16 else "****"
+        """The one line that says which Polar this process is talking to and
+        which secrets it captured. Both values are fingerprinted rather than
+        masked: a prefix and four trailing characters identify a token no
+        better than a digest does, and the digest also covers the webhook
+        secret, whose absence from this line is what made a stale ``.env``
+        indistinguishable from a bad signature at the endpoint."""
         log(f"{who} env={'SANDBOX' if self.sandbox else 'PRODUCTION'} "
-            f"base={polar_api.api_base()} org={self.org} token={masked}")
+            f"base={polar_api.api_base()} org={self.org} "
+            f"token={secrets.fingerprint(self.token)} "
+            f"webhook_secret={secrets.fingerprint(webhook_secret())}")
 
     @staticmethod
     def _customer_id(data):
@@ -181,19 +187,31 @@ class PolarBilling:
 
     def apply_event(self, event):
         """Decide active/inactive from one webhook event and flip the account.
-        Returns a human-readable result string (also the webhook log line)."""
+        Returns a human-readable result string (also the webhook log line).
+
+        The result carries *why* the target was chosen, because the event name
+        and the outcome routinely disagree: Polar fires ``subscription.canceled``
+        the moment a cancellation is scheduled, while the subscription stays
+        entitled until the period closes, so that event legitimately reads
+        ``inactive->active``. A log line saying only "canceled -> active" is the
+        kind of thing that gets read as a bug, or worse, trusted as a
+        deactivation that never happened."""
+        assert isinstance(event, dict), "apply_event needs the parsed event"
         etype = event.get("type")
         data = event.get("data") or {}
         if etype == "order.paid":
-            target = "active"
+            target, why = "active", "order.paid"
         elif etype and etype.startswith("subscription."):
-            target = "active" if subscription_entitled(data.get("status")) else "inactive"
+            status = data.get("status")
+            target = "active" if subscription_entitled(status) else "inactive"
+            why = (f"status={status} "
+                   f"cancel_at_period_end={bool(data.get('cancel_at_period_end'))}")
         else:
             return f"ignored type={etype}"
         acct = self.resolve_account(data)
         if acct is None:
-            return f"no local account for event type={etype}"
-        return self._apply(acct, target)
+            return f"no local account for event type={etype} ({why})"
+        return f"{self._apply(acct, target)} ({why})"
 
     # A checkout Polar considers finished. `confirmed` is the moment payment
     # succeeded; `succeeded` is the terminal state once the order is written.

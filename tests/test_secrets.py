@@ -177,3 +177,15 @@ def test_gate_no_ops_outside_a_tee(env_file, monkeypatch):
     env_file.write_text("DEEPSEEK_API_KEY=from-the-volume\n")
 
     assert tee_boot.run_gate() == 0
+
+
+def test_fingerprint_identifies_without_revealing():
+    secret = "polar_whs_a-real-looking-value"
+    fp = secrets.fingerprint(secret)
+
+    assert fp == secrets.fingerprint(secret)
+    assert fp != secrets.fingerprint(secret + "x")
+    assert secret not in fp and secret[:6] not in fp
+    assert secrets.fingerprint("") == "(unset)"
+    assert secrets.fingerprint(None) == "(unset)"
+    assert secrets.fingerprint(secret.encode()) == fp

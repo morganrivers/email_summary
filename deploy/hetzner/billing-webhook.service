@@ -1,5 +1,5 @@
 [Unit]
-Description=Polar billing webhook (Caddy -> 127.0.0.1:8788 -> account plan gating)
+Description=Polar billing webhook (Caddy -> 127.0.0.1:8789 -> account plan gating)
 After=network-online.target
 Wants=network-online.target
 
