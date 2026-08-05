@@ -6,28 +6,45 @@ and a .env that exists at all fails the boot gate), and that the gate's notion
 of "provisioned" covers every secret a service actually needs -- SESSION_SECRET
 and the Polar credentials among them, which the old four-name list omitted.
 
-The Google OAuth client is the exception, and is tested as one: oauth_app.py
-still reads it off the volume, so the gate must not demand the injected form
-yet.
+The Google OAuth client is the widest-blast-radius value of the set and the last
+one that was read off a volume. It is pinned in both directions: injected wins
+everywhere, the file still serves a plain box, and inside a CVM the file is
+refused by the reader and by the gate rather than quietly used.
 
 The gate is exercised against a fake dstack client: attestation itself is Track
 F's business, what is under test is what happens after it passes.
 """
 
+import json
+
 import pytest
 
 from backend import paths
 from backend import secrets
+from backend.integrations.gmail_gcal import oauth_app
 from backend.tee import tee_boot
 
 
 @pytest.fixture
 def env_file(tmp_path, monkeypatch):
-    """A .env in a throwaway app root, with the loader reset to unread."""
+    """A .env in a throwaway app root, with the loader reset to unread.
+
+    The OAuth key file is pointed at the same throwaway root: it is a volume
+    secret like .env now, so a developer's real one must not decide what these
+    tests see."""
     path = tmp_path / ".env"
     monkeypatch.setattr(paths, "ENV_FILE", path)
+    monkeypatch.setenv(oauth_app.KEYS_ENV, str(tmp_path / "gcp-oauth.keys.json"))
     monkeypatch.setattr(secrets, "_loaded", False)
     monkeypatch.setattr(secrets, "_from_file", set())
+    return path
+
+
+def write_keys_file(tmp_path):
+    """The OAuth app as a file on the volume, the way a Hetzner box holds it."""
+    path = tmp_path / "gcp-oauth.keys.json"
+    path.write_text(json.dumps(
+        {"web": {"client_id": "file-id", "client_secret": "file-secret"}}))
     return path
 
 
@@ -78,6 +95,8 @@ def _provision(monkeypatch):
     monkeypatch.setenv("POLAR_API_TOKEN", "t")
     monkeypatch.setenv("POLAR_ORGANIZATION_ID", "o")
     monkeypatch.setenv("POLAR_WEBHOOK_SECRET", "w")
+    monkeypatch.setenv(secrets.GOOGLE_CLIENT_ID_ENV, "id")
+    monkeypatch.setenv(secrets.GOOGLE_CLIENT_SECRET_ENV, "sec")
 
 
 def test_fully_provisioned_box_has_no_gaps(env_file, monkeypatch):
@@ -91,6 +110,7 @@ def test_fully_provisioned_box_has_no_gaps(env_file, monkeypatch):
     "POLAR_WEBHOOK_SECRET",
     "DEEPSEEK_API_KEY",
     "TELEGRAM_CHAT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
 ])
 def test_each_required_secret_is_actually_required(env_file, monkeypatch, name):
     _provision(monkeypatch)
@@ -101,23 +121,59 @@ def test_each_required_secret_is_actually_required(env_file, monkeypatch, name):
     assert any(name in reason for reason in gaps), gaps
 
 
-def test_google_oauth_pair_is_read_but_not_yet_gated(env_file, monkeypatch):
-    """oauth_app.py still reads the client secret off the volume, so requiring
-    the injected pair would refuse boot over a value nothing consults. The
-    accessor and the check exist for onboarding-exchange-4 to switch on; what
-    is pinned here is that the gate does not demand them before then."""
-    _provision(monkeypatch)
+def test_the_injected_oauth_pair_beats_the_file_on_the_volume(env_file, tmp_path,
+                                                             monkeypatch):
+    """A stale key file must not shadow what the KMS released; the file is the
+    fallback, never the winner."""
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    write_keys_file(tmp_path)
+    monkeypatch.setenv(secrets.GOOGLE_CLIENT_ID_ENV, "injected-id")
+    monkeypatch.setenv(secrets.GOOGLE_CLIENT_SECRET_ENV, "injected-secret")
+
+    assert oauth_app.load_keys() == ("injected-id", "injected-secret")
+
+
+def test_the_key_file_still_serves_a_plain_box(env_file, tmp_path, monkeypatch):
+    """Hetzner has no KMS to inject from. Removing the fallback would take
+    sign-in down on the box that runs today."""
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
     monkeypatch.delenv(secrets.GOOGLE_CLIENT_ID_ENV, raising=False)
     monkeypatch.delenv(secrets.GOOGLE_CLIENT_SECRET_ENV, raising=False)
+    write_keys_file(tmp_path)
+
+    assert oauth_app.load_keys() == ("file-id", "file-secret")
+    assert secrets.google_oauth_configured() is None
+
+
+def test_half_an_injected_pair_is_not_a_pair(env_file, tmp_path, monkeypatch):
+    """A stray client_id with no secret must fall through to the file rather
+    than send a half-configured app to Google."""
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    monkeypatch.setenv(secrets.GOOGLE_CLIENT_ID_ENV, "injected-id")
+    monkeypatch.delenv(secrets.GOOGLE_CLIENT_SECRET_ENV, raising=False)
+    write_keys_file(tmp_path)
 
     assert secrets.google_oauth_client() is None
-    assert secrets.GOOGLE_CLIENT_SECRET_ENV in secrets.google_oauth_configured()
-    assert secrets.missing() == []
+    assert oauth_app.load_keys() == ("file-id", "file-secret")
 
-    monkeypatch.setenv(secrets.GOOGLE_CLIENT_ID_ENV, "id")
-    monkeypatch.setenv(secrets.GOOGLE_CLIENT_SECRET_ENV, "sec")
-    assert secrets.google_oauth_client() == ("id", "sec")
-    assert secrets.google_oauth_configured() is None
+
+def test_a_tee_refuses_the_key_file_and_names_what_to_inject(env_file, tmp_path,
+                                                            monkeypatch):
+    """The client secret is the widest-blast-radius value here. Inside the
+    enclave a file copy is one the KMS does not gate, so the reader refuses it
+    outright instead of preferring the injected pair and quietly falling back."""
+    monkeypatch.setenv("TEE_REQUIRED", "1")
+    monkeypatch.delenv(secrets.GOOGLE_CLIENT_ID_ENV, raising=False)
+    monkeypatch.delenv(secrets.GOOGLE_CLIENT_SECRET_ENV, raising=False)
+    write_keys_file(tmp_path)
+
+    with pytest.raises(AssertionError) as err:
+        oauth_app.load_keys()
+    assert secrets.GOOGLE_CLIENT_SECRET_ENV in str(err.value)
+    assert "file-secret" not in str(err.value), "the refusal quoted the secret"
+
+    reason = secrets.google_oauth_configured()
+    assert reason and secrets.GOOGLE_CLIENT_ID_ENV in reason
 
 
 class FakeDstack:
@@ -169,6 +225,28 @@ def test_gate_fails_closed_when_a_dotenv_file_exists(attested, env_file, monkeyp
 
     assert tee_boot.run_gate() == 1
     assert "FAIL-CLOSED" in capsys.readouterr().err
+
+
+def test_gate_fails_closed_when_the_oauth_key_file_exists(attested, env_file,
+                                                          tmp_path, monkeypatch, capsys):
+    """Re-adding the /app/.gmail-mcp mount must stop the enclave booting rather
+    than silently putting the client secret back outside the KMS. The injected
+    pair is present here, so the only thing being refused is the file."""
+    _provision(monkeypatch)
+    keys = write_keys_file(tmp_path)
+
+    assert tee_boot.run_gate() == 1
+    assert str(keys) in capsys.readouterr().err
+
+
+def test_gate_fails_closed_without_the_oauth_client(attested, env_file, monkeypatch, capsys):
+    """Nothing on the volume to fall back to, and nothing injected: the enclave
+    would boot into a sign-in surface that cannot talk to Google."""
+    _provision(monkeypatch)
+    monkeypatch.delenv(secrets.GOOGLE_CLIENT_SECRET_ENV, raising=False)
+
+    assert tee_boot.run_gate() == 1
+    assert secrets.GOOGLE_CLIENT_SECRET_ENV in capsys.readouterr().err
 
 
 def test_gate_no_ops_outside_a_tee(env_file, monkeypatch):

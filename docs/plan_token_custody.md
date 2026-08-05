@@ -12,8 +12,11 @@ worktrees would otherwise collide.
 Status, per track:
 
 - Track I (§4, split custody in the enclave) — **[BUILT, phase 1, merged]**.
-  `feat/enclave-custody-2` absorbed `onboarding-exchange-4` as well: I5 and I6
-  are in it. I6 is written but not executed; the wipe happens at Phase 5.
+  `feat/enclave-custody-2` absorbed most of `onboarding-exchange-4` as well: I5
+  and I6 are in it. I6 is written but not executed; the wipe happens at Phase 5.
+  What was left for `onboarding-exchange-4` is the §8 item below, which is now
+  built: the Google OAuth client is injected, and the volume file is the box's
+  fallback rather than the enclave's.
 - Track J (§5, the co-signer service) — **[BUILT, phase 1, merged]**
   `cosigner/`, `deploy/hetzner/cosigner.service`, `tests/test_cosigner.py`.
   Runs with attestation stubbed (`mode: dev-insecure` in
@@ -21,10 +24,10 @@ Status, per track:
   `cosigner/attest.py` refuses the stub once the allowlist names a measurement
   or `TEE_REQUIRED` is set.
 - Track K (§6, Node removal) — **[BUILT, merged]**.
-- §8 (Barrier A gaps) — **[BUILT, merged]** for four of the five items: the
-  `.env` mount, the boot gate's secret list, the eight `load_dotenv` call sites
-  and the duplicate dependency manifest. The `gcp-oauth.keys.json` injection
-  belongs to `onboarding-exchange-4`; §8 says what is already wired for it.
+- §8 (Barrier A gaps) — **[BUILT]**, all five items. Four came with
+  `secrets-gate-3`: the `.env` mount, the boot gate's secret list, the eight
+  `load_dotenv` call sites and the duplicate dependency manifest. The
+  `gcp-oauth.keys.json` injection is `onboarding-exchange-4`, below.
 - §10 (front-end copy) — **[TODO]**, and each edit needs its own confirmation.
   `/about` at `web_server.py:383-386` is factually wrong as of Track I and
   says so about an arrangement that is now stronger than the claim.
@@ -760,11 +763,19 @@ same file as the code exchange it belongs to.
   `secrets.load()`: one read of the file, injected environment always wins over
   it, `file_backed()` names anything that came off disk, and under
   `TEE_REQUIRED` the file is never opened.
-- **`onboarding-exchange-4`** — `gcp-oauth.keys.json` holds the Google
+- **`onboarding-exchange-4`, done** — ~~`gcp-oauth.keys.json` holds the Google
   `client_secret`, read off the volume rather than from injected env. It is the
   single value with the widest blast radius and the one **not** going through
-  the KMS path. Every reader is now behind `oauth_app.py`, so this is a
-  one-file change.
+  the KMS path.~~ `load_keys()` takes the injected
+  `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` pair first, refuses
+  the file outright under `TEE_REQUIRED`, and falls back to it otherwise, which
+  is what keeps the Hetzner box working with no KMS to inject from.
+  `google_oauth_configured()` is now in `REQUIRED` and answers by calling
+  `load_keys()`, so the gate approves exactly the sources the reader accepts.
+  `secrets.volume_secrets()` replaced `env_file_present()` as the one list of
+  files whose presence fails the gate, and the `/app/.gmail-mcp` mount is gone
+  from the compose: re-adding it stops the enclave booting rather than quietly
+  putting the client secret back outside the KMS.
 
   **Correction to the original instruction, which said to move it to the
   co-signer.** That cannot work. Google's token endpoint requires
@@ -780,15 +791,12 @@ same file as the code exchange it belongs to.
   split. There is no marginal loss from the enclave holding it, since an
   attacker with enclave memory already has refresh tokens.
 
-  Half of the wiring is already in place, so this is smaller than it reads.
-  `backend/secrets.py` names the pair (`GOOGLE_CLIENT_ID_ENV`,
-  `GOOGLE_CLIENT_SECRET_ENV`), exposes `google_oauth_client()` and has
-  `google_oauth_configured()` written and tested. It is deliberately **not** in
-  `REQUIRED`: while `oauth_app.load_keys()` still reads the file, requiring the
-  injected form would refuse boot over a value nothing consults. Make
-  `load_keys()` prefer the injected pair and refuse the file under
-  `TEE_REQUIRED`, then add `google_oauth_configured` to `REQUIRED` in the same
-  commit.
+  The fallback is the part to be careful with. "Prefer injected, else read the
+  file" is a decision that has to exist in exactly one place, because a second
+  copy of it is a gate that passes on a source the reader refuses — a boot that
+  succeeds and a sign-in that 500s. `secrets.google_oauth_configured()`
+  therefore calls `load_keys()` rather than checking the env pair itself, the
+  same way `polar_api_configured()` calls `PolarBilling()`.
 - **`secrets-gate-3`, done** — ~~`deploy/phala/pyproject.toml` is a second
   dependency list and has already drifted from `requirements.txt`.~~
   `requirements.txt` is now the source and the pyproject dependency array is

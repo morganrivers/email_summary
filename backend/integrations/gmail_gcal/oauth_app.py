@@ -1,15 +1,22 @@
 """The Google OAuth application itself: keys, scopes, endpoints.
 
-One OAuth app serves every user, so its client_secret lives in exactly one file
-and is read in exactly one place. It used to be copied into each account's creds
-directory, which turned a single leaked user directory into a leak of the whole
-app.
+One OAuth app serves every user, so its client_secret is read in exactly one
+place. It used to be copied into each account's creds directory, which turned a
+single leaked user directory into a leak of the whole app.
 
-This is the widest-blast-radius value the deployment holds and the one secret
-still read off a volume rather than released post-attestation
-(docs/plan_token_custody.md §8). Moving it to the co-signer, which already does
-the token exchange's crypto, is the fix; keeping every reader behind this
-module is what makes that a one-file change.
+This is the widest-blast-radius value the deployment holds, and it arrives as
+injected environment first (docs/plan_token_custody.md §8). Inside the enclave
+that is the only route: the volume copy is a file the KMS does not gate and the
+measurement does not cover, so ``load_keys()`` refuses it under ``TEE_REQUIRED``
+and ``tee_boot.run_gate()`` will not boot with one present. On a plain box the
+file is still the source, which is why the fallback exists at all.
+
+It deliberately did *not* move to the co-signer. Google's token endpoint wants
+``client_secret`` and ``refresh_token`` in the same POST and the enclave is what
+makes that POST, so a co-signer holding this either performs the exchange and
+sees a refresh token -- breaking the invariant the whole split rests on -- or
+hands the secret straight back. There is no marginal loss from the enclave
+holding it: an attacker with enclave memory already has refresh tokens.
 """
 
 from __future__ import annotations
@@ -18,7 +25,7 @@ import json
 import os
 from pathlib import Path
 
-from backend import paths, site
+from backend import paths, secrets, site
 
 KEYS_ENV = "GMAIL_OAUTH_KEYS"
 DEFAULT_KEYS_PATH = paths.REPO_ROOT / ".gmail-mcp" / "gcp-oauth.keys.json"
@@ -46,12 +53,26 @@ def keys_path():
 
 
 def load_keys():
-    """The app's client_id and client_secret. Raises rather than returning a
-    half-configured pair: every caller is about to talk to Google with it."""
+    """The app's client_id and client_secret, injected pair first.
+
+    Raises rather than returning a half-configured pair: every caller is about
+    to talk to Google with it. The injected pair wins wherever both exist, so a
+    stale file cannot shadow what the KMS released, and inside a CVM the file is
+    not a fallback at all."""
+    injected = secrets.google_oauth_client()
+    if injected:
+        return injected
     path = keys_path()
+    assert not secrets.tee_required(), (
+        f"{secrets.GOOGLE_CLIENT_ID_ENV} and {secrets.GOOGLE_CLIENT_SECRET_ENV} "
+        "must be injected as encrypted environment inside the enclave; the "
+        f"volume copy at {path} is not released post-attestation and is "
+        "refused here"
+    )
     assert path.exists(), (
-        f"no Google OAuth app keys at {path}; set {KEYS_ENV} or place "
-        "gcp-oauth.keys.json there"
+        f"no Google OAuth app: set {secrets.GOOGLE_CLIENT_ID_ENV} and "
+        f"{secrets.GOOGLE_CLIENT_SECRET_ENV}, or place gcp-oauth.keys.json at "
+        f"{path} (overridable with {KEYS_ENV})"
     )
     blob = json.loads(path.read_text())
     keys = blob.get("web") or blob.get("installed") or {}

@@ -30,7 +30,6 @@ import os
 import sys
 from pathlib import Path
 
-from backend import paths
 from backend import secrets
 from backend.tee.dstack_client import DstackClient, DstackError, DstackUnavailable
 
@@ -86,13 +85,15 @@ def run_gate() -> int:
             print("[tee_boot] no dstack socket and TEE_REQUIRED unset (dev/non-TEE host).")
         return 0
 
-    if secrets.env_file_present():
-        print(
-            f"[tee_boot] FAIL-CLOSED: {paths.ENV_FILE} exists inside the CVM. "
-            "Secrets are injected post-attestation as encrypted environment; a "
-            "file on the volume is a copy the KMS does not gate.",
-            file=sys.stderr,
-        )
+    on_volume = secrets.volume_secrets()
+    if on_volume:
+        for path in on_volume:
+            print(
+                f"[tee_boot] FAIL-CLOSED: {path} exists inside the CVM. "
+                "Secrets are injected post-attestation as encrypted environment; "
+                "a file on the volume is a copy the KMS does not gate.",
+                file=sys.stderr,
+            )
         return 1
 
     try:

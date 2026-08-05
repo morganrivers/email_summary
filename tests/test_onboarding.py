@@ -217,6 +217,7 @@ import hashlib
 import json as _json
 from urllib.parse import parse_qs, urlparse
 
+from backend import secrets
 from backend.custody import client as cosigner
 from backend.custody import tokens
 from backend.custody import wrapping
@@ -235,6 +236,8 @@ def consent(tmp_path, monkeypatch):
     keys.write_text(_json.dumps(
         {"web": {"client_id": "cid", "client_secret": "csecret"}}))
     monkeypatch.setenv(oauth_app.KEYS_ENV, str(keys))
+    monkeypatch.delenv(secrets.GOOGLE_CLIENT_ID_ENV, raising=False)
+    monkeypatch.delenv(secrets.GOOGLE_CLIENT_SECRET_ENV, raising=False)
     monkeypatch.setattr(account, "ACCOUNTS_DIR", tmp_path / "database")
     monkeypatch.setattr(account, "MANIFEST", tmp_path / "database" / "accounts.json")
     monkeypatch.setattr(cosigner, "dpop_jwk",
@@ -272,7 +275,7 @@ def test_the_pkce_verifier_is_derived_not_stored(consent):
     assert ob.pkce_verifier("a-different-state") != verifier
 
 
-def _google_says(monkeypatch, payload, status=200):
+def _google_says(monkeypatch, payload, status=200, seen=None):
     class R:
         status_code = status
         headers = {}
@@ -280,7 +283,37 @@ def _google_says(monkeypatch, payload, status=200):
 
         def json(self):
             return payload
-    monkeypatch.setattr(tokens.requests, "post", lambda *a, **k: R())
+
+    def post(*a, **k):
+        if seen is not None:
+            seen.update(k.get("data") or {})
+        return R()
+
+    monkeypatch.setattr(tokens.requests, "post", post)
+
+
+def test_the_consent_runs_on_an_injected_oauth_app_with_no_file_present(consent,
+                                                                       monkeypatch):
+    """Plan §8: the client secret is the widest-blast-radius value the
+    deployment holds and the last one that was read off a volume. Inside the
+    enclave there is no `.gmail-mcp` mount at all, so both halves of the consent
+    -- the auth URL and the code exchange -- have to run on the injected pair."""
+    monkeypatch.setenv(oauth_app.KEYS_ENV, str(consent / "no-such-keys.json"))
+    monkeypatch.setenv(secrets.GOOGLE_CLIENT_ID_ENV, "injected-id")
+    monkeypatch.setenv(secrets.GOOGLE_CLIENT_SECRET_ENV, "injected-secret")
+    posted = {}
+    _google_says(monkeypatch, {
+        "access_token": "ya29.x", "refresh_token": "1//0gRefreshValue",
+        "expires_in": 3600,
+    }, seen=posted)
+    monkeypatch.setattr(gmail_api, "profile_address", lambda token: "inj@example.com")
+
+    params = parse_qs(urlparse(ob.build_auth_url("state-123", REDIRECT)).query)
+    assert params["client_id"] == ["injected-id"]
+
+    ob.exchange_code("the-code", REDIRECT, "state-123")
+    assert posted["client_id"] == "injected-id"
+    assert posted["client_secret"] == "injected-secret"
 
 
 def test_provision_takes_custody_and_registers_the_account(consent, monkeypatch):

@@ -48,6 +48,21 @@ def _manifest_present():
     return None
 
 
+def _mail_configured():
+    """What a unit that touches a mailbox needs before it is worth starting: the
+    account store, and the shared Google OAuth app every token refresh is signed
+    with. The enclave gates on the same pair through ``secrets.REQUIRED``; this
+    is the Hetzner half of it, so the box does not check a strict subset of what
+    the CVM fails closed on."""
+    return _manifest_present() or secrets.google_oauth_configured()
+
+
+def _web_configured():
+    """The web UI signs users in with Google, so a missing OAuth app takes it
+    down as surely as a missing cookie key does."""
+    return secrets.session_configured() or secrets.google_oauth_configured()
+
+
 def _definitely_absent(path):
     """Is this file certainly not there? A credential store is 0700 root-only,
     so an unprivileged run of this script cannot see inside it. Reporting
@@ -88,12 +103,12 @@ CONFIG_CHECKS = {
     "cosigner.server": _cosigner_configured,
     "backend.billing.billing_webhook": secrets.polar_configured,
     "backend.billing.billing_poller": secrets.polar_api_configured,
-    "frontend.web_server": secrets.session_configured,
-    "backend.daemons.daemon_loop": _manifest_present,
-    "backend.daemons.gmail_hook_server": _manifest_present,
-    "backend.onboarding.watch_renew": _manifest_present,
+    "frontend.web_server": _web_configured,
+    "backend.daemons.daemon_loop": _mail_configured,
+    "backend.daemons.gmail_hook_server": _mail_configured,
+    "backend.onboarding.watch_renew": _mail_configured,
     # The summary sweeps every account, so it needs the store like the rest.
-    "backend.drafting.email_summary": _manifest_present,
+    "backend.drafting.email_summary": _mail_configured,
 }
 
 

@@ -121,8 +121,11 @@ is what protects it from `--delete-after`.
 - `.gmail-mcp/` — `gcp-oauth.keys.json`, the OAuth *app*'s client_id and
   client_secret. One app serves every user; no per-user token lives here any
   more (see `database/`). Read only through
-  `backend/integrations/gmail_gcal/oauth_app.py`, and still the one secret read
-  off a volume rather than injected (see §8 of `docs/plan_token_custody.md`).
+  `backend/integrations/gmail_gcal/oauth_app.py`, which takes the injected
+  `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` pair first and refuses
+  this file entirely under `TEE_REQUIRED`. It is the box's fallback, not the
+  enclave's: the CVM mounts no such directory and the boot gate will not start
+  with one present.
 - `state/` — daemon runtime scratch: `state.json`, `wake.fifo`,
   `wake_queue.jsonl`, `wake_queue.lock`, `restart.flag`. Created on first write
   by `paths.ensure_run_dir()`.
@@ -198,10 +201,13 @@ copy.
   the deploy's skip set cannot drift apart — the old gate listed four names and
   so booted happily without `SESSION_SECRET` or the Polar keys. Under
   `TEE_REQUIRED` no file is read at all: secrets are injected post-attestation,
-  the compose file mounts no `.env`, and the gate refuses to boot if one exists
-  on the volume. `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` are
-  named here but deliberately not yet in `REQUIRED`, because `oauth_app.py`
-  still reads that pair off the volume; `onboarding-exchange-4` flips both.
+  the compose file mounts no `.env` and no `.gmail-mcp`, and `volume_secrets()`
+  is the one list of files whose mere presence fails the boot gate — it names
+  `.env` and `oauth_app.keys_path()`, so the gate refuses exactly what the
+  loaders refuse. `google_oauth_configured()` is in `REQUIRED` and answers by
+  calling `oauth_app.load_keys()`, which is what decides between the injected
+  pair and the volume file, so the gate cannot approve a source the reader
+  rejects.
 - `backend/site.py` — public hostnames (`APP_HOST` = the product,
   `API_HOST` = the Pub/Sub push + Polar webhook box), loopback ports, and every
   externally visible URL built from them (OAuth callbacks, Polar webhook, the
