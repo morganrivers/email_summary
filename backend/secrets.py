@@ -11,7 +11,7 @@ at-rest leak the custody design removes everywhere else, so under
 ``TEE_REQUIRED`` this module reads no file at all and ``file_backed()`` is
 empty by construction rather than by convention.
 
-Two things live here and nothing else should copy them:
+Three things live here and nothing else should copy them:
 
   * ``load()`` -- the one read of ``.env``, idempotent, skipped under
     ``TEE_REQUIRED``. Injected environment always wins over the file, so a
@@ -20,6 +20,10 @@ Two things live here and nothing else should copy them:
     ``tee_boot.run_gate()`` and ``deploy/preflight.py`` are both built on them,
     so the boot gate and the deploy check cannot disagree about what
     "configured" means.
+  * ``fingerprint()`` -- how a secret is named in a log. Every service captures
+    its secrets once at startup, so "is this process holding what the file now
+    says" is a question only a startup line can answer, and it must be
+    answerable without printing the value.
 
 A check asks the owning module whenever presence is a judgement rather than a
 lookup: ``PolarBilling()`` applies the sandbox/prod suffix switch,
@@ -31,6 +35,7 @@ frontend/ to ask. Those service imports are deferred into the check bodies
 because the services import this one for ``load()``.
 """
 
+import hashlib
 import os
 
 from dotenv import dotenv_values
@@ -110,6 +115,24 @@ def require(name):
     value = get(name)
     assert value, f"{name} must be set"
     return value
+
+
+def fingerprint(value):
+    """A stable, non-reversible label for a secret, safe to log.
+
+    A service captures its secrets at startup and never rereads them, so a
+    ``.env`` edited underneath a running process leaves no trace: the only
+    symptom is whatever the stale value breaks downstream, which is how a
+    rotated Polar webhook secret read as an attacker probing a public endpoint
+    for twenty minutes. Printing this beside the value's name at startup makes
+    "the process is not holding what the file says" answerable without ever
+    putting the secret in a log, and comparable against
+    ``printf %s "$secret" | sha256sum``."""
+    if not value:
+        return "(unset)"
+    raw = value.encode("utf-8") if isinstance(value, str) else value
+    assert isinstance(raw, (bytes, bytearray)), "fingerprint() needs str or bytes"
+    return f"sha256:{hashlib.sha256(raw).hexdigest()[:8]}"
 
 
 def file_backed():
