@@ -1,0 +1,36 @@
+[Unit]
+# Split-custody co-signer: holds the outer wrapping key and the DPoP signing
+# key, and holds no ciphertext at all. Caddy -> 127.0.0.1:8791.
+#
+# Its two keys are sealed to this host's TPM. Provision them once, as root:
+#
+#   head -c 32 /dev/urandom | base64 | \
+#     systemd-creds encrypt --name=cosigner-master - /etc/credstore.encrypted/cosigner-master
+#   openssl ecparam -genkey -name prime256v1 -noout | openssl pkcs8 -topk8 -nocrypt | \
+#     systemd-creds encrypt --name=cosigner-dpop - /etc/credstore.encrypted/cosigner-dpop
+#
+# Rotating the master key makes every token already wrapped under it
+# unreadable, and rotating the DPoP key invalidates every refresh token Google
+# bound to it. Both mean re-onboarding every user.
+#
+# This unit does NOT run as letterlock like the rest. cosigner.service.d/
+# 20-cosigner.conf overrides the user set by the common sandbox drop-in, so the
+# application cannot read these two keys. Read it before changing anything here.
+Description=Letterlock split-custody co-signer (Caddy -> 127.0.0.1:8791)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/letterlock
+ExecStart=/opt/letterlock/venv/bin/python -m cosigner.server
+LoadCredentialEncrypted=cosigner-master:/etc/credstore.encrypted/cosigner-master
+LoadCredentialEncrypted=cosigner-dpop:/etc/credstore.encrypted/cosigner-dpop
+StateDirectory=cosigner
+StateDirectoryMode=0700
+Restart=always
+RestartSec=3
+SyslogIdentifier=cosigner
+
+[Install]
+WantedBy=multi-user.target

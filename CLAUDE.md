@@ -55,6 +55,26 @@ file is the only copy of the sandbox settings (`User=`, `ProtectSystem=strict`,
 deploy fans one file out to per-unit drop-ins rather than repeating the block in
 seven `.service` files.
 
+A unit that must differ from that common sandbox says so in
+`deploy/hetzner/<unit>.d/*.conf`, numbered above `10-hardening.conf` so it wins.
+One unit's exception belongs beside that unit rather than in a loosened
+`hardening.conf` every other unit then inherits. The deploy installs those
+drop-ins and deletes any the repo no longer has, so a setting that still runs is
+always a setting you can read in git.
+
+`cosigner.service.d/20-cosigner.conf` is the only one so far, and it exists
+because the co-signer must not share the application's account: it holds the
+outer wrapping key and the DPoP key, and `User=letterlock` would put them inside
+the blast radius of the web UI and the mail daemon. It runs as `cosigner`,
+reaches the source read-only through `SupplementaryGroups=letterlock` (the app
+directory is 750; `database/`, `state/`, `config/` and `.env` are 700/600, so
+group membership does not reach user data), and gets `ReadWritePaths=` reset to
+empty since everything it writes lives in `StateDirectory=cosigner`. The deploy
+derives the accounts it must create by reading `User=` back out of the drop-ins,
+so the name is defined in one file. Until the enclave moves to Phala this is
+separation of privilege on one box, not separation of operator, and no product
+copy may say otherwise.
+
 `SERVICES` / `TIMERS` override the derived lists when you want to touch a subset:
 
 ```bash
@@ -124,6 +144,16 @@ is what protects it from `--delete-after`.
   removed; its OAuth sequence now lives in `backend/onboarding/provisioning.py`.
   Telegram is linked by a round trip through the bot (`/settings/telegram/*`),
   never by typing a chat id.
+- `cosigner/server.py` — the split-custody co-signer run by the `cosigner`
+  service, behind Caddy (`127.0.0.1:8791` on `COSIGNER_HOST`, the one site block
+  that demands a client certificate). Holds the outer wrapping key and the DPoP
+  signing key and no ciphertext at all, so compromising it alone reads no mail;
+  the enclave holds the ciphertext and cannot strip the outer layer alone. It is
+  a hard dependency by design: if it is down, no mail is processed for anyone,
+  and there is deliberately no bypass. Its two keys come from
+  `LoadCredentialEncrypted=` (sealed to the host TPM) and must be provisioned by
+  hand once — see the header of `deploy/hetzner/cosigner.service`. Design and
+  sequencing: `docs/plan_token_custody.md`.
 
 Code changes take effect when the systemd services restart, which `deploy/deploy.sh`
 does via `systemctl restart`. The daemon also honors `restart.flag` (it exits
@@ -141,7 +171,21 @@ copy.
   Pub/Sub `aud`). Overridable from `.env` via `LETTERLOCK_HOST`,
   `LETTERLOCK_API_HOST`, `LETTERLOCK_ALIAS_HOSTS`.
   `deploy/render_caddyfile.py` renders the Caddy site blocks from it, so the
-  proxy and the app cannot disagree about a host or a port.
+  proxy and the app cannot disagree about a host or a port. `COSIGNER_PORT` is
+  the exception it re-exports rather than defines: it belongs to
+  `cosigner/protocol.py`, next to the server that binds it.
+- `cosigner/` — the co-signer, which imports nothing from `backend/` except the
+  single Telegram seam in `alerts.py`, so it can be moved to its own box under
+  its own operator. The dependency points the other way: `backend/site.py` and
+  the enclave's custody client import `cosigner.protocol`, the wire contract.
+  `keys.py` is the only place the outer key is derived or the DPoP proof signed;
+  `policy.py` is the only place a request is decided, and the same call writes
+  its audit row, so the rate limit it enforced and the log cannot disagree;
+  `attest.py` holds this box's own measurement allowlist, which is the point of
+  the second machine — the enclave cannot edit it, so a new `compose_hash` must
+  be authorized here *and* in the AppAuth contract before deploying, or every
+  unwrap fails. `cosigner/__init__.py` states the four invariants the whole
+  design rests on; read them before refactoring anything in that package.
 - `backend/onboarding/provisioning.py` — the Google consent sequence: auth URL,
   code exchange, per-user creds custody, `register_account`, watch registration,
   checkout redirect. `handle_callback()` is the whole decision path, HTTP-free

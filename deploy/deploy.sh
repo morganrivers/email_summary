@@ -144,18 +144,60 @@ if [ -n "${TIMERS:-}" ]; then
     read -r -a ALL_TIMERS <<< "$TIMERS"
 fi
 
-echo "==> Installing sandbox drop-in for: ${ALL_SERVICES[*]} ${ALL_TIMERS[*]}"
+# Every unit that gets a sandbox: the long-running services, plus the oneshot
+# behind each timer (oneshots have no [Install] and never appear in
+# ALL_SERVICES).
+SANDBOXED=("${ALL_SERVICES[@]}")
+for timer in "${ALL_TIMERS[@]}"; do
+    SANDBOXED+=("${timer%.timer}.service")
+done
+
+echo "==> Installing sandbox drop-in for: ${SANDBOXED[*]}"
 HARDENING="$(cat "$UNIT_DIR/hardening.conf")"
-for unit in "${ALL_SERVICES[@]}"; do
+for unit in "${SANDBOXED[@]}"; do
     remote "mkdir -p $SYSTEMD_DIR/$unit.d && cat > $SYSTEMD_DIR/$unit.d/10-hardening.conf" \
         <<< "$HARDENING"
 done
-# Oneshots are launched by their timers and never appear in ALL_SERVICES, so
-# they are covered explicitly.
-for timer in "${ALL_TIMERS[@]}"; do
-    svc="${timer%.timer}.service"
-    remote "mkdir -p $SYSTEMD_DIR/$svc.d && cat > $SYSTEMD_DIR/$svc.d/10-hardening.conf" \
-        <<< "$HARDENING"
+
+# A unit that needs to differ from the common sandbox says so in
+# deploy/hetzner/<unit>.d/*.conf, numbered above 10-hardening.conf so it wins.
+# One unit's exception belongs beside that unit, not in a weakened hardening.conf
+# that every other unit then inherits.
+#
+# A drop-in may name its own account: the co-signer holds the outer wrapping key
+# and the DPoP key, which the application must never be able to read, so it does
+# not run as the application's user. The account name is defined in the drop-in
+# and nowhere else -- this script reads it back out rather than hardcoding it,
+# so adding a second isolated unit needs no change here.
+mapfile -t EXTRA_USERS < <(cat "$UNIT_DIR"/*.d/*.conf 2>/dev/null \
+    | sed -n 's/^User=[[:space:]]*//p' | sort -u | grep -vx "$SERVICE_USER" || true)
+for account in "${EXTRA_USERS[@]}"; do
+    [ -n "$account" ] || continue
+    echo "==> Ensuring service account: $account"
+    # No home and no shell: it owns its StateDirectory and its credentials, and
+    # reaches the source read-only through SupplementaryGroups=.
+    remote "id -u $account >/dev/null 2>&1 || \
+        useradd --system --no-create-home --shell /usr/sbin/nologin $account"
+done
+
+for unit in "${SANDBOXED[@]}"; do
+    KEEP="10-hardening.conf"
+    for conf in "$UNIT_DIR/$unit.d/"*.conf; do
+        [ -f "$conf" ] || continue
+        echo "==> Installing $(basename "$conf") for $unit"
+        remote "mkdir -p $SYSTEMD_DIR/$unit.d && cat > $SYSTEMD_DIR/$unit.d/$(basename "$conf")" \
+            < "$conf"
+        KEEP="$KEEP $(basename "$conf")"
+    done
+    # The repo is authoritative here as it is for the app directory. A drop-in
+    # the repo no longer has is a setting that still runs and that nobody can
+    # read in git -- for these files that means a unit quietly left on the wrong
+    # user or the wrong sandbox.
+    remote "KEEP=' $KEEP '; cd $SYSTEMD_DIR/$unit.d 2>/dev/null || exit 0; \
+        for f in *.conf; do [ -e \"\$f\" ] || continue; \
+            case \"\$KEEP\" in *\" \$f \"*) ;; \
+                *) rm -f \"\$f\" && echo \"removed stale drop-in $unit.d/\$f\" ;; \
+            esac; done"
 done
 
 echo "==> Reloading systemd"

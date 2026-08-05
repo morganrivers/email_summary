@@ -1,14 +1,31 @@
 # Plan: split-custody OAuth tokens + Node removal (Tracks I, J, K)
 
-Status: **[TODO]** — nothing here is implemented yet.
 Written 2026-08-05. Read this whole file before touching code; the decisions
 section explains why several obvious-looking shortcuts are wrong.
 
 The work is cut into five worktrees — `cosigner-service-1`,
 `enclave-custody-2`, `secrets-gate-3`, `onboarding-exchange-4`,
 `node-removal-5`. Every section below is tagged with the one that owns it.
-§7 has the branch order, the file-ownership table and the two places where
-two worktrees would otherwise collide.
+§7 has the branch order, the file-ownership table and the places where two
+worktrees would otherwise collide.
+
+Status, per track:
+
+- Track I (§4, split custody in the enclave) — **[BUILT on
+  `feat/enclave-custody-2`, not merged]**. That branch absorbed
+  `onboarding-exchange-4` as well: I5 and I6 are in it.
+- Track J (§5, the co-signer service) — **[BUILT, phase 1, merged]**
+  `cosigner/`, `deploy/hetzner/cosigner.service`, `tests/test_cosigner.py`.
+  Runs with attestation stubbed (`mode: dev-insecure` in
+  `cosigner/allowlist.json`); §7 phase 4 is what turns it on, and
+  `cosigner/attest.py` refuses the stub once the allowlist names a measurement
+  or `TEE_REQUIRED` is set.
+- Track K (§6, Node removal) — **[BUILT on `feat/enclave-custody-2`, not
+  merged]**.
+- §8 (Barrier A gaps) — **[BUILT on `feat/secrets-gate-3`, not merged]**.
+- §10 (front-end copy) — **[TODO]**, and each edit needs its own confirmation.
+  `/about` at `web_server.py:383-386` is factually wrong as of Track I and
+  says so about an arrangement that is now stronger than the claim.
 
 ---
 
@@ -127,16 +144,14 @@ guarantee:
 4. **The co-signer persists no ciphertext.** If it ever stores `outer`
    alongside its own key, one compromise gives both halves.
 
-**The two-machine claim is false until Phase 4.** `deploy/hetzner/hardening.conf`
-is fanned out to every unit and sets `User=letterlock`, and a drop-in beats the
-unit file, so as built the co-signer runs on the same box, as the same user, as
-the enclave-side app. One compromise gets both halves. Everything above is
-therefore a description of the Phase 4 end state, not of Phases 1–3, and no
-user-facing copy (§10) may claim it before then. Two ways to close it early, in
-order of preference: give the co-signer its own account with a
-`20-cosigner.conf` drop-in overriding `User=` (drop-ins apply in lexical order,
-so it wins over `10-hardening.conf`), or accept the gap and treat Phases 1–3 as
-a dev arrangement with no security claim attached.
+**The two-machine claim is only half true until Phase 4.** Everything above
+describes the Phase 4 end state. Until the enclave moves to Phala, both halves
+run on one box, so a host compromise gets both regardless of how the processes
+are separated. What *is* true from Phase 1 is separation of privilege: the
+co-signer runs as its own `cosigner` account rather than as `letterlock` (§J9),
+so compromising the web UI or the mail daemon does not hand over the outer
+wrapping key. That is worth having and it is not the claim §1 makes. No
+user-facing copy (§10) may state the two-machine property before Phase 4.
 
 **Where it is not a reduction: availability.** The co-signer is a new hard
 dependency, and by design there is no way around it. Down means no mail
@@ -398,6 +413,15 @@ can be deployed independently later). ~250 lines total.
   for `uid` already exists (idempotency; a second wrap is either a bug or an
   attack).
 - `POST /unwrap-and-sign` `{uid, outer, htm, htu, nonce?}` → `{inner, proof}`.
+- `POST /sign-dpop` `{htm, htu, nonce?, uid?}` → `{proof}`. Not in the original
+  list and not optional: at the authorization-code exchange no uid exists yet,
+  because which mailbox consented is unknown until Google answers, so
+  `/unwrap-and-sign` cannot serve that proof — there is nothing to unwrap. The
+  `DPoP-Nonce` retry needs a second proof over the same request without paying
+  for a second unwrap. The uid is advisory (audit attribution only), which is
+  what forces the separate ceiling in J3.
+- `GET /dpop-jwk` → `{jwk, jkt}`. The public half, so the enclave can send
+  `dpop_jkt` at the code exchange. Asserts `d` is absent before serving.
 - `GET /health`.
 - mTLS required. Client cert verified per §2.
 
@@ -414,6 +438,12 @@ can be deployed independently later). ~250 lines total.
 - Per-user rate limit (default: 60 unwraps/hour — a mailbox wake needs one).
 - Aggregate ceiling across all users per hour. **This is the number that bounds
   a live enclave breach.** Start at ~3× expected peak.
+- Separate ceiling for bare `/sign-dpop`. It carries no uid, so the per-user
+  limit cannot reach it, and without one it is the unmetered path around the
+  metered one: an enclave-side attacker skips `/unwrap-and-sign` entirely, uses
+  a refresh token they already lifted, and asks here for the proof that makes it
+  work. Defaults to the unwrap ceiling, since the legitimate pattern is at most
+  one retry proof per unwrap plus onboarding.
 - Kill switch: a file or env flag that refuses everything.
 - On refusal, alert the operator. A refusal is either a bug or a breach; both
   want a human.
@@ -496,22 +526,49 @@ settled.** The union, with the enclave side's reasoning, is authoritative:
 limit in `policy.py` cannot apply to it. It needs its own aggregate limit and
 its own audit rows, or it becomes the unmetered path around the metered one.
 This is the only place the built system can be made to sign without being
-counted; close it when the endpoint is added.
+counted; **[DONE]** — `/sign-dpop` enforces `COSIGNER_RATE_SIGN_HOUR`, a ceiling
+separate from the unwrap budget so neither can be spent through the other. The
+`uid` on that route is optional and advisory, recorded for audit attribution
+only: metering per user would meter only the callers honest enough to name one.
 
-**Who fixes it: `cosigner-service-1`, entirely.** The rename and the new
-endpoint are `cosigner/server.py`, `policy.py` and `audit.py`, all owned by that
-worktree. `enclave-custody-2` already calls the target contract against a fake
-and needs no code change.
+**Who fixed it: `cosigner-service-1`, entirely.** The rename and the new
+endpoint were `cosigner/server.py`, `policy.py` and `audit.py`, all owned by that
+worktree. `/dpop-key` now 404s, and `dpop_public_jwk()` asserts `d` is absent
+before serving, so a library change cannot publish the signing key.
 
-**Root cause, fix it in the same pass.** Both worktrees wrote a contract:
+**Root cause, still open on the other branch.** Both worktrees wrote a contract:
 `cosigner/protocol.py` on one side, an equivalent inside
-`backend/custody/client.py` on the other. Two definitions is why they diverged,
-and adding an endpoint to one without collapsing them resets the clock. Merge
-`cosigner-service-1` first, then rebase `enclave-custody-2`, delete its copy,
-and import `cosigner.protocol`. That direction is allowed: §5's rule is that the
-co-signer must not import `backend/`, and it is one-directional. Build the fake
-co-signer in `tests/test_custody.py` on the same shared definition, so a future
-contract change breaks the test rather than production.
+`backend/custody/client.py` on the other. Paths and field names were reconciled
+by hand, but the encodings were not, and that is what two definitions costs:
+`protocol.py` spells binary as standard padded base64 and decodes with
+`validate=True`, while `client.py` used base64url with the padding stripped. The
+co-signer therefore rejects every `/wrap` and `/unwrap-and-sign` the enclave
+sends, and per this service's own design that failure looks like a tampering
+alert rather than a bug. `cosigner/protocol.py` is the single definition;
+`backend/custody/client.py` imports `b64`/`unb64` from it and keeps no codec of
+its own. That direction is allowed: §5's rule is that the co-signer must not
+import `backend/`, and it is one-directional. The fake co-signer in
+`tests/test_custody.py` is built on the same import, so a future contract change
+breaks a test rather than production.
+
+### J9. Its own account, not `letterlock`
+
+`hardening.conf` is fanned out to every unit and sets `User=letterlock`; a
+drop-in beats the unit file, so shipping the service without an override would
+put the outer wrapping key and the DPoP key inside the blast radius of the web
+UI and the mail daemon, and the split would be decorative on this box.
+`deploy/hetzner/cosigner.service.d/20-cosigner.conf` overrides `User=`/`Group=`
+to `cosigner`, takes read access to the source through
+`SupplementaryGroups=letterlock` (the app directory is 750; the paths holding
+user data are 700/600, so group membership does not reach them), and resets
+`ReadWritePaths=` to empty because everything it writes is in
+`StateDirectory=cosigner`. `deploy.sh` installs any `<unit>.d/*.conf`, deletes
+drop-ins the repo no longer has, and creates the accounts by reading `User=`
+back out of them, so the account name has one definition.
+
+This is separation of privilege on one machine, not separation of operator.
+Phase 4 is where the second half becomes true, and §10 copy must not claim it
+before then.
 
 ---
 
