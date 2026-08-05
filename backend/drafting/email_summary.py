@@ -3,17 +3,15 @@
 
 Runs once a day from email-summary.timer and sweeps every active account. It
 used to be single-tenant in a way that could not be noticed from the outside:
-the Node fetch inherited the process environment (so it always read whichever
-mailbox GMAIL_MCP_DIR pointed at) and the Telegram send carried no target (so it
-always went to the operator's chat). Every account past the first got no summary
-at all, and the operator got theirs.
+the fetch inherited the process environment (so it always read whichever mailbox
+an environment variable pointed at) and the Telegram send carried no target (so
+it always went to the operator's chat). Every account past the first got no
+summary at all, and the operator got theirs.
 
-Both boundaries are now per account, the same seams the drafting path uses:
-node_env(account.creds_dir) for the mailbox, account.telegram for the delivery.
+Both boundaries are now per account, the same seams the drafting path uses: the
+account itself for the mailbox, account.telegram for the delivery.
 """
 
-import json
-import subprocess
 import datetime
 import sys
 import traceback
@@ -23,12 +21,11 @@ from dotenv import load_dotenv
 from backend import paths
 from backend.accounts import account as account_mod
 from backend.integrations import llm_client
-from backend.integrations.gmail_gcal.node_runner import node_env
+from backend.integrations.gmail_gcal import mailbox
 from backend.drafting.agentic_drafter import untrusted
 from backend.drafting.draft_replies import gmail_thread_link
 from backend.integrations.telegram import send_telegram, notify_error
 
-FETCH_SCRIPT = paths.node_script("fetch_emails.mjs")
 PROMPT_FILE = paths.config_file("prompt_for_email")
 
 load_dotenv(paths.ENV_FILE)
@@ -46,20 +43,10 @@ def log(msg):
     sys.stderr.flush()
 
 
-# ── Gmail (via Node.js helper) ────────────────────────────────────────────────
+# ── Gmail ─────────────────────────────────────────────────────────────────────
 
 def fetch_todays_emails_and_events(account) -> dict:
-    result = subprocess.run(
-        ["node", str(FETCH_SCRIPT)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
-        env=node_env(account.creds_dir),
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"fetch_emails.mjs exited {result.returncode} for {account.id}: "
-            f"{result.stderr.decode(errors='replace').strip()}"
-        )
-    return json.loads(result.stdout)
+    return mailbox.fetch_daily(account)
 
 
 # ── DeepSeek ─────────────────────────────────────────────────────────────────

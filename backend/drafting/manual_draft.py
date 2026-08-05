@@ -14,16 +14,11 @@ mailbox.
 
 import re
 import json
-import subprocess
 import html
 
-from backend import paths
 from backend.drafting import agentic_drafter
 from backend.drafting import draft_replies
-from backend.integrations.gmail_gcal.node_runner import node_env
-
-FIND_THREAD = paths.node_script("find_thread.mjs")
-GET_THREAD = paths.node_script("get_thread.mjs")
+from backend.integrations.gmail_gcal import gmail_api
 
 BOT_TAG = "bot"
 
@@ -90,23 +85,11 @@ def parse_forward(body):
 
 
 def find_thread(account, from_email, subject):
-    result = subprocess.run(
-        ["node", str(FIND_THREAD), "--from", from_email, "--subject", subject or ""],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
-        env=node_env(account.creds_dir),
-    )
-    assert result.returncode == 0, f"find_thread.mjs failed: {result.stderr.decode()}"
-    return json.loads(result.stdout)
+    return gmail_api.find_thread_by_from_subject(account, from_email, subject or "")
 
 
 def get_thread(account, thread_id):
-    result = subprocess.run(
-        ["node", str(GET_THREAD), "--thread-id", thread_id],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
-        env=node_env(account.creds_dir),
-    )
-    assert result.returncode == 0, f"get_thread.mjs failed: {result.stderr.decode()}"
-    return json.loads(result.stdout)
+    return gmail_api.get_thread(account, thread_id)
 
 
 def parse_from_thread(account, forwarded_email):
@@ -185,7 +168,7 @@ def draft_with_context(client, voice, parsed, account, thread_id=None, on_iterat
     )
     return agentic_drafter.draft(client, sys_prompt, user_prompt,
                                  thread_id=thread_id, on_iteration=on_iteration,
-                                 identity=account.identity, creds_dir=account.creds_dir)
+                                 account=account)
 
 
 def render_progress_body(iter_num, msg, tool_history, final):

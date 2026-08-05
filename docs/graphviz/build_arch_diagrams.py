@@ -97,7 +97,7 @@ cur_nodes = [
     {'id': 'router',  'type': 'svc', 'grp': 'host', 'lbl': 'manual_draft / draft_replies\nis_bot_request routing'},
     {'id': 'llm',     'type': 'svc', 'grp': 'host', 'lbl': 'llm_client.complete()\nmask -> call -> restore'},
     {'id': 'mask',    'type': 'svc', 'grp': 'host', 'lbl': 'pseudonymizer.py\nPresidio PII masking (single user)'},
-    {'id': 'draft',   'type': 'svc', 'grp': 'host', 'lbl': 'create_draft.mjs\ndrafts.create / update'},
+    {'id': 'draft',   'type': 'svc', 'grp': 'host', 'lbl': 'gmail_gcal.drafts\ndrafts.create / update'},
     {'id': 'summary', 'type': 'svc', 'grp': 'host', 'lbl': 'email_summary.py\ndaily 05:00 timer'},
 
     {'id': 'state',   'type': 'store', 'lbl': 'state.json\nruntime state'},

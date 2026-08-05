@@ -5,6 +5,12 @@ langsmith==0.10.5
 certifi==2025.4.26
 standardwebhooks==1.0.1
 
+# Gmail and Calendar, replacing the Node bridge. google-api-python-client makes
+# the calls; google-auth holds credentials that carry no refresh token and ask
+# backend.custody.tokens for one through its refresh_handler.
+google-api-python-client==2.184.0
+google-auth==2.41.1
+
 # --- split custody (cosigner/, backend/custody/) ------------------------------
 # cryptography: AES-GCM and HKDF on both sides of the nested wrapping.
 # requests-oauth2client: DPoP proof construction. Neither Google auth library

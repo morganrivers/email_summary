@@ -4,7 +4,10 @@ Boundaries mocked (single choke points):
 - LLM: llm_client.OpenAI -> FakeOpenAI. Its .chat.completions.create records the
   (already-pseudonymized) messages it receives -- this recording IS the payload
   that would leave the box to the LLM / LangSmith -- and returns scripted responses.
-- Node: subprocess.run -> records (script, args, stdin) and returns canned JSON.
+- Google: the operation functions listed in GMAIL_OPS -> record (op, account,
+  arguments) and return canned results. This is the same seam the Node
+  subprocess fake used to stand at; the calls happen in process now, so the fake
+  is applied to the functions rather than to subprocess.run.
 - Telegram: requests.post -> records the message text.
 
 Time is frozen so masked prompts carrying a timestamp stay stable.
@@ -28,7 +31,7 @@ FROZEN_DATE = _dt.date(2026, 7, 21)
 class Recorder:
     def __init__(self):
         self.llm_calls = []
-        self.node_calls = []
+        self.gmail_calls = []
         self.telegram = []
 
 
@@ -82,44 +85,62 @@ class FakeOpenAI:
         self.chat = SimpleNamespace(completions=_Completions(rec, responses))
 
 
-# --- subprocess fake ------------------------------------------------------
+# --- Google fake ----------------------------------------------------------
 
-def _decode_stdin(value):
-    if value is None:
-        return None
-    if isinstance(value, bytes):
-        value = value.decode()
-    try:
-        return json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        return value
+# Every function in the app that reaches Google, named once. A new call into
+# Gmail or Calendar that is not in this list is a call the tests cannot see, so
+# adding one here is part of adding one there.
+GMAIL_OPS = (
+    ("backend.integrations.gmail_gcal.mailbox", "fetch_since_history"),
+    ("backend.integrations.gmail_gcal.mailbox", "fetch_daily"),
+    ("backend.integrations.gmail_gcal.drafts", "submit"),
+    ("backend.integrations.gmail_gcal.gmail_api", "search_messages"),
+    ("backend.integrations.gmail_gcal.gmail_api", "get_thread"),
+    ("backend.integrations.gmail_gcal.gmail_api", "find_thread_by_from_subject"),
+    ("backend.integrations.gmail_gcal.gmail_api", "register_watch"),
+    ("backend.integrations.gmail_gcal.calendar_api", "list_events"),
+    ("backend.integrations.gmail_gcal.calendar_api", "create_event"),
+)
 
 
-def make_fake_run(rec, node_outputs, real_run):
-    def _run(cmd, *args, input=None, stdout=None, stderr=None,
-             capture_output=False, text=False, timeout=None, **kwargs):
-        if not cmd or cmd[0] != "node":
-            return real_run(cmd, *args, input=input, stdout=stdout, stderr=stderr,
-                            capture_output=capture_output, text=text,
-                            timeout=timeout, **kwargs)
-        script = Path(cmd[1]).name
-        rec.node_calls.append({
-            "script": script,
-            "args": list(cmd[2:]),
-            "stdin": _decode_stdin(input),
-        })
-        out = node_outputs.get(script)
-        if callable(out):
-            out = out(list(cmd[2:]), _decode_stdin(input))
-        assert out is not None, f"no node_output configured for {script}"
-        payload = json.dumps(out)
-        want_text = bool(capture_output or text)
-        return SimpleNamespace(
-            returncode=0,
-            stdout=payload if want_text else payload.encode(),
-            stderr="" if want_text else b"",
-        )
-    return _run
+def _record_call(op, args, kwargs):
+    """One Google call, in a form a golden file can hold. The account is
+    recorded by id: which mailbox a call went to is exactly what the
+    multi-tenant bugs were about, and an object repr would not survive a
+    rerun."""
+    call = {"op": op}
+    if args and hasattr(args[0], "id"):
+        call["account"] = args[0].id
+        args = args[1:]
+    if args:
+        call["args"] = list(args)
+    # A default-valued keyword (draft_id=None on a first draft) is the absence
+    # of a choice, not a choice; recording it would make every golden carry the
+    # signature rather than the call.
+    named = {k: v for k, v in kwargs.items() if v is not None}
+    if named:
+        call["kwargs"] = named
+    return call
+
+
+def install_gmail_fakes(monkeypatch, rec, outputs):
+    """Patch every Google boundary. `outputs` maps an op name to its result, or
+    to a callable taking the recorded call."""
+    import importlib
+
+    for module_name, attr in GMAIL_OPS:
+        module = importlib.import_module(module_name)
+
+        def fake(*args, _op=attr, **kwargs):
+            call = _record_call(_op, args, kwargs)
+            rec.gmail_calls.append(call)
+            out = outputs.get(_op)
+            if callable(out):
+                out = out(call)
+            assert out is not None, f"no gmail output configured for {_op}"
+            return out
+
+        monkeypatch.setattr(module, attr, fake)
 
 
 # --- telegram fake --------------------------------------------------------

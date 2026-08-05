@@ -37,21 +37,23 @@
       ]
     }
   ],
-  "node_calls": [
+  "gmail_calls": [
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "alice@contoso.com",
-        "subject": "Re: Lunch next week?",
-        "body": "Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\nMorgan",
-        "threadId": "t1",
-        "inReplyTo": "<msg-e1@mail>",
-        "references": "<msg-e1@mail>",
-        "originalFrom": "Alice Adams <alice@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
-        "originalBody": "Hi Morgan, want to grab lunch next week? Best, Alice Adams"
-      }
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "alice@contoso.com",
+          "subject": "Re: Lunch next week?",
+          "body": "Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\nMorgan",
+          "threadId": "t1",
+          "inReplyTo": "<msg-e1@mail>",
+          "references": "<msg-e1@mail>",
+          "originalFrom": "Alice Adams <alice@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
+          "originalBody": "Hi Morgan, want to grab lunch next week? Best, Alice Adams"
+        }
+      ]
     }
   ],
   "telegram": [

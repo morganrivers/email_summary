@@ -12,8 +12,7 @@ RestartSec=5
 # No EnvironmentFile: the app reads .env itself through load_dotenv, and
 # systemd's parser is stricter than python-dotenv's (no `export`, different
 # quoting), so a single line it disliked took this unit down while every other
-# service read the same file happily. PATH matches the other units because the
-# OAuth flow shells out to node.
+# service read the same file happily. PATH matches the other units.
 Environment=PATH=/opt/letterlock/venv/bin:/usr/local/bin:/usr/bin:/bin
 SyslogIdentifier=letterlock-web
 StandardOutput=journal

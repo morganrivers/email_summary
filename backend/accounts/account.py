@@ -1,8 +1,9 @@
 """Per-account context threaded through every processing path.
 
 An Account bundles everything that varies per user: the masking identity, the
-state cursor, the notification target, and the Gmail creds directory. A shared
-process holds one Account per user without any ambient single-tenant globals.
+state cursor, the notification target, and the custody record its Gmail access
+is derived from. A shared process holds one Account per user without any ambient
+single-tenant globals.
 
 load_accounts() reads the multi-tenant store (database/accounts.json), one
 Account per registered user. The manifest is required: the box owner is a normal
@@ -15,7 +16,7 @@ Store schema (database/accounts.json), one object per user:
       "identity": {"first": "...", "last": "...",
                    "first_aliases": [...], "emails": [...],
                    "phones": [...], "contacts": [...]},
-      "creds_dir": "database/user@example.com/.gmail-mcp",
+      "token_file": "database/user@example.com/token.bin",
       "state_file": "database/user@example.com/state.json",
       "telegram": {"chat_id": "...", "token": "<optional; shared bot otherwise>"},
       "timezone": "Europe/Berlin",
@@ -31,10 +32,12 @@ set_telegram (notification target), set_settings (user preferences), set_voice
 (voice profile pointer), delete_account (remove). Nothing outside this module
 edits the manifest, so the sealed-store swap has one seam.
 
-Relative creds_dir/state_file paths resolve against the repo root. The manifest
-holds per-user PII and tokens, so it is git-ignored, written 0600 inside a 0700
-directory, and lives only on the host (a sealed store subclasses this later for
-the TEE lift).
+Relative token_file/state_file paths resolve against the repo root. The manifest
+holds per-user PII, so it is git-ignored, written 0600 inside a 0700 directory,
+and lives only on the host (a sealed store subclasses this later for the TEE
+lift). It no longer holds anything that can reach a mailbox: the token itself is
+a nested-wrapped record (backend.custody.tokens) that this box cannot open on
+its own.
 """
 
 import json
@@ -64,7 +67,7 @@ class AccountLimitReached(Exception):
 
 
 class Account:
-    def __init__(self, id, identity, state, telegram=None, creds_dir=None,
+    def __init__(self, id, identity, state, telegram=None, token_file=None,
                  plan_status="active", polar_customer_id=None,
                  timezone=DEFAULT_TIMEZONE, auto_schedule=False, voice_file=None,
                  inference_provider=None, pii_analyzer=True):
@@ -79,7 +82,10 @@ class Account:
         # than redirected: the env fallback that used to live here delivered
         # every new signup's mail metadata to the box owner's Telegram.
         self.telegram = telegram
-        self.creds_dir = creds_dir
+        # Where this account's wrapped refresh token sits. Not a credential:
+        # opening it takes the enclave's KMS key and a co-signer round trip.
+        # None until the user has consented.
+        self.token_file = token_file
         self.plan_status = plan_status
         self.polar_customer_id = polar_customer_id
         self.timezone = timezone or DEFAULT_TIMEZONE
@@ -116,8 +122,9 @@ def _resolve(path):
 
 
 def secure_dir(path):
-    """Create a directory only its owner can read. It holds Gmail refresh
-    tokens; the default 0755 makes every local account able to read them."""
+    """Create a directory only its owner can read. It holds each account's
+    identity and its wrapped token; the default 0755 makes every local account
+    able to read them."""
     path.mkdir(parents=True, exist_ok=True)
     path.chmod(0o700)
     return path
@@ -136,7 +143,12 @@ def _write_manifest(data):
 def owner_account():
     """The box owner's account built from module constants and the environment
     rather than the manifest: DEFAULT_IDENTITY, the historical state.json, the
-    env Telegram target, the env Gmail creds.
+    env Telegram target.
+
+    It carries no Gmail custody. The owner gets a token the same way everyone
+    else does, by consenting through /auth/callback; there is no environment
+    variable that points at a mailbox any more, because there is no longer a
+    credentials file for one to point at.
 
     This is NOT a runtime fallback. all_accounts() requires a manifest, so an
     unseeded box refuses to route mail instead of inventing an account whose
@@ -154,7 +166,6 @@ def owner_account():
         identity=pseudonymizer.DEFAULT_IDENTITY,
         state=state.StateStore(state.DEFAULT_STATE_FILE),
         telegram=telegram,
-        creds_dir=os.environ.get("GMAIL_MCP_DIR"),
         timezone=os.environ.get("LETTERLOCK_TIMEZONE", DEFAULT_TIMEZONE),
         auto_schedule=True,
     )
@@ -191,14 +202,14 @@ def _account_from_entry(entry):
         analyzer=pii_analyzer,
     )
     state_file = _resolve(entry.get("state_file") or (ACCOUNTS_DIR / aid / "state.json"))
-    creds_dir = entry.get("creds_dir")
+    token_file = entry.get("token_file")
     voice_file = entry.get("voice_file")
     return Account(
         id=aid,
         identity=identity,
         state=state.StateStore(state_file),
         telegram=_telegram_from_entry(entry),
-        creds_dir=str(_resolve(creds_dir)) if creds_dir else None,
+        token_file=str(_resolve(token_file)) if token_file else None,
         plan_status=entry.get("plan_status", "active"),
         polar_customer_id=entry.get("polar_customer_id"),
         timezone=entry.get("timezone", DEFAULT_TIMEZONE),
@@ -288,7 +299,7 @@ def account_for_customer_id(customer_id):
     return None
 
 
-def register_account(email, first, last, creds_dir, *, first_aliases=(),
+def register_account(email, first, last, *, token_file=None, first_aliases=(),
                      telegram_chat_id=None, telegram_token=None,
                      plan_status="inactive", state_file=None,
                      timezone=None, auto_schedule=False, voice_file=None):
@@ -311,8 +322,8 @@ def register_account(email, first, last, creds_dir, *, first_aliases=(),
     email = (email or "").strip().lower()
     assert email and "@" in email, f"register_account needs a real email, got {email!r}"
     # The email becomes a directory name under the store; a separator in it
-    # would put creds outside their account's home. Google will not issue one,
-    # which is exactly why it must be asserted rather than assumed.
+    # would put an account's files outside its own home. Google will not issue
+    # one, which is exactly why it must be asserted rather than assumed.
     assert not set(email) & {"/", "\\"} and ".." not in email, (
         f"refusing to register an account id with path separators: {email!r}"
     )
@@ -329,12 +340,13 @@ def register_account(email, first, last, creds_dir, *, first_aliases=(),
             "first_aliases": list(first_aliases),
             "emails": [email],
         },
-        "creds_dir": str(creds_dir),
         "telegram": telegram,
         "timezone": timezone or DEFAULT_TIMEZONE,
         "auto_schedule": bool(auto_schedule),
         "plan_status": plan_status,
     }
+    if token_file:
+        entry["token_file"] = str(token_file)
     if voice_file:
         entry["voice_file"] = str(voice_file)
     # Omitted for a fresh signup, which gets database/<id>/state.json. Passed by
@@ -351,7 +363,10 @@ def register_account(email, first, last, creds_dir, *, first_aliases=(),
             entry["telegram"] = {**existing.get("telegram", {}), **telegram}
             entry["timezone"] = existing.get("timezone", entry["timezone"])
             entry["auto_schedule"] = existing.get("auto_schedule", entry["auto_schedule"])
-            for carried in ("polar_customer_id", "voice_file"):
+            # token_file is carried for the seed's sake: seeding the owner after
+            # they have already signed in must not drop the custody record the
+            # sign-in wrote, since nothing outside a consent can recreate it.
+            for carried in ("polar_customer_id", "voice_file", "token_file"):
                 if existing.get(carried) and carried not in entry:
                     entry[carried] = existing[carried]
             if existing.get("state_file") and "state_file" not in entry:
@@ -488,18 +503,18 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
 def _owned_paths(entry):
     """The files an entry owns outright, meaning the ones under its own
     directory in the store (ACCOUNTS_DIR/<id>/) -- where provisioning puts a
-    signup's creds and where an unspecified state file defaults to.
+    signup's wrapped token and where an unspecified state file defaults to.
 
-    Anything outside it is shared: the seeded owner points at the top-level
-    .gmail-mcp and state/, which belong to the box and outlive any one entry, so
-    deleting the owner's account must not wipe the box's Gmail tokens. The same
-    rule covers the voice profile: a generated one lives in the account's own
-    directory and goes, while the operator's copy under config/ is only unlinked
-    from. Keying on the entry's own directory rather than on the store root keeps
-    that true even if the store were ever configured to sit at the app root."""
+    Anything outside it is shared: the seeded owner points at the box's own
+    state/, which outlives any one entry, so deleting the owner's account must
+    not wipe it. The same rule covers the voice profile: a generated one lives
+    in the account's own directory and goes, while the operator's copy under
+    config/ is only unlinked from. Keying on the entry's own directory rather
+    than on the store root keeps that true even if the store were ever
+    configured to sit at the app root."""
     home = ACCOUNTS_DIR / entry["id"]
     owned = []
-    for value in (entry.get("creds_dir"), entry.get("state_file"),
+    for value in (entry.get("token_file"), entry.get("state_file"),
                   entry.get("voice_file")):
         if not value:
             continue
@@ -511,12 +526,12 @@ def _owned_paths(entry):
 
 
 def delete_account(account_id):
-    """Remove an account and the credentials it owns. Sole deleter, mirroring
+    """Remove an account and the files it owns. Sole deleter, mirroring
     register_account as the sole writer.
 
     A user asking to be deleted is asking us to stop holding their Gmail refresh
-    token, so the per-user creds directory goes too -- dropping the manifest row
-    alone would leave a live token on disk with nothing referencing it. Returns
+    token, so the custody record goes too -- dropping the manifest row alone
+    would leave a wrapped token on disk with nothing referencing it. Returns
     True when an entry was removed.
 
     Not revocation: the token stops being ours but stays valid at Google until

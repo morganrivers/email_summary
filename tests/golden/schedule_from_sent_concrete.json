@@ -20,15 +20,15 @@
       ]
     }
   ],
-  "node_calls": [
+  "gmail_calls": [
     {
-      "script": "create_event.mjs",
-      "args": [],
-      "stdin": {
+      "op": "create_event",
+      "account": "default",
+      "kwargs": {
         "summary": "Meeting with Dave",
-        "startIso": "2026-07-21T15:00:00",
-        "endIso": "2026-07-21T16:00:00",
-        "timeZone": "UTC",
+        "start_iso": "2026-07-21T15:00:00",
+        "end_iso": "2026-07-21T16:00:00",
+        "time_zone": "UTC",
         "location": "",
         "description": ""
       }

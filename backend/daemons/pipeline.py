@@ -3,33 +3,17 @@
 Both the always-on daemon (daemon_loop) and the push-triggered entry
 (process_push) call process_account, so the fetch + route + cursor-advance
 logic lives in exactly one place. Each account carries its own state cursor,
-identity, notification target, and Gmail creds; log and notify_err are injected
-so the two entry points keep their own logging and notification behavior.
+identity, notification target, and token custody; log and notify_err are
+injected so the two entry points keep their own logging and notification
+behavior.
 """
 
-import json
-import subprocess
 import traceback
 
-from backend import paths
 from backend.drafting import draft_replies
 from backend.drafting import manual_draft
 from backend.drafting import schedule_from_sent
-from backend.integrations.gmail_gcal.node_runner import node_env
-
-FETCH_SCRIPT = paths.node_script("fetch_emails.mjs")
-
-
-def fetch_since(account, history_id):
-    result = subprocess.run(
-        ["node", str(FETCH_SCRIPT), "--since-history", str(history_id)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
-        env=node_env(account.creds_dir),
-    )
-    assert result.returncode == 0, (
-        f"fetch_emails.mjs exited {result.returncode}: {result.stderr.decode()}"
-    )
-    return json.loads(result.stdout)
+from backend.integrations.gmail_gcal import mailbox
 
 
 def process_account(account, *, log, notify_err):
@@ -39,9 +23,9 @@ def process_account(account, *, log, notify_err):
     s = account.state.load()
     last = s.get("lastHistoryId")
     if not last:
-        log("No lastHistoryId in state; run watch_register.mjs first.")
+        log("No lastHistoryId in state; run `python -m backend.onboarding.watch_renew` first.")
         return
-    payload = fetch_since(account, last)
+    payload = mailbox.fetch_since_history(account, last)
     emails = payload.get("emails", [])
     sent = payload.get("sent", [])
     new_history_id = payload.get("historyId")

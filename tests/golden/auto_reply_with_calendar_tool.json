@@ -92,31 +92,32 @@
       ]
     }
   ],
-  "node_calls": [
+  "gmail_calls": [
     {
-      "script": "list_calendar.mjs",
+      "op": "list_events",
+      "account": "default",
       "args": [
-        "--start",
         "2026-07-23T00:00:00Z",
-        "--end",
-        "2026-07-24T00:00:00Z"
-      ],
-      "stdin": null
+        "2026-07-24T00:00:00Z",
+        50
+      ]
     },
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "alice@contoso.com",
-        "subject": "Re: Lunch next week?",
-        "body": "Hi Alice,\n\nThursday afternoon works. Say 3pm?\n\nBest,\nMorgan",
-        "threadId": "t1",
-        "inReplyTo": "<msg-e1@mail>",
-        "references": "<msg-e1@mail>",
-        "originalFrom": "Alice Adams <alice@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
-        "originalBody": "Hi Morgan, want to grab lunch next week? Best, Alice Adams"
-      }
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "alice@contoso.com",
+          "subject": "Re: Lunch next week?",
+          "body": "Hi Alice,\n\nThursday afternoon works. Say 3pm?\n\nBest,\nMorgan",
+          "threadId": "t1",
+          "inReplyTo": "<msg-e1@mail>",
+          "references": "<msg-e1@mail>",
+          "originalFrom": "Alice Adams <alice@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
+          "originalBody": "Hi Morgan, want to grab lunch next week? Best, Alice Adams"
+        }
+      ]
     }
   ],
   "telegram": [

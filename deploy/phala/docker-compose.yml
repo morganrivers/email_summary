@@ -21,7 +21,12 @@ services:
       # Optional belt-and-suspenders: the compose_hash the guest agent must
       # report. The KMS is the real enforcer; this catches config drift early.
       EXPECTED_COMPOSE_HASH: "${EXPECTED_COMPOSE_HASH:-}"
-    # Secrets (OAuth tokens, LLM key, Telegram creds) are injected
+      # The co-signer holding the outer half of every token's custody. Empty
+      # falls back to the default host in backend/site.py. This enclave
+      # processes no mail at all while that box is unreachable, by design: see
+      # docs/plan_token_custody.md §1 on the availability trade.
+      LETTERLOCK_COSIGNER_URL: "${LETTERLOCK_COSIGNER_URL:-}"
+    # Secrets (LLM key, Telegram creds) are injected
     # post-attestation via dstack encrypted environment variables: encrypted to
     # the app KMS key, decrypted only inside the attested CVM, never baked into
     # the measured image. Encrypt them with the phala CLI at deploy time; the

@@ -29,6 +29,10 @@ load_dotenv(paths.ENV_FILE)
 
 APP_HOST = os.environ.get("LETTERLOCK_HOST", "letterlock.morganrivers.com")
 API_HOST = os.environ.get("LETTERLOCK_API_HOST", "hezner.morganrivers.com")
+# The co-signer holds the other half of every user's token custody. It runs on
+# the original box today, but it is named separately because the point of it is
+# that it can move under a different operator without the enclave changing.
+COSIGNER_HOST = os.environ.get("LETTERLOCK_COSIGNER_HOST", API_HOST)
 
 # The split-custody co-signer. Its own hostname, not a path on one of the two
 # above, because its site block is the only one that demands a client
@@ -51,6 +55,13 @@ ALIAS_HOSTS = tuple(
 GMAIL_PUSH_PORT = 8787
 BILLING_WEBHOOK_PORT = 8789
 WEB_PORT = 8790
+# The split-custody co-signer (docs/plan_token_custody.md Track J). It is the
+# one service the app talks to rather than serves, and the only one that must
+# not be reachable as plain HTTPS: it authenticates the enclave by client
+# certificate, so its site block terminates mTLS rather than proxying anonymous
+# traffic. LETTERLOCK_COSIGNER_URL overrides the whole URL for a dev box
+# running it on loopback.
+COSIGNER_PORT = 8791
 
 # Defined in cosigner/protocol.py, where the server that binds it lives, and
 # re-exported here so render_caddyfile.py still reads every port from one
@@ -120,7 +131,16 @@ def checkout_success_url():
 def cosigner_url(path="/"):
     """Where the enclave's custody client reaches the co-signer. mTLS: the
     enclave presents its RA-TLS certificate and Caddy passes it through for
-    cosigner/attest.py to verify."""
+    cosigner/attest.py to verify.
+
+    The co-signer is meant to be a different box under a different operator, so
+    this is a public host and not a loopback port. LETTERLOCK_COSIGNER_URL
+    overrides it on a dev box, where the co-signer is a local process with no
+    Caddy in front of it."""
+    assert path.startswith("/"), f"path must be absolute, got {path!r}"
+    override = os.environ.get("LETTERLOCK_COSIGNER_URL", "").strip()
+    if override:
+        return f"{override.rstrip('/')}{path}"
     return _url(COSIGNER_HOST, path)
 
 

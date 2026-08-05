@@ -30,7 +30,6 @@ import harness
 
 @pytest.fixture
 def wire(monkeypatch, tmp_path):
-    import subprocess
     import requests
     from backend.integrations import llm_client
     from backend.accounts import state
@@ -72,12 +71,11 @@ def wire(monkeypatch, tmp_path):
     }]}))
     monkeypatch.setattr(account, "ACCOUNTS_DIR", manifest.parent)
     monkeypatch.setattr(account, "MANIFEST", manifest)
-    real_run = subprocess.run
 
-    def install(responses=(), node_outputs=None):
+    def install(responses=(), gmail_outputs=None):
         dq = deque(responses)
         monkeypatch.setattr(llm_client, "OpenAI", lambda *a, **k: harness.FakeOpenAI(rec, dq))
-        monkeypatch.setattr(subprocess, "run", harness.make_fake_run(rec, node_outputs or {}, real_run))
+        harness.install_gmail_fakes(monkeypatch, rec, gmail_outputs or {})
         monkeypatch.setattr(requests, "post", harness.make_fake_post(rec))
         return rec
 

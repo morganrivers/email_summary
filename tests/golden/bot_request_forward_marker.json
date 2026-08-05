@@ -73,88 +73,99 @@
       ]
     }
   ],
-  "node_calls": [
+  "gmail_calls": [
     {
-      "script": "find_thread.mjs",
+      "op": "find_thread_by_from_subject",
+      "account": "default",
       "args": [
-        "--from",
         "bob@contoso.com",
-        "--subject",
         "Project sync"
-      ],
-      "stdin": null
+      ]
     },
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "bob@contoso.com",
-        "subject": "Re: Project sync",
-        "body": "⏳ Drafting your reply, please wait...\n\nThe AI is thinking. This draft will be overwritten as work progresses.",
-        "threadId": "t9",
-        "inReplyTo": "<mid-t9@mail>",
-        "references": "<mid-t9@mail>",
-        "originalFrom": "Bob Baker <bob@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
-        "originalBody": "Hi Morgan, can we sync on the project this week?"
-      }
-    },
-    {
-      "script": "list_calendar.mjs",
+      "op": "submit",
+      "account": "default",
       "args": [
-        "--start",
+        {
+          "to": "bob@contoso.com",
+          "subject": "Re: Project sync",
+          "body": "⏳ Drafting your reply, please wait...\n\nThe AI is thinking. This draft will be overwritten as work progresses.",
+          "threadId": "t9",
+          "inReplyTo": "<mid-t9@mail>",
+          "references": "<mid-t9@mail>",
+          "originalFrom": "Bob Baker <bob@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+          "originalBody": "Hi Morgan, can we sync on the project this week?"
+        }
+      ]
+    },
+    {
+      "op": "list_events",
+      "account": "default",
+      "args": [
         "2026-07-24T00:00:00Z",
-        "--end",
-        "2026-07-25T00:00:00Z"
+        "2026-07-25T00:00:00Z",
+        50
+      ]
+    },
+    {
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "bob@contoso.com",
+          "subject": "Re: Project sync",
+          "body": "⏳ Drafting — iteration 1\n\nTools called so far:\n• get_calendar_events({\"start_iso\": \"2026-07-24T00:00:00Z\", \"end_iso\": \"2026-07-25T00:00:00Z\"})\n    ↳ {\"events\": [], \"count\": 0}\n\nQueued next: 1 tool call(s)\n• get_calendar_events\n\n(This draft will be replaced when the final reply is ready.)",
+          "threadId": "t9",
+          "inReplyTo": "<mid-t9@mail>",
+          "references": "<mid-t9@mail>",
+          "originalFrom": "Bob Baker <bob@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+          "originalBody": "Hi Morgan, can we sync on the project this week?"
+        }
       ],
-      "stdin": null
-    },
-    {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "bob@contoso.com",
-        "subject": "Re: Project sync",
-        "body": "⏳ Drafting — iteration 1\n\nTools called so far:\n• get_calendar_events({\"start_iso\": \"2026-07-24T00:00:00Z\", \"end_iso\": \"2026-07-25T00:00:00Z\"})\n    ↳ {\"events\": [], \"count\": 0}\n\nQueued next: 1 tool call(s)\n• get_calendar_events\n\n(This draft will be replaced when the final reply is ready.)",
-        "threadId": "t9",
-        "inReplyTo": "<mid-t9@mail>",
-        "references": "<mid-t9@mail>",
-        "originalFrom": "Bob Baker <bob@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
-        "originalBody": "Hi Morgan, can we sync on the project this week?",
-        "draftId": "draft-5"
+      "kwargs": {
+        "draft_id": "draft-5"
       }
     },
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "bob@contoso.com",
-        "subject": "Re: Project sync",
-        "body": "⏳ Finalizing reply (iteration 2)...\n\nTools called so far:\n• get_calendar_events({\"start_iso\": \"2026-07-24T00:00:00Z\", \"end_iso\": \"2026-07-25T00:00:00Z\"})\n    ↳ {\"events\": [], \"count\": 0}\n\nModel's current output:\nHi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan\n\n(This draft will be replaced when the final reply is ready.)",
-        "threadId": "t9",
-        "inReplyTo": "<mid-t9@mail>",
-        "references": "<mid-t9@mail>",
-        "originalFrom": "Bob Baker <bob@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
-        "originalBody": "Hi Morgan, can we sync on the project this week?",
-        "draftId": "draft-5"
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "bob@contoso.com",
+          "subject": "Re: Project sync",
+          "body": "⏳ Finalizing reply (iteration 2)...\n\nTools called so far:\n• get_calendar_events({\"start_iso\": \"2026-07-24T00:00:00Z\", \"end_iso\": \"2026-07-25T00:00:00Z\"})\n    ↳ {\"events\": [], \"count\": 0}\n\nModel's current output:\nHi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan\n\n(This draft will be replaced when the final reply is ready.)",
+          "threadId": "t9",
+          "inReplyTo": "<mid-t9@mail>",
+          "references": "<mid-t9@mail>",
+          "originalFrom": "Bob Baker <bob@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+          "originalBody": "Hi Morgan, can we sync on the project this week?"
+        }
+      ],
+      "kwargs": {
+        "draft_id": "draft-5"
       }
     },
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "bob@contoso.com",
-        "subject": "Re: Project sync",
-        "body": "Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan",
-        "threadId": "t9",
-        "inReplyTo": "<mid-t9@mail>",
-        "references": "<mid-t9@mail>",
-        "originalFrom": "Bob Baker <bob@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
-        "originalBody": "Hi Morgan, can we sync on the project this week?",
-        "draftId": "draft-5"
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "bob@contoso.com",
+          "subject": "Re: Project sync",
+          "body": "Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan",
+          "threadId": "t9",
+          "inReplyTo": "<mid-t9@mail>",
+          "references": "<mid-t9@mail>",
+          "originalFrom": "Bob Baker <bob@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+          "originalBody": "Hi Morgan, can we sync on the project this week?"
+        }
+      ],
+      "kwargs": {
+        "draft_id": "draft-5"
       }
     }
   ],

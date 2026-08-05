@@ -16,7 +16,7 @@ from harness import assert_golden
 def record(rec, **extra):
     out = {
         "llm_calls": rec.llm_calls,
-        "node_calls": rec.node_calls,
+        "gmail_calls": rec.gmail_calls,
         "telegram": rec.telegram,
     }
     out.update(extra)
@@ -81,7 +81,7 @@ def decisions(*entries):
     return json.dumps({"decisions": list(entries)})
 
 
-DRAFT_OUT = {"create_draft.mjs": {"draftId": "draft-1"}}
+DRAFT_OUT = {"submit": "draft-1"}
 
 
 # --- auto-reply path ------------------------------------------------------
@@ -93,7 +93,7 @@ def test_auto_reply_no_tools(wire):
             {"content": decisions({"index": 0, "needs_reply": True, "reason": "Personal lunch request"})},
             {"content": "Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\nMorgan"},
         ],
-        node_outputs=DRAFT_OUT,
+        gmail_outputs=DRAFT_OUT,
     )
     drafted = draft_replies.process_emails(wire.account, [auto_email()])
     assert_golden("auto_reply_no_tools", record(rec, returned=drafted))
@@ -108,7 +108,7 @@ def test_auto_reply_with_calendar_tool(wire):
                 {"start_iso": "2026-07-23T00:00:00Z", "end_iso": "2026-07-24T00:00:00Z"})}]},
             {"content": "Hi Alice,\n\nThursday afternoon works. Say 3pm?\n\nBest,\nMorgan"},
         ],
-        node_outputs={"list_calendar.mjs": [], **DRAFT_OUT},
+        gmail_outputs={"list_events": [], **DRAFT_OUT},
     )
     drafted = draft_replies.process_emails(wire.account, [auto_email()])
     assert_golden("auto_reply_with_calendar_tool", record(rec, returned=drafted))
@@ -120,7 +120,7 @@ def test_auto_reply_declined(wire):
         responses=[
             {"content": decisions({"index": 0, "needs_reply": False, "reason": "Newsletter"})},
         ],
-        node_outputs={},
+        gmail_outputs={},
     )
     drafted = draft_replies.process_emails(wire.account, [auto_email()])
     assert_golden("auto_reply_declined", record(rec, returned=drafted))
@@ -135,7 +135,7 @@ def test_auto_reply_em_dash_rejected(wire):
             {"content": dash_body}, {"content": dash_body}, {"content": dash_body},
             {"content": dash_body}, {"content": dash_body},
         ],
-        node_outputs={},
+        gmail_outputs={},
     )
     drafted = draft_replies.process_emails(wire.account, [auto_email()])
     assert_golden("auto_reply_em_dash_rejected", record(rec, returned=drafted))
@@ -151,11 +151,12 @@ def test_bot_request_forward_marker(wire):
                 {"start_iso": "2026-07-24T00:00:00Z", "end_iso": "2026-07-25T00:00:00Z"})}]},
             {"content": "Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan"},
         ],
-        node_outputs={
-            "find_thread.mjs": {"found": True, "threadId": "t9",
-                                "messageIdHeader": "<mid-t9@mail>", "referencesHeader": ""},
-            "list_calendar.mjs": [],
-            "create_draft.mjs": {"draftId": "draft-5"},
+        gmail_outputs={
+            "find_thread_by_from_subject": {"found": True, "threadId": "t9",
+                                            "messageIdHeader": "<mid-t9@mail>",
+                                            "referencesHeader": ""},
+            "list_events": [],
+            "submit": "draft-5",
         },
     )
     result = manual_draft.process_draft_request(wire.account, bot_email())
@@ -168,8 +169,8 @@ def test_bot_request_thread_fallback(wire):
         responses=[
             {"content": "Hi Carol,\n\nThe budget looks good to me.\n\nBest,\nMorgan"},
         ],
-        node_outputs={
-            "get_thread.mjs": {"messages": [
+        gmail_outputs={
+            "get_thread": {"messages": [
                 {"id": "m1", "from": "Carol Clark <carol@contoso.com>",
                  "to": "orgmanrivers@gmail.com", "subject": "Budget",
                  "date": "Mon, 20 Jul 2026 07:00:00 +0000",
@@ -178,9 +179,10 @@ def test_bot_request_thread_fallback(wire):
                  "to": "danielmorganrivers+bot@gmail.com", "subject": "Fwd: Budget",
                  "date": "Mon, 20 Jul 2026 11:00:00 +0000", "body": "Can you reply?"},
             ]},
-            "find_thread.mjs": {"found": True, "threadId": "t8",
-                                "messageIdHeader": "<mid-t8@mail>", "referencesHeader": ""},
-            "create_draft.mjs": {"draftId": "draft-6"},
+            "find_thread_by_from_subject": {"found": True, "threadId": "t8",
+                                            "messageIdHeader": "<mid-t8@mail>",
+                                            "referencesHeader": ""},
+            "submit": "draft-6",
         },
     )
     result = manual_draft.process_draft_request(wire.account, bot_email_no_marker())
@@ -197,7 +199,7 @@ def test_schedule_from_sent_concrete(wire):
                 {"summary": "Meeting with Dave", "start": "2026-07-21T15:00:00",
                  "end": "", "location": "", "description": ""}]})},
         ],
-        node_outputs={"create_event.mjs": {"htmlLink": "https://cal/evt1", "id": "evt1"}},
+        gmail_outputs={"create_event": {"htmlLink": "https://cal/evt1", "id": "evt1"}},
     )
     created = schedule_from_sent.run(wire.account, [sent_email(
         "Hi Dave, confirming our meeting Tuesday July 21 at 3pm. Morgan")])
@@ -208,7 +210,7 @@ def test_schedule_from_sent_vague(wire):
     from backend.drafting import schedule_from_sent
     rec = wire.install(
         responses=[{"content": json.dumps({"events": []})}],
-        node_outputs={},
+        gmail_outputs={},
     )
     created = schedule_from_sent.run(wire.account, [sent_email(
         "Hi Dave, let's meet sometime next week. Morgan")])
@@ -235,7 +237,7 @@ def test_pii_masking_leaving_payload(wire):
             {"content": decisions({"index": 0, "needs_reply": True, "reason": "Personal"})},
             {"content": "Hi Nadia,\n\nGot it, thanks.\n\nBest,\nMorgan"},
         ],
-        node_outputs=DRAFT_OUT,
+        gmail_outputs=DRAFT_OUT,
     )
     draft_replies.process_emails(wire.account, [pii_email])
 
@@ -306,12 +308,13 @@ def test_process_once_end_to_end(wire):
                 {"summary": "Meeting with Dave", "start": "2026-07-21T15:00:00",
                  "end": "", "location": "", "description": ""}]})},
         ],
-        node_outputs={
-            "fetch_emails.mjs": fetch_payload,
-            "find_thread.mjs": {"found": True, "threadId": "t9",
-                                "messageIdHeader": "<mid-t9@mail>", "referencesHeader": ""},
-            "create_draft.mjs": {"draftId": "draft-x"},
-            "create_event.mjs": {"htmlLink": "https://cal/evt1", "id": "evt1"},
+        gmail_outputs={
+            "fetch_since_history": fetch_payload,
+            "find_thread_by_from_subject": {"found": True, "threadId": "t9",
+                                            "messageIdHeader": "<mid-t9@mail>",
+                                            "referencesHeader": ""},
+            "submit": "draft-x",
+            "create_event": {"htmlLink": "https://cal/evt1", "id": "evt1"},
         },
     )
     daemon_loop.process_all()

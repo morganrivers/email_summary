@@ -2,11 +2,11 @@
 
 A Gmail push watch expires after ~7 days, so every account needs its watch
 re-registered on a schedule. This is the multi-tenant successor to the old
-single-account watch_register.mjs cron: it iterates accounts, runs the Node
-worker under each account's creds dir (node_runner.node_env is the seam that
-lets one process touch many mailboxes), and persists the result through the
-account's StateStore. state.py stays the single source of truth for the state
-schema; the Node worker only performs the API call and prints its result.
+single-account watch registration cron: it iterates accounts, calls users.watch
+for each through gmail_api (the seam that lets one process touch many
+mailboxes), and persists the result through the account's StateStore. state.py
+stays the single source of truth for the state schema; gmail_api only performs
+the API call.
 
 renew_account is also called at onboarding for the one just-registered account,
 so registration and renewal share one code path. main() renews every active
@@ -18,15 +18,16 @@ untouched (the daemon advances it as it processes); only watchExpiration is
 refreshed, so a renewal never rewinds the cursor and drops unprocessed history.
 """
 
-import json
-import subprocess
+import os
 import sys
 
-from backend import paths
 from backend.accounts import account
-from backend.integrations.gmail_gcal.node_runner import node_env
+from backend.integrations.gmail_gcal import gmail_api
 
-WATCH_SCRIPT = paths.node_script("watch_register.mjs")
+# The Pub/Sub topic Gmail pushes to. One topic serves every account; the push
+# subscription's OIDC audience is what gmail_hook_server verifies.
+PUBSUB_TOPIC = os.environ.get(
+    "GMAIL_PUBSUB_TOPIC", "projects/coastal-mender-462719-q3/topics/gmail-events")
 
 
 def log(msg):
@@ -36,20 +37,11 @@ def log(msg):
 
 def renew_account(acct, *, log=log):
     """(Re)register the Gmail watch for one account and persist the cursor +
-    expiry. Returns the parsed {historyId, expiration} worker result."""
+    expiry. Returns the {historyId, expiration} the API answered with."""
     assert acct.identity.account_id == acct.id, (
         f"account {acct.id!r} carries identity for {acct.identity.account_id!r}"
     )
-    result = subprocess.run(
-        ["node", str(WATCH_SCRIPT)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
-        env=node_env(acct.creds_dir),
-    )
-    assert result.returncode == 0, (
-        f"watch_register.mjs exited {result.returncode} for {acct.id}: "
-        f"{result.stderr.decode()}"
-    )
-    res = json.loads(result.stdout)
+    res = gmail_api.register_watch(acct, PUBSUB_TOPIC)
     fields = {"watchExpiration": str(res["expiration"])}
     if not acct.state.load().get("lastHistoryId"):
         fields["lastHistoryId"] = str(res["historyId"])

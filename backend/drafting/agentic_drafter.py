@@ -132,12 +132,16 @@ def _tool_call_to_message(tc):
 
 
 def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
-          thread_id=None, on_iteration=None, identity=None, creds_dir=None):
+          thread_id=None, on_iteration=None, account=None):
     now = datetime.now(timezone.utc).isoformat()
+    # Both the masking identity and the mailbox the tools read come from the one
+    # account. They used to be separate arguments, which made it possible to
+    # draft under one user's identity while searching another user's mail.
+    identity = account.identity if account is not None else pseudonymizer.DEFAULT_IDENTITY
     # The account owner's own name, not a hardcoded one. It is masked to
     # [USER_FIRST] by the pseudonymizer below (the identity's own rules tag it)
     # and restored on the way out, so the model never sees it either way.
-    owner = (identity or pseudonymizer.DEFAULT_IDENTITY).first
+    owner = identity.first
     ban_dashes = dashes_banned(system_prompt)
     punctuation_rule = (
         "PUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. "
@@ -187,7 +191,7 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
         ) as run:
             body = _draft_with_em_dash_retry(client, messages, max_iterations,
                                              ls_extra, state, on_iteration=on_iteration,
-                                             creds_dir=creds_dir, ban_dashes=ban_dashes)
+                                             account=account, ban_dashes=ban_dashes)
         body = pseudonymizer.restore(body, state)
         run_url = None
         try:
@@ -196,7 +200,7 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
             sys.stderr.write(f"get_run_url failed: {err}\n")
         return body, run_url
     body = _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra,
-                                     state, on_iteration=on_iteration, creds_dir=creds_dir,
+                                     state, on_iteration=on_iteration, account=account,
                                      ban_dashes=ban_dashes)
     body = pseudonymizer.restore(body, state)
     return body, None
@@ -231,9 +235,9 @@ def _safe_notify(on_iteration, *args):
 
 
 def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra, state,
-                              on_iteration=None, creds_dir=None, ban_dashes=True):
+                              on_iteration=None, account=None, ban_dashes=True):
     body = _run_loop(client, messages, max_iterations, ls_extra, state,
-                     on_iteration=on_iteration, creds_dir=creds_dir)
+                     on_iteration=on_iteration, account=account)
     if not ban_dashes:
         return body
     for attempt in range(MAX_EM_DASH_RETRIES):
@@ -246,12 +250,12 @@ def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra, state,
         messages.append({"role": "assistant", "content": body})
         messages.append({"role": "user", "content": EM_DASH_CORRECTION_PROMPT})
         body = _run_loop(client, messages, max_iterations, ls_extra, state,
-                         on_iteration=on_iteration, creds_dir=creds_dir)
+                         on_iteration=on_iteration, account=account)
     return body
 
 
 def _run_loop(client, messages, max_iterations, ls_extra, state, on_iteration=None,
-              creds_dir=None):
+              account=None):
     tool_history = []
     for iteration in range(max_iterations):
         resp = llm_client.complete(
@@ -298,7 +302,7 @@ def _run_loop(client, messages, max_iterations, ls_extra, state, on_iteration=No
                 if executor is None:
                     result = {"error": f"unknown tool {fn_name}"}
                 else:
-                    result = executor(fn_args, creds_dir)
+                    result = executor(fn_args, account)
             tool_history.append({
                 "iteration": iteration + 1,
                 "name": fn_name,

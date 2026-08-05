@@ -2,8 +2,8 @@
 
 Every module resolves shared paths through here instead of its own
 ``Path(__file__).parent``, so relocating code between packages never breaks the
-location of ``.env``, the Node bridge scripts, the account store, or runtime
-scratch (the wake FIFO and lock files).
+location of ``.env``, the account store, or runtime scratch (the wake FIFO and
+lock files).
 
 Layout under the app root (``/opt/letterlock`` on the box):
 
@@ -25,7 +25,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = REPO_ROOT / "backend"
 
 ENV_FILE = REPO_ROOT / ".env"
-GMAIL_GCAL_DIR = BACKEND_DIR / "integrations" / "gmail_gcal"
 STATIC_DIR = REPO_ROOT / "frontend" / "static"
 DATABASE_DIR = REPO_ROOT / "database"
 RUN_DIR = REPO_ROOT / "state"
@@ -34,13 +33,6 @@ CONFIG_DIR = REPO_ROOT / "config"
 # Where these files lived before the app got its own config directory. A dev
 # checkout still reads them from here, so only the box needs config/ populated.
 LEGACY_CONFIG_DIR = Path.home() / ".system_files"
-
-
-def node_script(name):
-    """Absolute path to a Gmail/Calendar Node bridge script by filename."""
-    path = GMAIL_GCAL_DIR / name
-    assert path.suffix == ".mjs", f"node_script expects a .mjs file, got {name!r}"
-    return path
 
 
 def config_file(name):

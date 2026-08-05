@@ -12,20 +12,16 @@ Dedup is handled upstream by the history cursor (lastHistoryId), which delivers
 each sent message exactly once — same guarantee the drafting path relies on.
 """
 
-import json
 import html
 import datetime
-import subprocess
 import sys
 
 from dotenv import load_dotenv
 
 from backend import paths
 from backend.integrations import llm_client
-from backend.integrations.gmail_gcal.node_runner import node_env
+from backend.integrations.gmail_gcal import calendar_api
 from backend.integrations.telegram import send_telegram, notify_error
-
-CREATE_EVENT_SCRIPT = paths.node_script("create_event.mjs")
 
 load_dotenv(paths.ENV_FILE)
 
@@ -110,22 +106,15 @@ def _normalize(event):
 
 
 def create_event(account, event):
-    payload = {
-        "summary": event["summary"],
-        "startIso": event["start"],
-        "endIso": event["end"],
-        "timeZone": account.timezone,
-        "location": event["location"],
-        "description": event["description"],
-    }
-    result = subprocess.run(
-        ["node", str(CREATE_EVENT_SCRIPT)],
-        input=json.dumps(payload),
-        capture_output=True, text=True, timeout=60,
-        env=node_env(account.creds_dir),
+    return calendar_api.create_event(
+        account,
+        summary=event["summary"],
+        start_iso=event["start"],
+        end_iso=event["end"],
+        time_zone=account.timezone,
+        location=event["location"],
+        description=event["description"],
     )
-    assert result.returncode == 0, f"create_event.mjs failed: {result.stderr}"
-    return json.loads(result.stdout)
 
 
 def render_telegram(created):

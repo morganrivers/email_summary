@@ -5,15 +5,12 @@ Generate Gmail drafts for incoming emails that likely warrant a personal reply.
 Voice profile: per account (see voice_profile_for).
 Classifier: plain DeepSeek call.
 Drafter: agentic_drafter — DeepSeek with calendar + email-search tools.
-Drafts created via create_draft.mjs (sibling).
+Drafts created through gmail_gcal.drafts (sibling).
 Telegram receives a single notification listing what was drafted.
 """
 
-import json
 import re
 import html
-import subprocess
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -21,11 +18,8 @@ from backend import paths
 from backend.drafting import agentic_drafter
 from backend.drafting import voice_dna
 from backend.integrations import llm_client
-from backend.integrations.gmail_gcal.node_runner import node_env
+from backend.integrations.gmail_gcal import drafts
 from backend.integrations.telegram import send_telegram
-
-FETCH_SCRIPT = paths.node_script("fetch_emails.mjs")
-DRAFT_SCRIPT = paths.node_script("create_draft.mjs")
 
 load_dotenv(paths.ENV_FILE)
 
@@ -79,7 +73,7 @@ def voice_profile_for(account):
 
 
 def thread_participation_line(email):
-    """Render the deterministic participation signal fetch_emails.mjs attaches.
+    """Render the deterministic participation signal the mailbox fetch attaches.
     Absent (older payloads, failed lookup) reads as 'not established' so the
     carve-out only fires on a positive signal from Gmail's own SENT label."""
     if email.get("userParticipated"):
@@ -120,8 +114,7 @@ def draft_body(client, voice, email, account):
     )
     return agentic_drafter.draft(
         client, sys_prompt, user_prompt,
-        thread_id=f"auto-{email['id']}",
-        identity=account.identity, creds_dir=account.creds_dir,
+        thread_id=f"auto-{email['id']}", account=account,
     )  # returns (body, run_url)
 
 
@@ -146,17 +139,8 @@ def reply_references(email):
 
 def submit_draft(account, payload, draft_id=None):
     """Create or update a Gmail draft. If draft_id is given, updates in place.
-    Sole subprocess boundary to create_draft.mjs; routes to account's mailbox."""
-    if draft_id:
-        payload = {**payload, "draftId": draft_id}
-    result = subprocess.run(
-        ["node", str(DRAFT_SCRIPT)],
-        input=json.dumps(payload),
-        capture_output=True, text=True, timeout=60,
-        env=node_env(account.creds_dir),
-    )
-    assert result.returncode == 0, f"create_draft.mjs failed: {result.stderr}"
-    return json.loads(result.stdout)["draftId"]
+    Sole boundary to the draft writer; routes to the account's own mailbox."""
+    return drafts.submit(account, payload, draft_id=draft_id)
 
 
 def gmail_thread_link(thread_id):
@@ -184,7 +168,7 @@ def format_draft_line(sender, subject, thread_id=None, trace_url=None,
 
 def build_draft_payload(*, to, subject, body, thread_id, in_reply_to, references,
                         original_from, original_date, original_body):
-    """Single source of truth for the create_draft.mjs payload shape."""
+    """Single source of truth for the draft payload shape."""
     assert to and subject and body, "to, subject, body are required"
     return {
         "to": to,

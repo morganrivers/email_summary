@@ -27,8 +27,9 @@ deletes an excluded path) and must stay in step with the server-only files
 below.
 
 Dependencies are installed automatically when their manifests change in a push:
-`requirements.txt` triggers `venv/bin/pip install -r requirements.txt`,
-`package.json` / `package-lock.json` trigger `npm install --omit=dev`.
+`requirements.txt` triggers `venv/bin/pip install -r requirements.txt`. There is
+no Node on the box: Gmail and Calendar are called from Python, so there is one
+language and one dependency tree.
 
 The PII analyzer (Presidio + spaCy + `en_core_web_lg`) is commented out of
 `requirements.txt` and off by default, because it costs ~1.6 GB resident per
@@ -102,19 +103,23 @@ is what protects it from `--delete-after`.
 
 - `.env` — API keys, not in git. `DEEPSEEK_API_KEY` and, to offer the
   confidential route, `TRESOR_API_KEY` (see `llm_client.PROVIDERS`).
-- `.gmail-mcp/` — Gmail OAuth tokens.
+- `.gmail-mcp/` — `gcp-oauth.keys.json`, the OAuth *app*'s client_id and
+  client_secret. One app serves every user; no per-user token lives here any
+  more (see `database/`). Read only through
+  `backend/integrations/gmail_gcal/oauth_app.py`.
 - `state/` — daemon runtime scratch: `state.json`, `wake.fifo`,
   `wake_queue.jsonl`, `wake_queue.lock`, `restart.flag`. Created on first write
   by `paths.ensure_run_dir()`.
 - `database/` — multi-tenant account store (`database/accounts.json`: per-user
-  identity, creds dirs, telegram targets, timezone, plan status) plus each
-  user's `<id>/.gmail-mcp/credentials.json`. Holds PII + refresh tokens, so it
-  is git-ignored and written 0600 inside a 0700 directory. A manifest is
-  required; seed the owner once with `python -m backend.accounts.seed_owner`.
+  identity, token file, telegram targets, timezone, plan status) plus each
+  user's `<id>/token.bin`, the nested-wrapped refresh token. Holds PII, so it is
+  git-ignored and written 0600 inside a 0700 directory; the token records are
+  useless to anyone who reads them without the co-signer. A manifest is
+  required; seed the owner once with `python -m backend.accounts.seed_owner`,
+  then have them sign in through `/auth/callback` to grant Gmail access.
 - `config/` — operator prompts pushed from `~/.system_files` (see above).
   `paths.config_file()` reads these, falling back to `~/.system_files` so a
   laptop checkout works unchanged.
-- `node_modules/` — installed by deploy when the package manifests change.
 - `venv/` — Python virtualenv at `/opt/letterlock/venv`.
 
 ## Runtime paths
@@ -130,11 +135,11 @@ is what protects it from `--delete-after`.
   JWT and wakes the daemon via the FIFO.
 - `email_summary.py` — daily summary run by the `email-summary.timer`
   (05:00 UTC). Sweeps every active account, fetching each user's mailbox through
-  `node_env(account.creds_dir)` and delivering to `account.telegram`. Accounts
+  `mailbox.fetch_daily(account)` and delivering to `account.telegram`. Accounts
   with no linked chat are skipped.
 - `watch_renew.py` — weekly per-account Gmail `users.watch` renewal run by the
-  `gmail-watch.timer`; iterates every active account and drives the per-account
-  `watch_register.mjs` worker under each account's creds dir.
+  `gmail-watch.timer`; iterates every active account and calls
+  `gmail_api.register_watch()` for each.
 - `frontend/web_server.py` — the product web UI run by the `letterlock-web`
   service, behind Caddy (`127.0.0.1:8790` on `APP_HOST`). Sign-in with Google,
   dashboard, voice DNA, settings, billing. `/voice` generates a profile from the
@@ -186,11 +191,32 @@ copy.
   be authorized here *and* in the AppAuth contract before deploying, or every
   unwrap fails. `cosigner/__init__.py` states the four invariants the whole
   design rests on; read them before refactoring anything in that package.
-- `backend/onboarding/provisioning.py` — the Google consent sequence: auth URL,
-  code exchange, per-user creds custody, `register_account`, watch registration,
-  checkout redirect. `handle_callback()` is the whole decision path, HTTP-free
-  and directly tested. Any future sign-in surface imports this rather than
-  reimplementing token custody.
+- `backend/onboarding/provisioning.py` — the Google consent sequence: auth URL
+  (PKCE + `dpop_jkt`), code exchange, `tokens.take_custody`, `register_account`,
+  watch registration, checkout redirect. `handle_callback()` is the whole
+  decision path, HTTP-free and directly tested. Any future sign-in surface
+  imports this rather than reimplementing token custody. The exchange is in
+  Python because Google binds the refresh token to the co-signer's DPoP key at
+  that one request and nowhere else.
+- `backend/custody/` — split custody of every Gmail refresh token
+  (docs/plan_token_custody.md Track I). `wrapping.py` owns the inner AES-GCM
+  layer, keyed by HKDF from the dstack KMS `app_secret`; `client.py` is the sole
+  network boundary to the co-signer, which holds the outer wrapping key and the
+  DPoP private key and stores nothing; `tokens.py` is the only path from a
+  stored record to a usable access token. The layer order is the guarantee:
+  ours inside, theirs outside. Reversed, the co-signer's unwrap would yield
+  plaintext and it would become the single box that can read every mailbox.
+  There is no bypass and must never be one: a co-signer that is down means no
+  mail is processed, which is the availability cost the design accepts in
+  exchange for removing a confidentiality risk.
+- `backend/integrations/gmail_gcal/` — the only code that talks to Google's
+  mail and calendar APIs. `oauth_app.py` (client keys, scopes, endpoints),
+  `gmail_api.py` (credentials + messages/threads/history/watch),
+  `calendar_api.py`, `mailbox.py` (the two fetch shapes), `drafts.py` (RFC822
+  assembly + create/update). Credentials are constructed with no refresh token
+  at all, so every acquisition goes through `tokens.refresh_handler_for()`;
+  putting one in that object would defeat split custody for as long as the
+  object lives.
 - `llm_client.py` — the inference client + `complete()`. The provider catalog
   (`PROVIDERS`), model, thinking mode, reasoning effort, and the masking
   boundary all live here. Two providers ship: `deepseek` (direct, the default)
@@ -245,10 +271,10 @@ copy.
   button and billing table each held their own literal and drifted from the
   Polar product, quoting €20 for a €25 subscription. Polar is what actually
   charges, so changing the product there means changing this constant too.
-- `draft_replies.build_draft_payload()` — canonical payload shape for
-  `create_draft.mjs`. All draft callers route through this.
-- `draft_replies.submit_draft(payload, draft_id=None)` — sole subprocess
-  boundary to `create_draft.mjs`. Pass `draft_id` to update in place.
+- `draft_replies.build_draft_payload()` — canonical draft payload shape. All
+  draft callers route through this.
+- `draft_replies.submit_draft(account, payload, draft_id=None)` — sole boundary
+  to `gmail_gcal.drafts`. Pass `draft_id` to update in place.
 - `draft_replies.gmail_thread_link()` — Gmail deep-link builder.
 - `draft_replies.format_draft_line()` — Telegram notification line item
   (linked sender + subject, optional reason + trace url).
@@ -264,5 +290,5 @@ copy.
 `manual_draft.process_draft_request()` creates a placeholder Gmail draft
 immediately, then overwrites it on every `agentic_drafter` iteration with
 a status body (tools called + partial output + queued next tool), then
-overwrites once more with the final reply. `create_draft.mjs` accepts an
-optional `draftId` to make this work via `drafts.update`.
+overwrites once more with the final reply. `drafts.submit()` takes an optional
+`draft_id` to make this work via `drafts.update`.

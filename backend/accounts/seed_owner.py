@@ -25,7 +25,13 @@ from backend.drafting import voice_dna
 
 def owner_entry_args():
     """The register_account() call the seed makes, derived from owner_account()
-    so the identity, Telegram target, and creds come from one place.
+    so the identity and Telegram target come from one place.
+
+    It writes no token_file. The seed introduces the owner to the store; it
+    cannot take custody of a mailbox, because custody starts at a Google consent
+    and ends at a record neither this box nor the co-signer can open alone. The
+    owner signs in through /auth/callback like every other user, and re-running
+    the seed afterwards carries the token_file that sign-in wrote.
 
     The owner is also the only account that points at the operator's personal
     voice profile. Everyone else gets the neutral default: a signup must not be
@@ -35,14 +41,10 @@ def owner_entry_args():
     assert identity.emails, (
         "owner identity has no email address; pseudonymizer.USER_EMAILS is empty"
     )
-    assert owner.creds_dir, (
-        "owner has no Gmail creds directory; set GMAIL_MCP_DIR in .env"
-    )
     args = {
         "email": identity.emails[0],
         "first": identity.first,
         "last": identity.last,
-        "creds_dir": paths.relative_if_inside(owner.creds_dir),
         "first_aliases": tuple(identity.first_aliases),
         "telegram_chat_id": owner.telegram.chat_id,
         "state_file": paths.relative_if_inside(owner.state.path),
@@ -75,7 +77,7 @@ def main(argv):
         return 0
     acct = seed()
     print(f"seeded {acct.id} ({acct.plan_status}) into {account.MANIFEST}")
-    print(f"  creds:  {acct.creds_dir}")
+    print(f"  token:  {acct.token_file or '(none yet; sign in to grant access)'}")
     print(f"  state:  {acct.state.path}")
     return 0
 

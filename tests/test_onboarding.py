@@ -1,11 +1,11 @@
 """Track C onboarding: account registration writer, per-user watch renewal, and
 the sign-in-with-Google callback control flow.
 
-Unit-level (no Google, no Node): the OAuth exchange and watch API call are the
-Node boundary and are mocked. What is pinned here is the Python side -- that a
-signup writes a correct, loadable manifest entry that starts inactive; that
-renewal sets the cursor once and never rewinds it; and that the callback
-enforces CSRF state before provisioning.
+Unit-level (no Google, no co-signer): the OAuth exchange and the watch call are
+mocked. What is pinned here is everything around them -- that a signup writes a
+correct, loadable manifest entry that starts inactive; that renewal sets the
+cursor once and never rewinds it; and that the callback enforces CSRF state
+before provisioning.
 """
 
 import json
@@ -30,7 +30,8 @@ def test_register_account_writes_inactive_loadable_entry(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
 
     acct = account.register_account(
-        "Alice@Example.com", "Alice", "Ng", "accounts/alice@example.com/.gmail-mcp"
+        "Alice@Example.com", "Alice", "Ng",
+        token_file="database/alice@example.com/token.bin",
     )
     assert acct.id == "alice@example.com"
     assert acct.plan_status == "inactive"
@@ -49,8 +50,7 @@ def test_set_telegram_updates_chat_id_only(tmp_path, monkeypatch):
     _use_store(tmp_path, monkeypatch)
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-1")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
-    account.register_account("a@x.com", "A", "N", "d/a/.gmail-mcp",
-                             telegram_token="entry-token")
+    account.register_account("a@x.com", "A", "N", telegram_token="entry-token")
 
     acct = account.set_telegram("a@x.com", chat_id="chat-2")
     assert acct.telegram.chat_id == "chat-2"
@@ -58,37 +58,35 @@ def test_set_telegram_updates_chat_id_only(tmp_path, monkeypatch):
     assert account.account_for_email("a@x.com").telegram.chat_id == "chat-2"
 
 
-def test_delete_account_removes_entry_and_the_creds_it_owns(tmp_path, monkeypatch):
+def test_delete_account_removes_entry_and_the_token_it_owns(tmp_path, monkeypatch):
     _use_store(tmp_path, monkeypatch)
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-1")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
-    creds = tmp_path / "a@x.com" / ".gmail-mcp"
-    creds.mkdir(parents=True)
-    (creds / "credentials.json").write_text("{}")
+    token = tmp_path / "a@x.com" / "token.bin"
+    token.parent.mkdir(parents=True)
+    token.write_bytes(b"LLTK\x01\x01wrapped")
     monkeypatch.setattr(account.paths, "REPO_ROOT", tmp_path)
-    account.register_account("a@x.com", "A", "N", "a@x.com/.gmail-mcp")
+    account.register_account("a@x.com", "A", "N", token_file="a@x.com/token.bin")
 
     assert account.delete_account("a@x.com") is True
     assert account.all_accounts() == []
-    assert not creds.exists()                        # refresh token not left behind
+    assert not token.exists()                        # wrapped token not left behind
     assert account.delete_account("a@x.com") is False
 
 
 def test_delete_account_never_removes_shared_box_paths(tmp_path, monkeypatch):
-    """The seeded owner points at the top-level .gmail-mcp and state/, which
-    belong to the box. Deleting that entry must drop the row and nothing else."""
+    """The seeded owner points at the box's own state/, which outlives any one
+    entry. Deleting that entry must drop the row and nothing else."""
     _use_store(tmp_path, monkeypatch)
     monkeypatch.setattr(account.paths, "REPO_ROOT", tmp_path)
-    shared_creds = tmp_path / ".gmail-mcp"
-    shared_creds.mkdir()
     shared_state = tmp_path / "state" / "state.json"
     shared_state.parent.mkdir()
     shared_state.write_text("{}")
-    account.register_account("owner@x.com", "O", "W", ".gmail-mcp",
+    account.register_account("owner@x.com", "O", "W",
                              telegram_chat_id="c", state_file="state/state.json")
 
     assert account.delete_account("owner@x.com") is True
-    assert shared_creds.exists() and shared_state.exists()
+    assert shared_state.exists()
 
 
 def test_register_account_without_chat_has_no_notification_target(tmp_path, monkeypatch):
@@ -97,8 +95,7 @@ def test_register_account_without_chat_has_no_notification_target(tmp_path, monk
     signup's draft notifications to the box owner's chat."""
     _use_store(tmp_path, monkeypatch)
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "owners-own-chat")
-    acct = account.register_account("bob@x.com", "Bob", "Fox",
-                                    "accounts/bob@x.com/.gmail-mcp")
+    acct = account.register_account("bob@x.com", "Bob", "Fox")
     assert acct.telegram is None
     assert account.account_for_email("bob@x.com").telegram is None
 
@@ -106,14 +103,14 @@ def test_register_account_without_chat_has_no_notification_target(tmp_path, monk
 def test_register_account_idempotent_preserves_plan_and_polar(tmp_path, monkeypatch):
     _use_store(tmp_path, monkeypatch)
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-1")
-    account.register_account("c@x.com", "Cara", "Poe", "accounts/c@x.com/.gmail-mcp")
+    account.register_account("c@x.com", "Cara", "Poe")
     account.set_plan_status("c@x.com", "active")
     data = json.loads((tmp_path / "accounts.json").read_text())
     data["accounts"][0]["polar_customer_id"] = "cus_123"
     (tmp_path / "accounts.json").write_text(json.dumps(data))
 
     # a second consent (re-onboard) must not wipe an active/paid state
-    account.register_account("c@x.com", "Cara", "Poe-Smith", "accounts/c@x.com/.gmail-mcp")
+    account.register_account("c@x.com", "Cara", "Poe-Smith")
     data = json.loads((tmp_path / "accounts.json").read_text())
     assert len(data["accounts"]) == 1
     entry = data["accounts"][0]
@@ -122,29 +119,22 @@ def test_register_account_idempotent_preserves_plan_and_polar(tmp_path, monkeypa
     assert entry["identity"]["last"] == "Poe-Smith"
 
 
-def _fake_node(monkeypatch, result):
-    payload = json.dumps(result).encode()
-
-    def fake_run(cmd, **kw):
-        class R:
-            returncode = 0
-            stdout = payload
-            stderr = b""
-        return R()
-    monkeypatch.setattr(watch_renew.subprocess, "run", fake_run)
+def _fake_watch(monkeypatch, result):
+    monkeypatch.setattr(watch_renew.gmail_api, "register_watch",
+                        lambda acct, topic: result)
 
 
 def _one_account(tmp_path, monkeypatch):
     _use_store(tmp_path, monkeypatch)
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-1")
-    acct = account.register_account("d@x.com", "Dee", "Ray", "accounts/d@x.com/.gmail-mcp")
+    acct = account.register_account("d@x.com", "Dee", "Ray")
     (tmp_path / "d@x.com").mkdir(parents=True, exist_ok=True)  # state file parent
     return acct
 
 
 def test_renew_sets_cursor_on_first_registration(tmp_path, monkeypatch):
     acct = _one_account(tmp_path, monkeypatch)
-    _fake_node(monkeypatch, {"historyId": "1000", "expiration": "1700000000000"})
+    _fake_watch(monkeypatch, {"historyId": "1000", "expiration": "1700000000000"})
     watch_renew.renew_account(acct, log=lambda m: None)
     s = acct.state.load()
     assert s["lastHistoryId"] == "1000"
@@ -154,7 +144,7 @@ def test_renew_sets_cursor_on_first_registration(tmp_path, monkeypatch):
 def test_renew_does_not_rewind_existing_cursor(tmp_path, monkeypatch):
     acct = _one_account(tmp_path, monkeypatch)
     acct.state.update(lastHistoryId="5000", watchExpiration="1")
-    _fake_node(monkeypatch, {"historyId": "1000", "expiration": "1700000000000"})
+    _fake_watch(monkeypatch, {"historyId": "1000", "expiration": "1700000000000"})
     watch_renew.renew_account(acct, log=lambda m: None)
     s = acct.state.load()
     assert s["lastHistoryId"] == "5000"                 # cursor untouched
@@ -185,9 +175,10 @@ def test_callback_happy_path_provisions_and_lands_in_the_app(monkeypatch):
     class Acct:
         id = "e@x.com"
 
-    def fake_provision(code, redirect_uri):
+    def fake_provision(code, redirect_uri, state):
         seen["code"] = code
         seen["redirect"] = redirect_uri
+        seen["state"] = state
         return Acct()
 
     monkeypatch.setattr(ob, "provision", fake_provision)
@@ -211,3 +202,153 @@ def test_checkout_redirect_uses_sandbox_url_when_toggled(monkeypatch):
     monkeypatch.setenv("POLAR_CHECKOUT_URL_SANDBOX", "https://sandbox.polar.sh/dev")
     loc = ob.checkout_redirect("z@x.com")
     assert loc == "https://sandbox.polar.sh/dev?customer_email=z%40x.com"
+
+
+# --- the Python OAuth path (Track I5) -------------------------------------
+#
+# The exchange moved out of Node because Google binds the refresh token to the
+# co-signer's DPoP key at that one request. What is pinned here is that the
+# binding is actually asked for, that the PKCE verifier survives the redirect
+# without being stored anywhere, and that a signup ends with a wrapped token and
+# an account rather than either one alone.
+
+import base64
+import hashlib
+import json as _json
+from urllib.parse import parse_qs, urlparse
+
+from backend.custody import client as cosigner
+from backend.custody import tokens
+from backend.custody import wrapping
+from backend.integrations.gmail_gcal import gmail_api, oauth_app
+
+
+@pytest.fixture
+def consent(tmp_path, monkeypatch):
+    """A box that can run a consent: dev app secret, throwaway OAuth app keys,
+    an empty store, and a co-signer that wraps and signs without ever being
+    handed a token."""
+    monkeypatch.setenv(wrapping.DEV_SECRET_ENV, "dev-secret-for-tests-0123456789")
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    monkeypatch.setattr(wrapping, "_app_secret_cache", None)
+    keys = tmp_path / "gcp-oauth.keys.json"
+    keys.write_text(_json.dumps(
+        {"web": {"client_id": "cid", "client_secret": "csecret"}}))
+    monkeypatch.setenv(oauth_app.KEYS_ENV, str(keys))
+    monkeypatch.setattr(account, "ACCOUNTS_DIR", tmp_path / "database")
+    monkeypatch.setattr(account, "MANIFEST", tmp_path / "database" / "accounts.json")
+    monkeypatch.setattr(cosigner, "dpop_jwk",
+                        lambda: {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def"})
+    monkeypatch.setattr(cosigner, "sign_dpop",
+                        lambda htm, htu, nonce=None: f"proof.{htm}.{nonce or ''}")
+    monkeypatch.setattr(cosigner, "wrap", lambda uid, inner: b"outer:" + bytes(inner))
+    tokens.forget()
+    yield tmp_path
+    monkeypatch.setattr(wrapping, "_app_secret_cache", None)
+    tokens.forget()
+
+
+def test_auth_url_asks_google_to_bind_the_cosigners_key(consent):
+    url = ob.build_auth_url("state-123", REDIRECT)
+    params = parse_qs(urlparse(url).query)
+    assert params["dpop_jkt"] == [cosigner.dpop_jkt()], (
+        "without dpop_jkt Google issues an unbound refresh token, which is "
+        "usable by anyone who ever holds it"
+    )
+    assert params["code_challenge_method"] == ["S256"]
+    assert params["access_type"] == ["offline"] and params["prompt"] == ["consent"]
+    assert params["redirect_uri"] == [REDIRECT]
+
+
+def test_the_pkce_verifier_is_derived_not_stored(consent):
+    """It has to survive a redirect through Google. Deriving it from the
+    enclave's own secret means the exchange reproduces it exactly and a restart
+    between the two halves of a sign-in does not strand the user."""
+    url = ob.build_auth_url("state-123", REDIRECT)
+    challenge = parse_qs(urlparse(url).query)["code_challenge"][0]
+    verifier = ob.pkce_verifier("state-123")
+    digest = hashlib.sha256(verifier.encode()).digest()
+    assert challenge == base64.urlsafe_b64encode(digest).decode().rstrip("=")
+    assert ob.pkce_verifier("a-different-state") != verifier
+
+
+def _google_says(monkeypatch, payload, status=200):
+    class R:
+        status_code = status
+        headers = {}
+        text = _json.dumps(payload)
+
+        def json(self):
+            return payload
+    monkeypatch.setattr(tokens.requests, "post", lambda *a, **k: R())
+
+
+def test_provision_takes_custody_and_registers_the_account(consent, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+    _google_says(monkeypatch, {
+        "access_token": "ya29.x",
+        "refresh_token": "1//0gRefreshValue",
+        "expires_in": 3600,
+        "id_token": ".".join([
+            "hdr",
+            base64.urlsafe_b64encode(
+                _json.dumps({"given_name": "Dana", "family_name": "Reed"}).encode()
+            ).decode().rstrip("="),
+            "sig",
+        ]),
+    })
+    monkeypatch.setattr(gmail_api, "profile_address", lambda token: "dana@example.com")
+    monkeypatch.setattr(ob.watch_renew, "renew_account", lambda acct, log=None: None)
+
+    acct = ob.provision("the-code", REDIRECT, "state-123")
+
+    assert acct.id == "dana@example.com" and acct.plan_status == "inactive"
+    assert acct.identity.first == "Dana" and acct.identity.last == "Reed"
+    token_blob = tokens.token_path("dana@example.com").read_bytes()
+    assert b"1//0gRefreshValue" not in token_blob, "the refresh token was stored readable"
+    assert token_blob.startswith(tokens.RECORD_MAGIC)
+
+
+def test_a_refused_signup_does_not_leave_a_token_behind(consent, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+    _google_says(monkeypatch, {
+        "access_token": "ya29.x", "refresh_token": "1//0gRefreshValue",
+        "expires_in": 3600,
+    })
+    monkeypatch.setattr(gmail_api, "profile_address", lambda token: "late@example.com")
+    monkeypatch.setattr(account, "MAX_ACCOUNTS", 0)
+
+    with pytest.raises(ob.ProvisionError) as ei:
+        ob.provision("the-code", REDIRECT, "state-123")
+    assert ei.value.code == 503
+    assert not tokens.has_custody("late@example.com"), (
+        "a token we cannot use was left on disk"
+    )
+
+
+def test_a_consent_without_a_refresh_token_is_refused(consent, monkeypatch):
+    _google_says(monkeypatch, {"access_token": "ya29.x", "expires_in": 3600})
+    with pytest.raises(ob.ProvisionError) as ei:
+        ob.exchange_code("the-code", REDIRECT, "state-123")
+    assert ei.value.code == 502
+
+
+def test_provision_fails_closed_when_the_cosigner_is_down(consent, monkeypatch):
+    _google_says(monkeypatch, {
+        "access_token": "ya29.x", "refresh_token": "1//0gRefreshValue",
+        "expires_in": 3600,
+    })
+    monkeypatch.setattr(gmail_api, "profile_address", lambda token: "x@example.com")
+
+    def refuse(uid, inner):
+        raise cosigner.CoSignerUnavailable("connection refused")
+
+    monkeypatch.setattr(cosigner, "wrap", refuse)
+    with pytest.raises(ob.ProvisionError) as ei:
+        ob.provision("the-code", REDIRECT, "state-123")
+    assert ei.value.code == 503
+    assert account.MANIFEST.exists() is False, (
+        "an account was registered for a mailbox we cannot reach"
+    )

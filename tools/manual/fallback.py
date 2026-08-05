@@ -1,19 +1,15 @@
 """Re-run manual_draft on the failed bot email to verify thread fallback."""
 from dotenv import load_dotenv
 load_dotenv(".env")
-import json, subprocess, sys
-from pathlib import Path
+import json
 
 from backend.accounts import account
 from backend.drafting import manual_draft
+from backend.integrations.gmail_gcal import mailbox
 
 acct = account.owner_account()
 email_id = "19f198a5b20434e0"
-result = subprocess.run(
-    ["node", "fetch_emails.mjs", "--since-history", "2854017"],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
-)
-data = json.loads(result.stdout)
+data = mailbox.fetch_since_history(acct, "2854017")
 target = next(e for e in data["emails"] if e["id"] == email_id)
 print("Target email:")
 print(f"  from={target['from']}")

@@ -37,21 +37,23 @@
       ]
     }
   ],
-  "node_calls": [
+  "gmail_calls": [
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "nadia.fowler@acme.io",
-        "subject": "Re: Access details",
-        "body": "Hi Nadia,\n\nGot it, thanks.\n\nBest,\nMorgan",
-        "threadId": "tp",
-        "inReplyTo": "<msg-p1@mail>",
-        "references": "<msg-p1@mail>",
-        "originalFrom": "Nadia Fowler <nadia.fowler@acme.io>",
-        "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
-        "originalBody": "Hi Morgan, my number is 415-555-0199 and the key is sk-ant-abcd1234efgh5678ijklmnop. Reach Priya Sharma too. Thanks, Nadia Fowler"
-      }
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "nadia.fowler@acme.io",
+          "subject": "Re: Access details",
+          "body": "Hi Nadia,\n\nGot it, thanks.\n\nBest,\nMorgan",
+          "threadId": "tp",
+          "inReplyTo": "<msg-p1@mail>",
+          "references": "<msg-p1@mail>",
+          "originalFrom": "Nadia Fowler <nadia.fowler@acme.io>",
+          "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
+          "originalBody": "Hi Morgan, my number is 415-555-0199 and the key is sk-ant-abcd1234efgh5678ijklmnop. Reach Priya Sharma too. Thanks, Nadia Fowler"
+        }
+      ]
     }
   ],
   "telegram": [

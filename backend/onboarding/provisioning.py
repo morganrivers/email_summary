@@ -7,6 +7,13 @@ registration. Two implementations of the path that takes custody of a user's
 Gmail refresh token is the last place duplication belongs, so the standalone
 server was retired and its logic moved here for the web app to import.
 
+The code exchange is in Python rather than shelled out to Node because Google
+binds a refresh token to a DPoP key at the exchange and nowhere else. The proof
+has to be attached to that one request, and the key it is signed with lives on
+the co-signer, so the exchange has to sit next to backend.custody. Nothing about
+the token touches disk on the way through: exchange_code() returns it in memory
+and tokens.take_custody() seals it before it is stored.
+
 The redirect URI is a parameter rather than a module constant: it is whatever
 the calling server registered with Google, and it must match byte for byte on
 both the auth-url and the exchange.
@@ -15,20 +22,25 @@ handle_callback() is the whole decision path for an OAuth callback, kept free of
 HTTP plumbing so it can be tested directly.
 """
 
+import base64
+import hashlib
 import json
-import shutil
-import subprocess
 import sys
-import tempfile
 from hmac import compare_digest
-from pathlib import Path
+from urllib.parse import urlencode
+
+import requests
 
 from backend import paths
 from backend.accounts import account
 from backend.billing import billing
+from backend.custody import client as cosigner
+from backend.custody import tokens
+from backend.custody import wrapping
+from backend.integrations.gmail_gcal import gmail_api, oauth_app
 from backend.onboarding import watch_renew
 
-OAUTH_HELPER = paths.node_script("oauth_helper.mjs")
+HTTP_TIMEOUT = 30
 
 
 def log(msg):
@@ -46,71 +58,158 @@ class ProvisionError(Exception):
         self.msg = msg
 
 
-def run_helper(args):
-    """Run oauth_helper.mjs, returning its stdout. A non-zero exit surfaces as
-    502: the failure is Google's or the helper's, not a bug in the request."""
-    result = subprocess.run(
-        ["node", str(OAUTH_HELPER), *args],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
-    )
-    if result.returncode != 0:
-        raise ProvisionError(
-            502, f"oauth_helper {args[0]} failed: {result.stderr.decode().strip()}"
-        )
-    return result.stdout.decode()
+def _b64u(raw):
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def pkce_verifier(state):
+    """The PKCE verifier for one consent, derived rather than stored.
+
+    It has to survive a redirect through Google and come back usable at the
+    exchange, and the alternative -- a server-side map from state to verifier --
+    is a second piece of mutable state on the sign-in path that can be lost by a
+    restart or a second web worker. Deriving it from the enclave's own KMS
+    secret keyed by the state value means the exchange reproduces it exactly,
+    and nobody without that secret can. The state value is already the CSRF
+    token and is compared against the cookie before this is ever called."""
+    assert state, "pkce_verifier needs the consent's state value"
+    return _b64u(wrapping.derive(state.encode(), b"oauth-pkce"))
+
+
+def _challenge(verifier):
+    return _b64u(hashlib.sha256(verifier.encode()).digest())
 
 
 def build_auth_url(state, redirect_uri):
-    return run_helper(
-        ["auth-url", "--state", state, "--redirect", redirect_uri]
-    ).strip()
+    """The Google consent URL. `dpop_jkt` names the co-signer's public key, which
+    is what Google will bind the issued refresh token to; without it the token
+    would be usable by anyone who ever holds it, which is the property this
+    design removes."""
+    assert state and redirect_uri, "build_auth_url needs a state and a redirect"
+    client_id, _ = oauth_app.load_keys()
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": oauth_app.scope_param(),
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true",
+        "state": state,
+        "code_challenge": _challenge(pkce_verifier(state)),
+        "code_challenge_method": "S256",
+        "dpop_jkt": cosigner.dpop_jkt(),
+    }
+    return f"{oauth_app.AUTH_ENDPOINT}?{urlencode(params)}"
 
 
-def exchange_code(code, redirect_uri, creds_dir):
-    return json.loads(run_helper([
-        "exchange", "--code", code, "--redirect", redirect_uri,
-        "--creds-dir", str(creds_dir),
-    ]))
+def _id_token_claims(id_token):
+    """Claims out of the id_token without verifying its signature. It arrived in
+    the body of a TLS response from Google's token endpoint, in answer to a code
+    only we hold, so the signature adds nothing here; it would matter if this
+    token had been handed to us by the user."""
+    if not id_token:
+        return {}
+    parts = id_token.split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    raw = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+    return json.loads(raw)
 
 
-CREDS_FILE = "credentials.json"
+def split_name(claims, email):
+    first = (claims.get("given_name") or "").strip()
+    last = (claims.get("family_name") or "").strip()
+    if not first and claims.get("name"):
+        parts = claims["name"].strip().split()
+        first = parts[0] if parts else ""
+        last = last or " ".join(parts[1:])
+    if not first:
+        first = email.split("@")[0] or "User"
+    # UserIdentity requires a non-empty last name; fall back to the first name
+    # so masking still tags the owner rather than failing onboarding.
+    if not last:
+        last = first
+    return first, last
 
 
-def provision(code, redirect_uri):
-    """Exchange the code and stand up the account: write the per-user creds dir,
-    register the account (inactive), and register its Gmail watch.
+def exchange_code(code, redirect_uri, state):
+    """Trade the one-time code for tokens and the user's identity.
 
-    The creds land in a staging directory first because the owning email is only
-    known after the exchange; they are then moved under the final per-user path
-    recorded in the manifest. Only the refresh token is per user: the OAuth app
-    keys stay in one place (gmail_lib.OAUTH_KEYS_PATH)."""
-    account.secure_dir(account.ACCOUNTS_DIR)
-    staging = Path(tempfile.mkdtemp(dir=account.ACCOUNTS_DIR, prefix=".staging-"))
+    Returns {email, first, last, refresh_token}. The refresh token is in memory
+    only: this function must never write it, and its only caller hands it
+    straight to tokens.take_custody()."""
+    assert code and redirect_uri and state, "exchange_code needs code, redirect, state"
+    client_id, client_secret = oauth_app.load_keys()
+    htm, htu = "POST", oauth_app.TOKEN_ENDPOINT
     try:
-        profile = exchange_code(code, redirect_uri, staging)
-        email = profile["email"]
-        assert email and "/" not in email and "\\" not in email and ".." not in email, (
-            f"refusing to build a creds path from {email!r}"
+        payload = tokens.exchange_with_dpop(
+            {
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+                "code_verifier": pkce_verifier(state),
+            },
+            sign=lambda nonce: cosigner.sign_dpop(htm, htu, nonce),
         )
-        creds_abs = account.ACCOUNTS_DIR / email / ".gmail-mcp"
-        creds_rel = creds_abs.relative_to(paths.REPO_ROOT)
-        account.secure_dir(creds_abs.parent)
-        account.secure_dir(creds_abs)
-        target = creds_abs / CREDS_FILE
-        shutil.move(str(staging / CREDS_FILE), str(target))
-        target.chmod(0o600)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
+    except wrapping.CustodyError as err:
+        raise ProvisionError(502, f"code exchange failed: {err}") from err
+    refresh_token = payload.get("refresh_token")
+    if not refresh_token:
+        raise ProvisionError(
+            502, "Google returned no refresh_token (prior grant without prompt=consent?)"
+        )
+    access_token = payload.get("access_token")
+    if not access_token:
+        raise ProvisionError(502, "Google returned no access_token")
+    try:
+        email = gmail_api.profile_address(access_token)
+    except requests.RequestException as err:
+        raise ProvisionError(502, f"could not read the mailbox address: {err}") from err
+    first, last = split_name(_id_token_claims(payload.get("id_token")), email)
+    return {"email": email, "first": first, "last": last,
+            "refresh_token": refresh_token}
+
+
+def provision(code, redirect_uri, state):
+    """Exchange the code and stand up the account: take custody of the refresh
+    token, register the account (inactive), and register its Gmail watch.
+
+    There is no staging directory any more. It existed because the owning email
+    was unknown before the exchange and the credentials file had to land
+    somewhere first; nothing is written before the identity is known now, so the
+    move-into-place dance is gone with it."""
+    profile = exchange_code(code, redirect_uri, state)
+    email = profile["email"]
+    assert email and "/" not in email and "\\" not in email and ".." not in email, (
+        f"refusing to build a token path from {email!r}"
+    )
+    account.secure_dir(account.ACCOUNTS_DIR)
+    try:
+        token_file = tokens.take_custody(email, profile["refresh_token"])
+    except wrapping.CustodyError as err:
+        # Fail closed: without the co-signer there is no way to store a token
+        # that both boxes are needed to open, and storing one any other way is
+        # the arrangement this design exists to avoid.
+        raise ProvisionError(503, f"custody unavailable: {err}") from err
     try:
         acct = account.register_account(
-            email, profile["first"], profile["last"], str(creds_rel)
+            email, profile["first"], profile["last"],
+            token_file=paths.relative_if_inside(token_file),
         )
     except account.AccountLimitReached as err:
         # The token we just took custody of is unusable now, so it does not stay
         # on disk. Refusing after the exchange is the only place we can refuse:
         # the identity is not known before it.
-        shutil.rmtree(creds_abs.parent, ignore_errors=True)
+        tokens.discard(email)
         raise ProvisionError(503, f"signup refused: {err}") from err
+    # A re-consent replaces the custody this account's credentials derive from,
+    # so anything cached against the old one has to go with it.
+    tokens.forget(email)
+    gmail_api.forget_services(email)
     watch_renew.renew_account(acct, log=log)
     log(f"provisioned account {acct.id}")
     return acct
@@ -137,5 +236,5 @@ def handle_callback(query, cookie_state, redirect_uri, fallback="/dashboard"):
         raise ProvisionError(400, "missing code or state")
     if not cookie_state or not compare_digest(state, cookie_state):
         raise ProvisionError(403, "state mismatch (possible CSRF)")
-    acct = provision(code, redirect_uri)
+    acct = provision(code, redirect_uri, state)
     return acct, fallback

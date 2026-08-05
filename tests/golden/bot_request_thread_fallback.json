@@ -18,70 +18,77 @@
       ]
     }
   ],
-  "node_calls": [
+  "gmail_calls": [
     {
-      "script": "get_thread.mjs",
+      "op": "get_thread",
+      "account": "default",
       "args": [
-        "--thread-id",
         "t8"
-      ],
-      "stdin": null
+      ]
     },
     {
-      "script": "find_thread.mjs",
+      "op": "find_thread_by_from_subject",
+      "account": "default",
       "args": [
-        "--from",
         "carol@contoso.com",
-        "--subject",
         "Budget"
+      ]
+    },
+    {
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "carol@contoso.com",
+          "subject": "Re: Budget",
+          "body": "⏳ Drafting your reply, please wait...\n\nThe AI is thinking. This draft will be overwritten as work progresses.",
+          "threadId": "t8",
+          "inReplyTo": "<mid-t8@mail>",
+          "references": "<mid-t8@mail>",
+          "originalFrom": "Carol Clark <carol@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 07:00:00 +0000",
+          "originalBody": "Hi Morgan, thoughts on the budget?"
+        }
+      ]
+    },
+    {
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "carol@contoso.com",
+          "subject": "Re: Budget",
+          "body": "⏳ Finalizing reply (iteration 1)...\n\nModel's current output:\nHi Carol,\n\nThe budget looks good to me.\n\nBest,\nMorgan\n\n(This draft will be replaced when the final reply is ready.)",
+          "threadId": "t8",
+          "inReplyTo": "<mid-t8@mail>",
+          "references": "<mid-t8@mail>",
+          "originalFrom": "Carol Clark <carol@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 07:00:00 +0000",
+          "originalBody": "Hi Morgan, thoughts on the budget?"
+        }
       ],
-      "stdin": null
-    },
-    {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "carol@contoso.com",
-        "subject": "Re: Budget",
-        "body": "⏳ Drafting your reply, please wait...\n\nThe AI is thinking. This draft will be overwritten as work progresses.",
-        "threadId": "t8",
-        "inReplyTo": "<mid-t8@mail>",
-        "references": "<mid-t8@mail>",
-        "originalFrom": "Carol Clark <carol@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 07:00:00 +0000",
-        "originalBody": "Hi Morgan, thoughts on the budget?"
+      "kwargs": {
+        "draft_id": "draft-6"
       }
     },
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "carol@contoso.com",
-        "subject": "Re: Budget",
-        "body": "⏳ Finalizing reply (iteration 1)...\n\nModel's current output:\nHi Carol,\n\nThe budget looks good to me.\n\nBest,\nMorgan\n\n(This draft will be replaced when the final reply is ready.)",
-        "threadId": "t8",
-        "inReplyTo": "<mid-t8@mail>",
-        "references": "<mid-t8@mail>",
-        "originalFrom": "Carol Clark <carol@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 07:00:00 +0000",
-        "originalBody": "Hi Morgan, thoughts on the budget?",
-        "draftId": "draft-6"
-      }
-    },
-    {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "carol@contoso.com",
-        "subject": "Re: Budget",
-        "body": "Hi Carol,\n\nThe budget looks good to me.\n\nBest,\nMorgan",
-        "threadId": "t8",
-        "inReplyTo": "<mid-t8@mail>",
-        "references": "<mid-t8@mail>",
-        "originalFrom": "Carol Clark <carol@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 07:00:00 +0000",
-        "originalBody": "Hi Morgan, thoughts on the budget?",
-        "draftId": "draft-6"
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "carol@contoso.com",
+          "subject": "Re: Budget",
+          "body": "Hi Carol,\n\nThe budget looks good to me.\n\nBest,\nMorgan",
+          "threadId": "t8",
+          "inReplyTo": "<mid-t8@mail>",
+          "references": "<mid-t8@mail>",
+          "originalFrom": "Carol Clark <carol@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 07:00:00 +0000",
+          "originalBody": "Hi Morgan, thoughts on the budget?"
+        }
+      ],
+      "kwargs": {
+        "draft_id": "draft-6"
       }
     }
   ],

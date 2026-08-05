@@ -46,7 +46,7 @@ def test_draft_with_a_dash_is_kept_when_the_profile_allows_dashes(wire, monkeypa
                         '"reason": "Personal"}]}'},
             {"content": dash_body},
         ],
-        node_outputs={"create_draft.mjs": {"draftId": "draft-1"}},
+        gmail_outputs={"submit": "draft-1"},
     )
     drafted = draft_replies.process_emails(wire.account, [_auto_email()])
     assert len(drafted) == 1, "a dashed draft was rejected by a rule the profile does not state"

@@ -1,81 +1,67 @@
 """Executors for tools the agentic drafter can call.
 
-Each function takes a single dict (the tool's arguments as parsed JSON),
-shells out to the corresponding node helper, and returns a Python value.
-Errors return error dicts rather than raising so the model can recover.
+Each function takes the tool's arguments as a parsed dict plus the account whose
+mailbox the call belongs to, and returns a Python value. Errors come back as
+error dicts rather than raising, so a failed lookup is something the model can
+read and recover from instead of losing the whole draft.
+
+The account is the argument that used to be a credentials directory handed to a
+Node subprocess. It is passed in rather than looked up: the drafter is already
+holding it, and a tool that could resolve its own account would be a tool that
+could reach a mailbox nobody asked it to.
 """
 
-import json
-import subprocess
-
-from backend import paths
-from backend.integrations.gmail_gcal.node_runner import node_env
-
-SEARCH_GMAIL = paths.node_script("search_gmail.mjs")
-LIST_CALENDAR = paths.node_script("list_calendar.mjs")
-GET_THREAD = paths.node_script("get_thread.mjs")
-
-NODE_TIMEOUT = 60
+from backend.integrations.gmail_gcal import calendar_api, gmail_api
 
 
-def _run_node(script, args, creds_dir=None):
-    cmd = ["node", str(script)] + args
+def _guard(call):
+    """Run one Google call, turning a failure into the error dict the model
+    sees. What surfaces is the exception's own text, which names the API and the
+    request; a token never appears in one."""
     try:
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=NODE_TIMEOUT, env=node_env(creds_dir),
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": f"{script.name} timed out after {NODE_TIMEOUT}s"}
-    if result.returncode != 0:
-        return {"error": result.stderr.decode("utf-8", errors="replace").strip()}
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        return {"error": f"{script.name} returned invalid JSON: {e}"}
+        return call()
+    except Exception as err:
+        return {"error": f"{type(err).__name__}: {err}"}
 
 
-def run_search(query, max_results, creds_dir=None):
-    """Sole subprocess boundary to search_gmail.mjs: a list of messages, or an
-    error dict. The tool-facing cap lives in search_emails rather than here,
-    because it is a property of the tool (the drafter must not pull an unbounded
-    number of messages into a prompt) and not of the search. Voice synthesis
-    reads a wider sample of the user's own sent mail through this same seam."""
+def run_search(query, max_results, account):
+    """Sole boundary to Gmail search: a list of messages, or an error dict. The
+    tool-facing cap lives in search_emails rather than here, because it is a
+    property of the tool (the drafter must not pull an unbounded number of
+    messages into a prompt) and not of the search. Voice synthesis reads a wider
+    sample of the user's own sent mail through this same seam."""
     assert query, "run_search needs a query"
     assert max_results > 0, f"max_results must be positive, got {max_results}"
-    return _run_node(SEARCH_GMAIL, ["--query", query, "--max", str(max_results)], creds_dir)
+    return _guard(lambda: gmail_api.search_messages(account, query, max_results))
 
 
-def search_emails(args, creds_dir=None):
+def search_emails(args, account):
     query = args.get("query")
     if not query:
         return {"error": "query is required"}
     max_results = min(int(args.get("max_results", 5)), 10)
-    out = run_search(query, max_results, creds_dir)
+    out = run_search(query, max_results, account)
     if isinstance(out, dict) and "error" in out:
         return out
     return {"results": out, "count": len(out)}
 
 
-def get_calendar_events(args, creds_dir=None):
+def get_calendar_events(args, account):
     start_iso = args.get("start_iso")
     end_iso = args.get("end_iso")
     if not start_iso or not end_iso:
         return {"error": "start_iso and end_iso are required (ISO 8601)"}
-    out = _run_node(LIST_CALENDAR, ["--start", start_iso, "--end", end_iso], creds_dir)
+    out = _guard(lambda: calendar_api.list_events(account, start_iso, end_iso, 50))
     if isinstance(out, dict) and "error" in out:
         return out
     return {"events": out, "count": len(out)}
 
 
-def get_email_thread(args, creds_dir=None):
+def get_email_thread(args, account):
     thread_id = args.get("thread_id")
     if not thread_id:
         return {"error": "thread_id is required"}
-    out = _run_node(GET_THREAD, ["--thread-id", thread_id], creds_dir)
-    if isinstance(out, dict) and "error" in out:
-        return out
-    return out
+    return _guard(lambda: gmail_api.get_thread(account, thread_id))
 
 
 TOOL_REGISTRY = {

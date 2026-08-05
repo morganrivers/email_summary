@@ -63,7 +63,6 @@ EXCLUDES=(
     --exclude='database/'
     --exclude='config/'
     --exclude='venv/'
-    --exclude='node_modules/'
 )
 
 SYNC_LOG="$(mktemp)"
@@ -120,18 +119,15 @@ fi
 
 # Dependencies before restarts: a unit that gained an import this push must find
 # it installed, or the preflight below will (correctly) refuse to start it. The
-# spaCy model is a separate one-time install, see requirements.txt.
+# spaCy model is a separate one-time install, see requirements.txt. There is no
+# npm branch any more: Gmail and Calendar are called from Python, so the box
+# runs one language and one dependency tree.
 if synced 'requirements.txt'; then
     echo "==> requirements.txt changed; installing Python deps"
     # `python -m pip`, not `venv/bin/pip`: the latter depends on a shebang that
     # holds the venv's absolute path, which a relocated venv invalidates.
     remote "cd $REMOTE_DIR && venv/bin/python -m pip install --quiet -r requirements.txt"
 fi
-if synced 'package-lock.json' || synced 'package.json'; then
-    echo "==> package manifest changed; installing Node deps"
-    remote "cd $REMOTE_DIR && npm install --omit=dev --no-fund --no-audit"
-fi
-
 # Services worth restarting are exactly the long-running units (an [Install]
 # section); oneshots are driven by their timers. Both lists come from the unit
 # files so adding a unit to deploy/hetzner is all it takes to deploy it.

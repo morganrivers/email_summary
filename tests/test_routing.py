@@ -68,7 +68,6 @@ def test_seeded_owner_is_row_one_and_survives_a_later_signup(tmp_path, monkeypat
 
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
-    monkeypatch.setenv("GMAIL_MCP_DIR", str(tmp_path / ".gmail-mcp"))
     monkeypatch.setattr(account, "ACCOUNTS_DIR", tmp_path)
     monkeypatch.setattr(account, "MANIFEST", tmp_path / "accounts.json")
 
@@ -78,7 +77,7 @@ def test_seeded_owner_is_row_one_and_survives_a_later_signup(tmp_path, monkeypat
     assert account.get_account("danielmorganrivers@gmail.com").id == owner.id
 
     account.register_account("stranger@x.com", "Stranger", "Danger",
-                             tmp_path / "creds", telegram_chat_id="999")
+                             telegram_chat_id="999")
     assert [a.id for a in account.load_accounts()] == [owner.id]      # signup is inactive
     assert account.get_account("danielmorganrivers@gmail.com") is not None
 

@@ -257,7 +257,7 @@ def suitable(text):
 
 def collect_samples(acct):
     """Recent sent mail worth learning from, newest first."""
-    found = tool_executors.run_search(SENT_QUERY, CANDIDATES, acct.creds_dir)
+    found = tool_executors.run_search(SENT_QUERY, CANDIDATES, acct)
     if isinstance(found, dict) and "error" in found:
         raise VoiceError(f"Could not read your sent mail: {found['error']}")
     assert isinstance(found, list), (

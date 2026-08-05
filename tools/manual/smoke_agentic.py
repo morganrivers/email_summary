@@ -40,7 +40,7 @@ user_prompt = (
 
 client = agentic_drafter.make_client(acct)
 print("--- Calling agentic_drafter.draft ---", flush=True)
-body, url = agentic_drafter.draft(client, sys_prompt, user_prompt)
+body, url = agentic_drafter.draft(client, sys_prompt, user_prompt, account=acct)
 print("\n=== DRAFT BODY ===")
 print(body)
 print("\n=== RUN URL ===")

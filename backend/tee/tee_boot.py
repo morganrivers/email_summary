@@ -47,7 +47,10 @@ REQUIRED_SECRETS = (
 ATTEST_DIR = Path(os.environ.get("TEE_ATTEST_DIR", "/app/attestation"))
 
 
-def _tee_required() -> bool:
+def tee_required() -> bool:
+    """Whether this box claims to be an attested enclave. Public because the
+    custody layer asks the same question before it accepts a dev key: one
+    definition of "we are supposed to be in a TEE", not two."""
     return os.environ.get("TEE_REQUIRED", "").strip() in ("1", "true", "yes")
 
 
@@ -90,7 +93,7 @@ def _assert_expected_measurement(info: dict) -> None:
 def run_gate() -> int:
     client = DstackClient()
 
-    if not _tee_required():
+    if not tee_required():
         if client.available():
             print("[tee_boot] dstack socket present; TEE_REQUIRED unset, skipping gate.")
         else:

@@ -73,95 +73,104 @@
       ]
     }
   ],
-  "node_calls": [
+  "gmail_calls": [
     {
-      "script": "fetch_emails.mjs",
+      "op": "fetch_since_history",
+      "account": "default",
       "args": [
-        "--since-history",
         "100"
-      ],
-      "stdin": null
+      ]
     },
     {
-      "script": "find_thread.mjs",
+      "op": "find_thread_by_from_subject",
+      "account": "default",
       "args": [
-        "--from",
         "bob@contoso.com",
-        "--subject",
         "Project sync"
+      ]
+    },
+    {
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "bob@contoso.com",
+          "subject": "Re: Project sync",
+          "body": "⏳ Drafting your reply, please wait...\n\nThe AI is thinking. This draft will be overwritten as work progresses.",
+          "threadId": "t9",
+          "inReplyTo": "<mid-t9@mail>",
+          "references": "<mid-t9@mail>",
+          "originalFrom": "Bob Baker <bob@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+          "originalBody": "Hi Morgan, can we sync on the project this week?"
+        }
+      ]
+    },
+    {
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "bob@contoso.com",
+          "subject": "Re: Project sync",
+          "body": "⏳ Finalizing reply (iteration 1)...\n\nModel's current output:\nHi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan\n\n(This draft will be replaced when the final reply is ready.)",
+          "threadId": "t9",
+          "inReplyTo": "<mid-t9@mail>",
+          "references": "<mid-t9@mail>",
+          "originalFrom": "Bob Baker <bob@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+          "originalBody": "Hi Morgan, can we sync on the project this week?"
+        }
       ],
-      "stdin": null
-    },
-    {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "bob@contoso.com",
-        "subject": "Re: Project sync",
-        "body": "⏳ Drafting your reply, please wait...\n\nThe AI is thinking. This draft will be overwritten as work progresses.",
-        "threadId": "t9",
-        "inReplyTo": "<mid-t9@mail>",
-        "references": "<mid-t9@mail>",
-        "originalFrom": "Bob Baker <bob@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
-        "originalBody": "Hi Morgan, can we sync on the project this week?"
+      "kwargs": {
+        "draft_id": "draft-x"
       }
     },
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "bob@contoso.com",
-        "subject": "Re: Project sync",
-        "body": "⏳ Finalizing reply (iteration 1)...\n\nModel's current output:\nHi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan\n\n(This draft will be replaced when the final reply is ready.)",
-        "threadId": "t9",
-        "inReplyTo": "<mid-t9@mail>",
-        "references": "<mid-t9@mail>",
-        "originalFrom": "Bob Baker <bob@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
-        "originalBody": "Hi Morgan, can we sync on the project this week?",
-        "draftId": "draft-x"
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "bob@contoso.com",
+          "subject": "Re: Project sync",
+          "body": "Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan",
+          "threadId": "t9",
+          "inReplyTo": "<mid-t9@mail>",
+          "references": "<mid-t9@mail>",
+          "originalFrom": "Bob Baker <bob@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
+          "originalBody": "Hi Morgan, can we sync on the project this week?"
+        }
+      ],
+      "kwargs": {
+        "draft_id": "draft-x"
       }
     },
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "bob@contoso.com",
-        "subject": "Re: Project sync",
-        "body": "Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan",
-        "threadId": "t9",
-        "inReplyTo": "<mid-t9@mail>",
-        "references": "<mid-t9@mail>",
-        "originalFrom": "Bob Baker <bob@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 08:00:00 +0000",
-        "originalBody": "Hi Morgan, can we sync on the project this week?",
-        "draftId": "draft-x"
-      }
+      "op": "submit",
+      "account": "default",
+      "args": [
+        {
+          "to": "alice@contoso.com",
+          "subject": "Re: Lunch next week?",
+          "body": "Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\nMorgan",
+          "threadId": "t1",
+          "inReplyTo": "<msg-e1@mail>",
+          "references": "<msg-e1@mail>",
+          "originalFrom": "Alice Adams <alice@contoso.com>",
+          "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
+          "originalBody": "Hi Morgan, want to grab lunch next week? Best, Alice Adams"
+        }
+      ]
     },
     {
-      "script": "create_draft.mjs",
-      "args": [],
-      "stdin": {
-        "to": "alice@contoso.com",
-        "subject": "Re: Lunch next week?",
-        "body": "Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\nMorgan",
-        "threadId": "t1",
-        "inReplyTo": "<msg-e1@mail>",
-        "references": "<msg-e1@mail>",
-        "originalFrom": "Alice Adams <alice@contoso.com>",
-        "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
-        "originalBody": "Hi Morgan, want to grab lunch next week? Best, Alice Adams"
-      }
-    },
-    {
-      "script": "create_event.mjs",
-      "args": [],
-      "stdin": {
+      "op": "create_event",
+      "account": "default",
+      "kwargs": {
         "summary": "Meeting with Dave",
-        "startIso": "2026-07-21T15:00:00",
-        "endIso": "2026-07-21T16:00:00",
-        "timeZone": "Europe/Berlin",
+        "start_iso": "2026-07-21T15:00:00",
+        "end_iso": "2026-07-21T16:00:00",
+        "time_zone": "Europe/Berlin",
         "location": "",
         "description": ""
       }

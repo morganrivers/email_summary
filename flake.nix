@@ -48,13 +48,6 @@
 
       venv = pythonSet.mkVirtualEnv "email-bot-env" workspace.deps.default;
 
-      nodejs = pkgs.nodejs_20;
-
-      nodeModules = pkgs.importNpmLock.buildNodeModules {
-        npmRoot = ./.;
-        inherit nodejs;
-      };
-
       appCode = builtins.path {
         name = "email-bot-app";
         path = ./.;
@@ -67,10 +60,7 @@
             !(builtins.elem base [ "tests" "docs" "deploy" "database" ".git" "__pycache__" ])
           else
             (lib.hasSuffix ".py" base && !(lib.hasPrefix "test_" base))
-            || lib.hasSuffix ".mjs" base
-            || lib.hasSuffix ".css" base
-            || base == "package.json"
-            || base == "package-lock.json";
+            || lib.hasSuffix ".css" base;
       };
 
       crontab = pkgs.writeText "email-bot-crontab" ''
@@ -80,10 +70,9 @@
 
       entrypoint = pkgs.writeShellApplication {
         name = "email-bot-entrypoint";
-        runtimeInputs = [ venv nodejs pkgs.supercronic pkgs.coreutils ];
+        runtimeInputs = [ venv pkgs.supercronic pkgs.coreutils ];
         text = ''
           cd /app
-          export GMAIL_MCP_DIR=/app/.gmail-mcp
           mkdir -p /app/.gmail-mcp /app/database
           # Track F3 attest-before-run gate. Under TEE_REQUIRED it fails closed
           # (exit -> Restart=always retries) rather than touching mailboxes
@@ -116,7 +105,6 @@
           mkdir -p ./app
           cp -R ${appCode}/. ./app/
           cp ${crontab} ./app/crontab
-          ln -s ${nodeModules}/node_modules ./app/node_modules
           chmod -R u+w ./app
         '';
         config = {
@@ -127,11 +115,9 @@
             "8790/tcp" = { };
           };
           Env = [
-            "PATH=${venv}/bin:${nodejs}/bin:${pkgs.supercronic}/bin:${pkgs.coreutils}/bin:${pkgs.bashInteractive}/bin"
+            "PATH=${venv}/bin:${pkgs.supercronic}/bin:${pkgs.coreutils}/bin:${pkgs.bashInteractive}/bin"
             "SHELL=${pkgs.bashInteractive}/bin/bash"
             "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
-            "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-bundle.crt"
-            "GMAIL_MCP_DIR=/app/.gmail-mcp"
             "LANG=C.UTF-8"
             "TZ=UTC"
           ];
@@ -140,7 +126,7 @@
     in
     {
       packages.${system} = {
-        inherit image venv nodeModules;
+        inherit image venv;
         default = image;
       };
     };
