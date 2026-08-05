@@ -21,10 +21,10 @@ Status, per track:
   `cosigner/attest.py` refuses the stub once the allowlist names a measurement
   or `TEE_REQUIRED` is set.
 - Track K (§6, Node removal) — **[BUILT, merged]**.
-- §8 (Barrier A gaps) — **[BUILT, merged]** for three of the five items: the
-  `.env` mount, the boot gate's secret list, and the eight `load_dotenv` call
-  sites. The `gcp-oauth.keys.json` injection belongs to `onboarding-exchange-4`
-  and the duplicate dependency manifest is still open; both are marked in §8.
+- §8 (Barrier A gaps) — **[BUILT, merged]** for four of the five items: the
+  `.env` mount, the boot gate's secret list, the eight `load_dotenv` call sites
+  and the duplicate dependency manifest. The `gcp-oauth.keys.json` injection
+  belongs to `onboarding-exchange-4`; §8 says what is already wired for it.
 - §10 (front-end copy) — **[TODO]**, and each edit needs its own confirmation.
   `/about` at `web_server.py:383-386` is factually wrong as of Track I and
   says so about an arrangement that is now stronger than the claim.
@@ -741,7 +741,7 @@ against the box here.
 ## 8. Also fix while in here (Barrier A gaps)
 
 Found during this review; small, and they belong to the same threat model.
-Three of the five are `secrets-gate-3` and have landed; the
+Four of the five are `secrets-gate-3` and have landed; the
 `gcp-oauth.keys.json` move is `onboarding-exchange-4`, because it lands in the
 same file as the code exchange it belongs to.
 
@@ -789,12 +789,15 @@ same file as the code exchange it belongs to.
   `load_keys()` prefer the injected pair and refuse the file under
   `TEE_REQUIRED`, then add `google_oauth_configured` to `REQUIRED` in the same
   commit.
-- **`secrets-gate-3`** — `deploy/phala/pyproject.toml` is a second dependency
-  list and has already drifted from `requirements.txt`: it still pins presidio
-  and is missing `standardwebhooks` and `certifi`. Two manifests for one
-  environment is against the single-source rule, and the failure mode is a
-  dependency that exists on Hetzner and not in the measured image. Collapse to
-  one source, or generate one from the other in the build.
+- **`secrets-gate-3`, done** — ~~`deploy/phala/pyproject.toml` is a second
+  dependency list and has already drifted from `requirements.txt`.~~
+  `requirements.txt` is now the source and the pyproject dependency array is
+  generated from it (`python -m deploy.render_pyproject`, then `cd deploy/phala
+  && uv lock`), the same arrangement `render_caddyfile.py` has with `site.py`.
+  `tests/test_requirements.py` fails on drift in either direction, verified by
+  inverting it. Fixing the existing drift dropped the spaCy tree from the
+  measured image: 84 locked packages to 61, which is the ~1.6 GB the analyzer
+  costs and the reason it is off by default on a 2 GB CVM.
 
 ---
 

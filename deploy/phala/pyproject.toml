@@ -2,22 +2,22 @@
 name = "tee-email-bot"
 version = "0.0.0"
 requires-python = ">=3.11,<3.12"
+# Generated from requirements.txt by deploy/render_pyproject.py -- do not
+# edit this array. Add the pin there, re-render, then `cd deploy/phala &&
+# uv lock` so the lock this feeds is re-pinned too.
 dependencies = [
     "openai==2.45.0",
     "python-dotenv==1.2.2",
     "requests==2.34.2",
     "langsmith==0.10.5",
+    "certifi==2025.4.26",
+    "standardwebhooks==1.0.1",
     "google-api-python-client==2.184.0",
     "google-auth==2.41.1",
     "cryptography==46.0.7",
-    "presidio-analyzer==2.2.363",
-    "presidio-anonymizer==2.2.363",
-    "spacy==3.8.13",
-    "en-core-web-lg",
+    "requests-oauth2client==1.8.0",
+    "dcap-qvl==0.6.1",
 ]
 
 [tool.uv]
 package = false
-
-[tool.uv.sources]
-en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }

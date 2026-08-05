@@ -31,12 +31,25 @@ Dependencies are installed automatically when their manifests change in a push:
 no Node on the box: Gmail and Calendar are called from Python, so there is one
 language and one dependency tree.
 
+`requirements.txt` is also the only dependency list. The enclave image's
+`deploy/phala/pyproject.toml` is generated from it, so adding a pin is:
+
+```bash
+python -m deploy.render_pyproject      # rewrite the pyproject dependency array
+(cd deploy/phala && uv lock)           # re-pin the lock uv2nix builds from
+```
+
+`tests/test_requirements.py` fails if the committed pyproject drifts.
+
 The PII analyzer (Presidio + spaCy + `en_core_web_lg`) is commented out of
 `requirements.txt` and off by default, because it costs ~1.6 GB resident per
 masking process and the confidential VMs this runs on are priced by the GB.
 Uncomment the three pins and install the model to switch it on; nothing else
 changes, since `pseudonymizer.analyzer_available()` detects it. Note that pip
 never uninstalls: a box that already has it keeps it until the venv is rebuilt.
+The enclave image inherits the same default, because a commented-out pin is one
+the renderer above does not emit. Putting the analyzer in the image needs the
+model too, which is a URL rather than a pin; `requirements.txt` says how.
 
 Which units get deployed is derived from `deploy/hetzner/`: every `.service`
 with an `[Install]` section plus every `.timer`. Adding a unit file is all it
@@ -303,6 +316,13 @@ copy.
   PNGs and the `.ico` are committed, so the server never renders at runtime and
   Pillow is not a deploy dependency. `frontend/web_server.STATIC_TYPES` is the
   allow-list of what `/static/` will serve; add an asset to both.
+- `requirements.txt` — the one dependency list, for the box and for the measured
+  enclave image alike. `deploy/requirements.py` parses it and
+  `deploy/render_pyproject.py` renders `deploy/phala/pyproject.toml` from it, so
+  a pin cannot be present on Hetzner and absent from the image. Maintained
+  separately they had already drifted: the image carried presidio and spaCy,
+  which are off by default because they do not fit a 2 GB confidential VM, and
+  lacked `standardwebhooks` and `certifi`.
 
 ## Progressive drafts
 
