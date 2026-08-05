@@ -1,5 +1,15 @@
 # Published hashes for Track E reproducible builds.
 #
+# KMS: base (`phala deploy --kms base`). The list of code versions allowed to run
+#   as this app is an AppAuth contract on Base owned by a key the operator holds,
+#   so Phala cannot authorize an image under this app's identity, and every
+#   version ever authorized is publicly readable. Settled before any account was
+#   onboarded and not revisitable afterwards: app_secret derives from the KMS
+#   root, so switching KMS makes every database/<id>/token.bin unopenable and
+#   costs a wipe plus a re-onboard of every user. Reasoning and the per-upgrade
+#   cost: docs/runbook_provisioning.md Stage 0.
+# appauth-contract: <fill at Stage 2.5: address + chain id>
+#
 # tarball-sha256: hash of the Nix build output; proves the build is
 #   source-reproducible (rebuild from this repo -> identical value).
 #   Regenerate/verify with: deploy/phala/build_and_publish.sh --verify

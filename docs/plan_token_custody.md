@@ -270,6 +270,7 @@ Limit: this detects a wrong image, not a correct image subverted at runtime
 | Migration script | **none** | see above; no plaintext `credentials.json` to migrate |
 | Node | **removed entirely** (Track K), sequenced after custody lands | see §7 |
 | Phala | not yet rented; build dev-first, cut over later | §8 |
+| Which KMS | **`--kms base`**: an AppAuth contract on Base under an owner key we hold | Phala's default KMS lets Phala authorize an image under our app identity, which would hand it `app_secret` and therefore `K_inner`. It still reads no mail (the co-signer's allowlist is the second gate, §2), so this is depth on the first gate rather than a fix — what it buys is that the set of parties who can run code as Letterlock no longer includes Phala, and that the authorizations are publicly auditable. Costs a funded wallet, gas per upgrade, an owner key whose loss is unrecoverable, and a chain read at every CVM boot. Not revisitable: switching KMS changes `app_secret`, so every `token.bin` dies with it. Runbook Stage 0. |
 
 ---
 
