@@ -58,10 +58,31 @@
     },
     {
       "scope": "nearai-glm",
+      "file": "prod/GLM-5.2-W4AFP8-SGL-TP8.yaml",
+      "file_sha256": "db6f4e8ffd0324fcc3b2c3ef51ec2a4735b888bd9293057295d9161c9585bf38",
+      "tag": "v0.0.310",
+      "commit": "b9d5dc40780dcfd209d69414aaacca14d65744f5"
+    },
+    {
+      "scope": "nearai-glm",
+      "file": "prod/GLM-5.2-SGL-FP8-TP8.yaml",
+      "file_sha256": "6a68fdfe189813ce1e39e1fb6b664f8df1b0a30ddf8677ba8fcb53263f3bd6c6",
+      "tag": "v0.0.275",
+      "commit": "aa2e3db100546c3e4e99de16c68e111f469ce200"
+    },
+    {
+      "scope": "nearai-glm",
       "file": "GLM-5.2-SGL-FP8-TP8.yaml",
       "file_sha256": "6a68fdfe189813ce1e39e1fb6b664f8df1b0a30ddf8677ba8fcb53263f3bd6c6",
       "tag": "v0.0.272",
       "commit": "6cc4f7c0197caa7629a6fcf12aed88e1db2d6d8c"
+    },
+    {
+      "scope": "nearai-glm",
+      "file": "GLM-5.1-SGL-AWQ-TP4.yaml",
+      "file_sha256": "ac799789afd3c2a04e86b6406953ee99c4d6c4620144bc3e91c1dada7c0996f3",
+      "tag": "v0.0.264",
+      "commit": "053dd2205783334eaf85e2713164e74d210bacb8"
     },
     {
       "scope": "nearai-glm",

@@ -154,6 +154,22 @@ class Report:
     def info(self):
         return self.payload.get("info") or {}
 
+    def identity(self):
+        """Everything that decides the verdict, as one cache key.
+
+        The signing address alone is not enough: NEAR runs several CVMs behind
+        one hostname and they can share a signing key, so keying on it would let
+        a pinned instance's pass be served from cache for an unpinned one. The
+        instance and the compose log are what actually differ between them, and
+        the log changes whenever the manager starts anything, which is precisely
+        when a cached verdict must not be reused."""
+        log = self.payload.get("compose_manager_attestation") or {}
+        return ":".join((
+            self.signing_address,
+            self.info.get("instance_id") or "no-instance",
+            log.get("actions_hash") or "no-log",
+        ))
+
     def address_bytes(self):
         value = self.signing_address.removeprefix("0x")
         assert len(value) == ADDRESS_BYTES * 2, (
@@ -248,11 +264,10 @@ def fetch(provider, nonce=None):
 
 
 def verify(provider):
-    """The verdict for one provider, cached by the enclave's signing address.
+    """The verdict for one provider, cached by the enclave's identity.
 
-    Keying on the signing address rather than the URL is what makes the cache
-    safe: the address changes when the enclave reboots, and a reboot is exactly
-    when the measurement can change."""
+    Keying on the identity rather than the URL is what makes the cache safe:
+    one hostname is a pool of CVMs, and each fetch may reach a different one."""
     current = mode()
     if current == DEV_INSECURE:
         return quote_policy.Verdict(True, provider.name,
@@ -264,7 +279,7 @@ def verify(provider):
         return quote_policy.Verdict(False, provider.name,
                                     reason=f"attestation report unavailable: {err}")
 
-    subject = f"{provider.name}:{report.signing_address}"
+    subject = f"{provider.name}:{report.identity()}"
     cached = _CACHE.get(subject)
     if cached is not None:
         return cached

@@ -264,6 +264,23 @@ def test_a_missing_compose_log_is_a_denial(monkeypatch, recorded):
     assert "no compose-manager attestation" in verdict.reason
 
 
+def test_two_instances_sharing_a_signing_key_are_not_conflated(recorded):
+    """NEAR runs several CVMs behind one hostname and they can share a signing
+    address. Caching on that alone would let a pinned instance's pass be
+    replayed for an unpinned one, which is the whole check bypassed by a load
+    balancer."""
+    other = copy.deepcopy(recorded.payload)
+    other["info"]["instance_id"] = "a" * 40
+    assert recorded.signing_address == att.Report(other, recorded.nonce).signing_address
+    assert recorded.identity() != att.Report(other, recorded.nonce).identity()
+
+
+def test_identity_changes_when_the_compose_log_does(recorded):
+    other = copy.deepcopy(recorded.payload)
+    other["compose_manager_attestation"]["actions_hash"] = "b" * 64
+    assert recorded.identity() != att.Report(other, recorded.nonce).identity()
+
+
 @live
 @pytest.mark.parametrize("name", ["nearai-glm", "nearai-gpt-oss"])
 def test_live_endpoint_verifies_against_the_committed_pins(name):
@@ -274,6 +291,29 @@ def test_live_endpoint_verifies_against_the_committed_pins(name):
         f"the diff, and commit it."
     )
     assert verdict.attested
+
+
+@live
+@pytest.mark.parametrize("name", ["nearai-glm", "nearai-gpt-oss"])
+def test_live_pins_cover_the_whole_instance_pool(name):
+    """One hostname is a pool. Verifying once proves only that we landed on a
+    pinned instance, so this samples enough times to reach the others."""
+    att.reset_for_test()
+    seen, failures = set(), []
+    for _ in range(12):
+        try:
+            report = att.fetch(provider(name))
+        except Exception:
+            continue
+        seen.add(report.info.get("instance_id"))
+        verdict = att.verify(provider(name))
+        if not verdict.ok:
+            failures.append(verdict.reason)
+    assert seen, f"{name} returned no attestation report in 12 attempts"
+    assert not failures, (
+        f"{name} has unpinned instances in its pool across {len(seen)} seen: "
+        f"{sorted(set(failures))}"
+    )
 
 
 @live

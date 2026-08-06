@@ -284,6 +284,16 @@ copy.
   `chat.completions.create` is called anywhere but here. LangSmith tracing is
   off unless `LANGSMITH_TRACING=1`: it ships prompts to a third party, outside
   whatever enclave the chosen provider runs in.
+
+  `ProviderUnavailable` names the ordinary failure that is not a bug: 401, 402
+  or 403 mean the provider will keep refusing until a human tops up a balance or
+  fixes a key, unlike 429 and 5xx which propagate untouched because this is not
+  the layer that decides how to retry. It alerts the operator through
+  `telegram.notify_error` once per provider per six hours rather than once per
+  email, since a drained balance fails every draft in the queue and a hundred
+  identical alerts is how an operator learns to mute the channel. It still does
+  not fall back: an exhausted balance is not a reason to send someone's mail to
+  a provider they did not choose.
 - `backend/tee/quote_policy.py` — the five checks that decide whether a TDX
   quote is one we authorized: parse and is-TDX, report_data binding,
   measurements against an allowlist, signature chain to the Intel root through
@@ -331,6 +341,16 @@ copy.
   and every one must appear in the allowlist's `composes` rows — pinned by file
   content, not filename. That set includes housekeeping and models left from
   earlier deployments, because they ran in the same TD.
+
+  **One hostname is a pool.** `glm-5-2.completions.near.ai` fronts two CVMs
+  with different compose histories, and they share a signing address, so the
+  verdict cache keys on `Report.identity()` (signing address + instance id +
+  actions_hash) rather than the address alone — otherwise a pinned instance's
+  pass would be replayed from cache for an unpinned one, and a load balancer
+  would be the bypass. The pins must cover every instance, which means pinning
+  is a sampling job: `test_live_pins_cover_the_whole_instance_pool` fetches
+  repeatedly rather than once, because verifying a single time only proves you
+  landed on an instance you had already authorized.
 
   Still unclosed above this: a compose names container images by digest, and
   digest → reviewed source needs the build's Sigstore/SLSA provenance

@@ -28,10 +28,13 @@ for `client.responses`.
 import json
 import os
 import sys
+import threading
+import time
 
 from openai import OpenAI
 
 from backend.integrations import inference_attestation
+from backend.integrations import telegram
 from backend.masking import pseudonymizer
 
 
@@ -110,6 +113,30 @@ PROVIDERS = {
 }
 
 DEFAULT_PROVIDER = "deepseek"
+
+# Statuses that mean the provider will keep refusing until a human does
+# something: an exhausted balance, a revoked key, a disabled account. Distinct
+# from 429 and 5xx, which are worth retrying and are not this box's problem.
+PROVISIONING_STATUSES = (401, 402, 403)
+
+# One operator alert per provider per window, not one per email. A drained
+# balance fails every draft in the queue, and a hundred identical Telegram
+# messages is how an operator learns to mute the channel.
+ALERT_COOLDOWN_SECONDS = 6 * 3600
+
+_ALERT_LOCK = threading.Lock()
+_ALERTED = {}
+
+
+class ProviderUnavailable(RuntimeError):
+    """The chosen provider cannot serve this account until the operator acts.
+
+    Separate from a bug so the cause is legible in a log full of tracebacks,
+    and separate from `AttestationError` because running out of credits is
+    ordinary while a failed measurement is not. Neither one falls back to
+    another provider: `resolve()` refuses to substitute, and an exhausted
+    balance is not a reason to send someone's mail somewhere they did not
+    choose."""
 
 # Reasoning tokens count against max_tokens, so a budget sized for the answer
 # alone truncates before any answer is emitted. Sized for the largest batch a
@@ -207,6 +234,52 @@ def make_client(account=None):
     return client
 
 
+def _create(client, provider, **kwargs):
+    """The one call out, with provisioning failures named rather than left as a
+    status code in a traceback. Anything else propagates untouched: a timeout is
+    a timeout and this is not the layer that decides how to retry it."""
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as err:
+        status = getattr(err, "status_code", None)
+        if status not in PROVISIONING_STATUSES:
+            raise
+        detail = {401: "the API key was rejected", 402: "the account is out of credits",
+                  403: "the account is not permitted to use this model"}[status]
+        _alert_once(provider, status, detail)
+        raise ProviderUnavailable(
+            f"{provider.label} cannot serve this account: {detail} "
+            f"(HTTP {status} from {provider.base_url}). Fix {provider.key_env} or the "
+            f"provider account; nothing will be sent to a different provider meanwhile."
+        ) from err
+
+
+def _alert_once(provider, status, detail):
+    """Tell the operator, at most once per provider per window. Never raises:
+    an undelivered alert must not replace the error the caller is about to
+    see."""
+    key = (provider.name, status)
+    now = time.monotonic()
+    with _ALERT_LOCK:
+        last = _ALERTED.get(key)
+        if last is not None and now - last < ALERT_COOLDOWN_SECONDS:
+            return
+        _ALERTED[key] = now
+    sys.stderr.write(f"{provider.name}: {detail} (HTTP {status})\n")
+    try:
+        telegram.notify_error(
+            f"Inference paused: {provider.label} — {detail}. "
+            f"Drafts for accounts on this provider will keep failing until it is fixed."
+        )
+    except Exception as alert_err:
+        sys.stderr.write(f"{provider.name}: operator alert not delivered ({alert_err})\n")
+
+
+def reset_alerts_for_test():
+    with _ALERT_LOCK:
+        _ALERTED.clear()
+
+
 def _mask_messages(messages, state):
     masked = []
     for m in messages:
@@ -243,7 +316,8 @@ def complete(client, messages, max_tokens, pseudonymize=True, identity=None, **k
     state = pseudonymizer.new_state(identity) if pseudonymize else None
     if state is not None:
         messages = _mask_messages(messages, state)
-    resp = client.chat.completions.create(
+    resp = _create(
+        client, provider,
         model=provider.model,
         messages=messages,
         max_tokens=max_tokens,
