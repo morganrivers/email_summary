@@ -308,12 +308,33 @@ copy.
   the signing address, which changes when the enclave reboots, and a reboot is
   when the measurement can change. `backend/integrations/inference_allowlist.json`
   is the committed pin list, so authorizing an image is a reviewed diff.
-  `rt_mr3` moves whenever NEAR redeploys a model container — NEAR runs several
+  `rt_mr3` moves whenever NEAR redeploys the bootstrap — NEAR runs several
   images behind one hostname, so expect to pin more than one per model — and a
   drift fails closed. Re-pin with
   `python -m backend.integrations.inference_attestation <provider>`, read the
   diff, commit. `deploy/preflight.py` calls `configured()` so an unpinned image
   is reported at deploy time rather than by every draft failing.
+
+  **RTMR3 does not measure the model server.** NEAR's TD boots a bootstrap
+  compose (compose-manager, certbot, an otel collector); the manager brings
+  model containers up and down afterwards, from separate files, without RTMR3
+  moving. So the measurement pins the launcher, not what is serving tokens.
+  `ComposeLog` closes that: the endpoint publishes a second quote over
+  `actions_hash || nonce`, where `actions_hash` is SHA-256 of the manager's
+  action log as compact JSON with sorted keys. The hash is *recomputed* from the
+  actions rather than read, so appending a line fails; and because the quote
+  signs the published hash, re-hashing a forged log fails the binding instead,
+  which is the stronger of the two refusals. Replaying the log gives every
+  compose brought up and not since brought down, each with its `file_sha256`,
+  and every one must appear in the allowlist's `composes` rows — pinned by file
+  content, not filename. That set includes housekeeping and models left from
+  earlier deployments, because they ran in the same TD.
+
+  Still unclosed above this: a compose names container images by digest, and
+  digest → reviewed source needs the build's Sigstore/SLSA provenance
+  (`cosign verify-attestation`). Until that is checked, the pins say which bytes
+  ran, not what was in them, and NEAR is both the image publisher and the
+  machine operator.
 - `backend/integrations/telegram.py` — `TelegramTarget`, sends, and chat
   linking. `send_telegram(msg, target)` always takes an explicit target;
   `operator_target()` (env) is only for box-level failures, never for a user's

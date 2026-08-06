@@ -155,6 +155,115 @@ def test_an_unreachable_endpoint_is_a_denial_not_a_pass(monkeypatch):
     assert "unavailable" in verdict.reason
 
 
+def test_actions_hash_is_recomputed_not_trusted(recorded):
+    log = recorded.compose_log()
+    assert log.hash_is_honest()
+    assert log.computed_hash() == log.claimed_hash
+
+
+def test_an_appended_action_breaks_the_hash(recorded):
+    payload = copy.deepcopy(recorded.compose_log().payload)
+    payload["actions"].append({
+        "timestamp": "2026-08-05T00:00:00+00:00", "action": "compose_up",
+        "tag": "v0", "commit": "0" * 40, "file": "exfiltrate.yaml",
+        "file_sha256": "0" * 64,
+    })
+    tampered = att.ComposeLog(payload, recorded.nonce)
+    assert not tampered.hash_is_honest(), (
+        "an edited action log must not still match the hash the quote signs"
+    )
+
+
+def test_compose_log_report_data_binds_the_hash_and_our_nonce(recorded):
+    log = recorded.compose_log()
+    expected = log.expected_report_data()
+    assert len(expected) == 64
+    assert expected.hex() == log.payload["report_data"]
+    assert expected[:32].hex() == log.claimed_hash
+    assert expected[32:].hex() == recorded.nonce
+
+
+def test_started_tracks_up_and_down(recorded):
+    """A compose counts as started when its most recent action brought it up.
+    Anything torn down since must not be demanded of the allowlist."""
+    log = recorded.compose_log()
+    started = log.started()
+    assert started, "the log records no compose brought up"
+    assert all(isinstance(v, str) and len(v) == 64 for v in started.values())
+    for name in started:
+        last = [a for a in log.actions if a.get("file") == name][-1]
+        assert last["action"] == "compose_up", (
+            f"{name} is reported started but its last action was {last['action']}"
+        )
+    torn_down = {a["file"] for a in log.actions if a.get("action") == "compose_down"}
+    for name in torn_down - set(started):
+        last = [a for a in log.actions if a.get("file") == name][-1]
+        assert last["action"] == "compose_down"
+
+
+def test_every_started_compose_is_authorized(recorded):
+    authorized = {row["file"]: row["file_sha256"]
+                  for row in att.policy().rows("composes", "nearai-glm")}
+    for name, digest in recorded.compose_log().started().items():
+        assert authorized.get(name) == digest, (
+            f"{name} ran in the enclave but is not pinned; review it and add it"
+        )
+
+
+def _with_extra_action(recorded, entry):
+    payload = copy.deepcopy(recorded.payload)
+    payload["compose_manager_attestation"]["actions"].append(entry)
+    return payload
+
+
+UNPINNED = {
+    "timestamp": "2026-08-05T00:00:00+00:00", "action": "compose_up",
+    "tag": "v0", "commit": "0" * 40, "file": "prod/something-new.yaml",
+    "file_sha256": "1" * 64,
+}
+
+
+def test_appending_an_action_and_rehashing_still_fails(monkeypatch, recorded):
+    """Recomputing actions_hash is not a way around the log: the quote signs the
+    hash the manager published, so a consistent-looking forgery no longer binds
+    to it. This is the stronger of the two failures and must come first."""
+    payload = _with_extra_action(recorded, UNPINNED)
+    log = payload["compose_manager_attestation"]
+    log["actions_hash"] = att.ComposeLog(log, recorded.nonce).computed_hash()
+    monkeypatch.setattr(att, "fetch", lambda p, nonce=None: att.Report(
+        payload, payload["request_nonce"]))
+    verdict = att.verify(provider("nearai-glm"))
+    assert not verdict.ok
+    assert "report_data does not carry the expected binding" in verdict.reason
+
+
+def test_an_unpinned_compose_is_refused(monkeypatch, recorded):
+    """The authorization decision itself, with both quotes taken as good, so the
+    test does not need PCCS. `test_live_endpoint_verifies_against_the_committed_pins`
+    is what checks the real ones."""
+    payload = _with_extra_action(recorded, UNPINNED)
+    log = payload["compose_manager_attestation"]
+    log["actions_hash"] = att.ComposeLog(log, recorded.nonce).computed_hash()
+    monkeypatch.setattr(quote_policy, "verify", lambda *a, **k: quote_policy.Verdict(
+        True, "stub", measurement="stub", attested=True))
+    monkeypatch.setattr(att, "fetch", lambda p, nonce=None: att.Report(
+        payload, payload["request_nonce"]))
+    verdict = att.verify(provider("nearai-glm"))
+    assert not verdict.ok
+    assert "unauthorized composes" in verdict.reason
+    assert "prod/something-new.yaml" in verdict.reason
+
+
+def test_a_missing_compose_log_is_a_denial(monkeypatch, recorded):
+    payload = copy.deepcopy(recorded.payload)
+    payload.pop("compose_manager_attestation")
+    monkeypatch.setattr(att, "fetch", lambda p, nonce=None: att.Report(
+        payload, payload["request_nonce"]))
+    verdict = att.verify(provider("nearai-glm"))
+    assert not verdict.ok
+    assert "no compose-manager attestation" in verdict.reason
+
+
 @live
 @pytest.mark.parametrize("name", ["nearai-glm", "nearai-gpt-oss"])
 def test_live_endpoint_verifies_against_the_committed_pins(name):

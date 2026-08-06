@@ -24,10 +24,81 @@
     "Recorded 2026-08-05 against dstack-nvidia-0.5.5, app_id",
     "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b."
   ],
+  "_composes_comment": [
+    "RTMR3 measures the bootstrap compose -- the compose-manager, certbot, an",
+    "otel collector -- and NOT the model server, which the manager brings up",
+    "afterwards without RTMR3 moving. These rows are what closes that gap: one",
+    "entry per compose file the manager is allowed to have started, pinned by",
+    "the SHA-256 of the file rather than its name.",
+    "",
+    "Replaying the attested action log yields every compose brought up and not",
+    "since brought down, and every one of them must appear here. That includes",
+    "housekeeping (cleanup-hf-model.yaml) and models left over from earlier",
+    "deployments: they ran in the same TD and could have done anything, so",
+    "authorizing them is a decision to make explicitly rather than a category",
+    "to skip. Note that both endpoints still have a GLM-5.1 compose 'up' by",
+    "this reckoning; the containers have almost certainly exited, but the log",
+    "records no compose_down, so the pin records what the log actually says.",
+    "",
+    "'tag' and 'commit' are recorded for the reader: they name the release and",
+    "revision of NEAR's compose repository the file came from, which is where",
+    "to go to read what it actually launches."
+  ],
   "mode": "required",
   "pccs_url": "https://pccs.phala.network",
   "allowed_tcb_status": ["UpToDate"],
   "rejected_advisories": [],
+  "composes": [
+    {
+      "scope": "nearai-glm",
+      "file": "prod/GLM-5.2-W4AFP8-SGL-2xTP4.yaml",
+      "file_sha256": "f408de5c89d7e7f8b4715b1f62409f67cadf52e232cfdce663f94482a134bba2",
+      "tag": "v0.0.316",
+      "commit": "8841fb4fa6b72172582440bcbb2b8aa63978ff09"
+    },
+    {
+      "scope": "nearai-glm",
+      "file": "GLM-5.2-SGL-FP8-TP8.yaml",
+      "file_sha256": "6a68fdfe189813ce1e39e1fb6b664f8df1b0a30ddf8677ba8fcb53263f3bd6c6",
+      "tag": "v0.0.272",
+      "commit": "6cc4f7c0197caa7629a6fcf12aed88e1db2d6d8c"
+    },
+    {
+      "scope": "nearai-glm",
+      "file": "GLM-5.1-AWQ-4bit.yaml",
+      "file_sha256": "57dfc6d052e51a225fe1af413d7c3840d7c1ac40c87d5c4dc9bb2299b1acaa59",
+      "tag": "v0.0.237",
+      "commit": "4bf348a4a7ba6b1f9a83d0825bfdc635918c7869"
+    },
+    {
+      "scope": "nearai-glm",
+      "file": "cleanup-hf-model.yaml",
+      "file_sha256": "cbc3874a8d3795f24a8be0f183f1ae761ba0f7a66fd05977c0cd86e2f6193d1c",
+      "tag": "v0.0.316",
+      "commit": "8841fb4fa6b72172582440bcbb2b8aa63978ff09"
+    },
+    {
+      "scope": "nearai-gpt-oss",
+      "file": "prod/small-models.yaml",
+      "file_sha256": "a385f19a51054767b8be49a64ebc3111e0e62f721a861e54c78984b186904599",
+      "tag": "v0.0.295",
+      "commit": "6a284da32cbd385192d3d9de96f48af2d5794cbc"
+    },
+    {
+      "scope": "nearai-gpt-oss",
+      "file": "GLM-5.1-SGL-AWQ-TP4.yaml",
+      "file_sha256": "d20b7b863e82490b6d8d957e10326f8a4b99a9fb7eb940362f3e7aeb6c6a50d9",
+      "tag": "v0.0.271",
+      "commit": "ae133b197a50b1ef59d81dd4fcf86ae1bb4c18b1"
+    },
+    {
+      "scope": "nearai-gpt-oss",
+      "file": "cleanup-hf-model.yaml",
+      "file_sha256": "339cbf76e8db192fe897e361725f2bf857328943fa70fad4e5f3d41317e5f934",
+      "tag": "v0.0.282",
+      "commit": "e3d39ddc737beb5356d6b0b61b84a5ea4f09fda7"
+    }
+  ],
   "measurements": [
     {
       "name": "NEAR AI GLM 5.2 (dstack-nvidia-0.5.5)",

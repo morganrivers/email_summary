@@ -23,12 +23,28 @@ The enclave also states which model it serves, and that is checked against the
 model the provider is configured to ask for. A gateway that quietly routed to a
 different model would otherwise pass every cryptographic check.
 
-What this does not do: verify the response itself. Per-completion receipts are
-signed by the attested key and checking them is the next layer, not this one.
-This module answers whether the endpoint is the authorized enclave, at the
-cadence a boot-time measurement can change.
+**The model server is not in RTMR3.** NEAR's TD boots a bootstrap compose --
+a compose-manager, certbot, an otel collector -- and that is what RTMR3
+measures. The model containers are brought up and down afterwards by the
+manager, from separate files, without RTMR3 moving. Pinning the measurement
+alone therefore pins the launcher and says nothing about what is serving
+tokens.
+
+What covers the gap is a second attestation the endpoint publishes beside the
+first: the manager's action log, hashed into `actions_hash` and bound into its
+own quote's report_data alongside our nonce. Each action names the compose file
+and its SHA-256, so replaying the log says which composes were started and
+never torn down, by content rather than by filename. `ComposeLog` recomputes
+the hash from the actions rather than trusting the field, so an edited log
+fails even though the quote over the claimed hash is valid.
+
+What this still does not do: verify the response itself, or tie a container
+image digest back to reviewed source (that needs the build's Sigstore
+provenance). This module answers whether the endpoint is the authorized enclave
+running authorized composes, at the cadence those can change.
 """
 
+import hashlib
 import json
 import os
 import secrets
@@ -98,10 +114,11 @@ def configured(providers):
     for provider in providers:
         if not provider.attests():
             continue
-        if not policy().entries(provider.name):
-            return (f"provider {provider.name!r} is confidential but no measurements "
-                    f"are authorized for it in {allowlist_path()}; run "
-                    f"`python -m backend.integrations.inference_attestation {provider.name}`")
+        for key in ("measurements", "composes"):
+            if not policy().rows(key, provider.name):
+                return (f"provider {provider.name!r} is confidential but no {key} "
+                        f"are authorized for it in {allowlist_path()}; run "
+                        f"`python -m backend.integrations.inference_attestation {provider.name}`")
     return None
 
 
@@ -157,6 +174,66 @@ class Report:
         assert dcap is not None, "dcap-qvl is not installed"
         return quote_policy.measurements_of(dcap.parse_quote(self.quote).report)
 
+    def compose_log(self):
+        payload = self.payload.get("compose_manager_attestation")
+        return ComposeLog(payload, self.nonce) if payload else None
+
+
+class ComposeLog:
+    """The compose-manager's attested record of what it started and stopped.
+
+    This is the only evidence of which model container is serving, because the
+    manager launches them after boot and RTMR3 does not move when it does."""
+
+    def __init__(self, payload, nonce):
+        assert isinstance(payload, dict), "compose_manager_attestation must be an object"
+        self.payload = payload
+        self.nonce = nonce
+
+    @property
+    def actions(self):
+        return self.payload.get("actions") or []
+
+    @property
+    def claimed_hash(self):
+        return (self.payload.get("actions_hash") or "").strip()
+
+    @property
+    def quote(self):
+        raw = self.payload.get("quote")
+        assert raw, "compose_manager_attestation carries no quote"
+        return bytes.fromhex(raw)
+
+    def computed_hash(self):
+        """SHA-256 over the actions as compact JSON with sorted keys, which is
+        the canonicalization the manager signs. Recomputed rather than read, so
+        appending a line to the log invalidates the quote over it."""
+        canonical = json.dumps(self.actions, separators=(",", ":"), sort_keys=True)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def hash_is_honest(self):
+        return self.computed_hash() == self.claimed_hash
+
+    def expected_report_data(self):
+        return bytes.fromhex(self.claimed_hash) + bytes.fromhex(self.nonce)
+
+    def started(self):
+        """Compose file -> its SHA-256, for every compose brought up and not
+        since brought down. Deliberately not "currently running": a container
+        that exited on its own leaves no action, so this is the set that was
+        started and never explicitly stopped, which is the larger and safer
+        set to demand authorization for."""
+        up = {}
+        for action in self.actions:
+            verb, name = action.get("action"), action.get("file")
+            if not name:
+                continue
+            if verb == "compose_up":
+                up[name] = action.get("file_sha256")
+            elif verb == "compose_down":
+                up.pop(name, None)
+        return up
+
 
 def fetch(provider, nonce=None):
     """The provider's current report, bound to a nonce we just generated."""
@@ -207,8 +284,51 @@ def verify(provider):
         report.quote, policy(), subject,
         report.expected_report_data(), scope=provider.name,
     )
+    if verdict.ok:
+        verdict = _verify_composes(report, provider, subject) or verdict
     _CACHE.put(subject, verdict)
     return verdict
+
+
+def _verify_composes(report, provider, subject):
+    """The reason the compose log is unacceptable, as a failing Verdict, or None
+    when it is fine. Separate from the boot measurement because it answers a
+    different question: not which image booted, but what it has run since."""
+    log = report.compose_log()
+    if log is None:
+        return quote_policy.Verdict(
+            False, subject,
+            reason="endpoint published no compose-manager attestation, so nothing "
+                   "says which model container is serving",
+        )
+    if not log.hash_is_honest():
+        return quote_policy.Verdict(
+            False, subject,
+            reason=f"actions_hash {log.claimed_hash} does not match the actions "
+                   f"it is supposed to cover ({log.computed_hash()})",
+        )
+
+    manager = quote_policy.verify(
+        log.quote, policy(), subject, log.expected_report_data(), scope=provider.name,
+    )
+    if not manager.ok:
+        return quote_policy.Verdict(
+            False, subject, measurement=manager.measurement,
+            reason=f"compose-manager quote: {manager.reason}",
+        )
+
+    authorized = {row.get("file"): row.get("file_sha256")
+                  for row in policy().rows("composes", provider.name)}
+    unauthorized = sorted(
+        f"{name}@{digest}" for name, digest in log.started().items()
+        if authorized.get(name) != digest
+    )
+    if unauthorized:
+        return quote_policy.Verdict(
+            False, subject, measurement=manager.measurement,
+            reason=f"unauthorized composes started in the enclave: {unauthorized}",
+        )
+    return None
 
 
 def require(provider):
@@ -224,16 +344,22 @@ def require(provider):
 
 
 def pin(provider):
-    """The allowlist entry this provider's enclave would need, printed for a
+    """The allowlist rows this provider's enclave would need, printed for a
     human to review and commit. Deliberately not written to the file: a pin
     that a script can add is a pin nobody read."""
     report = fetch(provider)
-    entry = {"name": f"{provider.name} {report.info.get('app_name') or 'unknown'}",
-             "scope": provider.name,
-             "compose_hash": report.info.get("compose_hash"),
-             "os_image_hash": report.info.get("os_image_hash")}
-    entry.update(report.measurements())
-    return entry
+    measurement = {"name": f"{provider.name} {report.info.get('app_name') or 'unknown'}",
+                   "scope": provider.name,
+                   "compose_hash": report.info.get("compose_hash"),
+                   "os_image_hash": report.info.get("os_image_hash")}
+    measurement.update(report.measurements())
+
+    log = report.compose_log()
+    composes = [] if log is None else [
+        {"scope": provider.name, "file": name, "file_sha256": digest}
+        for name, digest in sorted(log.started().items())
+    ]
+    return {"measurements": [measurement], "composes": composes}
 
 
 def main(argv):

@@ -90,14 +90,17 @@ class Policy:
             )
         return value
 
-    def entries(self, scope=None):
-        """Authorized images, optionally only those naming a scope. A scope is
-        how one file serves several verified things (one provider per scope)
-        without an entry silently authorizing all of them."""
-        rows = self.get("measurements", []) or []
+    def rows(self, key, scope=None):
+        """Authorized entries under one key, optionally only those naming a
+        scope. A scope is how one file serves several verified things (one
+        provider per scope) without an entry silently authorizing all of them."""
+        rows = self.get(key, []) or []
         if scope is None:
             return rows
         return [e for e in rows if e.get("scope") == scope]
+
+    def entries(self, scope=None):
+        return self.rows("measurements", scope)
 
     def match(self, actual, scope=None):
         """The name of the authorized entry this image matches, or None.
