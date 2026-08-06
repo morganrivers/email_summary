@@ -11,10 +11,14 @@
             "id": "a32385a7f4f87240",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
+              "type": "markdown",
+              "state": {
+                "file": "backend/drafting/default_voice.md",
+                "mode": "source",
+                "source": false
+              },
               "icon": "lucide-file",
-              "title": "New tab"
+              "title": "default_voice"
             }
           }
         ]
