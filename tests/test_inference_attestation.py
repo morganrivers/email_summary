@@ -145,6 +145,60 @@ def test_a_wrong_model_is_refused(monkeypatch, recorded):
     assert "not 'z-ai/glm-5.2'" in verdict.reason
 
 
+def test_a_cached_pass_is_not_served_to_an_endpoint_that_ignores_our_nonce(
+        monkeypatch, recorded):
+    """The cache key is what the endpoint says about itself, so freshness has to
+    be established before it is consulted. Otherwise anything that can replay a
+    verified instance's signing address, instance id and actions_hash inherits
+    that instance's verdict without ever answering the nonce we sent."""
+    subject = f"nearai-glm:{recorded.identity()}"
+    att._CACHE.put(subject, quote_policy.Verdict(True, subject, attested=True))
+    payload = copy.deepcopy(recorded.payload)
+    monkeypatch.setattr(att, "fetch", lambda p, nonce=None: att.Report(payload, "a-nonce-we-just-made"))
+
+    verdict = att.verify(provider("nearai-glm"))
+
+    assert not verdict.ok
+    assert "not the one we sent" in verdict.reason
+
+
+def test_a_refusal_is_rechecked_long_before_a_pass_is(recorded):
+    """A pass describes an image and holds for a day. A refusal is as likely to
+    describe a PCCS that timed out, and holding that for a day would take
+    drafting down until the process restarts."""
+    cache = quote_policy.VerdictCache()
+    assert cache.failure_seconds < cache.recheck_seconds / 10
+
+    cache.put("subject", quote_policy.Verdict(False, "subject", reason="collateral timed out"))
+    assert cache.get("subject") is not None
+    cache.failure_seconds = 0
+    assert cache.get("subject") is None
+
+    cache.put("subject", quote_policy.Verdict(True, "subject", attested=True))
+    assert cache.get("subject") is not None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("intel_quote", "not hex at all"),
+    ("intel_quote", ""),
+    ("signing_address", "0xdeadbeef"),
+])
+def test_a_malformed_field_is_a_denial_with_a_reason(monkeypatch, recorded, field, value):
+    """Every field of a report is written by the party being checked, so a hex
+    string that does not decode is an answer, not a bug here. It has to come
+    back as a Verdict like any other refusal rather than as an AssertionError or
+    a ValueError out of the middle of drafting."""
+    payload = copy.deepcopy(recorded.payload)
+    payload[field] = value
+    monkeypatch.setattr(att, "fetch", lambda p, nonce=None: att.Report(
+        payload, payload["request_nonce"]))
+
+    verdict = att.verify(provider("nearai-glm"))
+
+    assert not verdict.ok
+    assert field.split("_")[-1] in verdict.reason
+
+
 def test_an_unreachable_endpoint_is_a_denial_not_a_pass(monkeypatch):
     def boom(provider, nonce=None):
         raise OSError("connection refused")

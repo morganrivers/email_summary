@@ -106,14 +106,9 @@ def proof_request(body):
 def wrap_request(body, verdict):
     uid = field(body, protocol.F_UID)
     inner = binary_field(body, protocol.F_INNER)
-    precheck = None
-    if not inner:
-        precheck = "empty inner"
-    elif audit.ever_granted(uid, policy.ACTION_WRAP):
-        # A second wrap for a user who already has one is either a bug or an
-        # attacker asking us to re-wrap something. Refusing keeps the enclave's
-        # stored `outer` the only one that exists.
-        precheck = "already wrapped for this uid"
+    # Whether this uid has been wrapped before is decided inside
+    # policy.authorize, under the lock that also writes the row it reads.
+    precheck = None if inner else "empty inner"
     refusal = policy.authorize(uid, policy.ACTION_WRAP, verdict, precheck)
     if refusal is not None:
         return refusal, None

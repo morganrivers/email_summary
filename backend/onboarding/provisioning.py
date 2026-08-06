@@ -183,10 +183,11 @@ def provision(code, redirect_uri, state):
     somewhere first; nothing is written before the identity is known now, so the
     move-into-place dance is gone with it."""
     profile = exchange_code(code, redirect_uri, state)
-    email = profile["email"]
-    assert email and "/" not in email and "\\" not in email and ".." not in email, (
-        f"refusing to build a token path from {email!r}"
-    )
+    # Checked here as well as in token_path, so a uid that cannot be stored is
+    # refused before the co-signer is asked to wrap anything for it -- but
+    # through the same function, because two spellings of a path-traversal guard
+    # is one that can be relaxed without the other noticing.
+    email = tokens.check_uid(profile["email"])
     account.secure_dir(account.ACCOUNTS_DIR)
     try:
         token_file = tokens.take_custody(email, profile["refresh_token"])

@@ -41,6 +41,14 @@ MEASUREMENT_FIELDS = ("mr_td", "rt_mr0", "rt_mr1", "rt_mr2", "rt_mr3")
 
 RECHECK_SECONDS = 24 * 3600
 
+# A refusal is not held for a day. A pass is a statement about an image, which
+# does not change until the thing reboots; a refusal can be a PCCS that timed
+# out, and caching that for 24h turns one slow collateral fetch into a day of
+# refused drafts for an enclave that is fine. Short enough that a transient
+# failure costs one retry, long enough that a genuinely rejected image is not
+# re-verified on every single email.
+FAILURE_RECHECK_SECONDS = 60
+
 
 class Verdict:
     """The answer for one quote, plus what to write in the log."""
@@ -212,23 +220,34 @@ def _binds(got, expected):
 
 
 class VerdictCache:
-    """Verdicts by subject, re-checked daily.
+    """Verdicts by subject, re-checked daily -- and refusals re-checked in a
+    minute.
 
     A quote is a boot-time measurement, so asking a thousand times an hour
     returns identical bytes. TCB status is the one input that moves without a
     reboot: Intel raises the required level after a vulnerability and an
-    ``UpToDate`` verdict becomes ``OutOfDate`` with no restart anywhere."""
+    ``UpToDate`` verdict becomes ``OutOfDate`` with no restart anywhere.
 
-    def __init__(self, recheck_seconds=RECHECK_SECONDS):
+    The two lifetimes are not symmetric because the two answers are not. A pass
+    describes an image; a refusal often describes the network between here and
+    a PCCS. Holding the second one as long as the first is how a five-second
+    outage becomes a day with no drafts."""
+
+    def __init__(self, recheck_seconds=RECHECK_SECONDS,
+                 failure_seconds=FAILURE_RECHECK_SECONDS):
         self.recheck_seconds = recheck_seconds
+        self.failure_seconds = failure_seconds
         self._lock = threading.Lock()
         self._entries = {}
+
+    def _ttl(self, verdict):
+        return self.recheck_seconds if verdict.ok else self.failure_seconds
 
     def get(self, subject):
         assert subject is not None, "a cached verdict needs a subject to key on"
         with self._lock:
             cached = self._entries.get(subject)
-        if cached is None or time.time() - cached[1] >= self.recheck_seconds:
+        if cached is None or time.time() - cached[1] >= self._ttl(cached[0]):
             return None
         return cached[0]
 

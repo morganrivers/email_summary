@@ -23,6 +23,13 @@ The enclave also states which model it serves, and that is checked against the
 model the provider is configured to ask for. A gateway that quietly routed to a
 different model would otherwise pass every cryptographic check.
 
+Both of those, and the model check, run *before* the verdict cache is consulted.
+The cache is keyed on what the endpoint says about itself, so consulting it
+first would hand a replayed identity the pass belonging to the instance it
+copied, without that endpoint ever answering the nonce. What a cache hit means
+after that ordering is only "the quote itself is not re-verified for a day",
+which is the trade it was introduced for.
+
 **The model server is not in RTMR3.** NEAR's TD boots a bootstrap compose --
 a compose-manager, certbot, an otel collector -- and that is what RTMR3
 measures. The model containers are brought up and down afterwards by the
@@ -71,6 +78,33 @@ _POLICY = None
 class AttestationError(RuntimeError):
     """Raised instead of returning a client. Refusing to draft is the failure
     this is for; the alternative is mail going somewhere unverified."""
+
+
+class MalformedReport(AttestationError):
+    """A field of the report is missing, or is not the shape it must be.
+
+    Everything in a report is written by the party being checked, so a hex
+    string that does not decode is an ordinary answer from an endpoint, not a
+    broken invariant here. Asserting it raised AssertionError, and
+    `bytes.fromhex` raised ValueError, straight out of `make_client()` past
+    every reason string and every cached verdict -- fail-closed by accident
+    rather than a refusal anyone could read. `verify()` turns this into a
+    Verdict like any other denial."""
+
+
+def _hex(raw, field, length=None):
+    """Bytes from a hex field of the report, or `MalformedReport`."""
+    if not isinstance(raw, str) or not raw:
+        raise MalformedReport(f"{field} is missing")
+    value = raw.removeprefix("0x").strip()
+    if length is not None and len(value) != length * 2:
+        raise MalformedReport(
+            f"{field} is {len(value) // 2} bytes, expected {length}"
+        )
+    try:
+        return bytes.fromhex(value)
+    except ValueError as err:
+        raise MalformedReport(f"{field} is not hex: {err}") from err
 
 
 def allowlist_path():
@@ -128,7 +162,8 @@ class Report:
     edit, not a hunt through the verification path."""
 
     def __init__(self, payload, nonce):
-        assert isinstance(payload, dict), "attestation report must be a JSON object"
+        if not isinstance(payload, dict):
+            raise MalformedReport(f"attestation report is {type(payload).__name__}, not an object")
         self.payload = payload
         self.nonce = nonce
 
@@ -146,9 +181,7 @@ class Report:
 
     @property
     def quote(self):
-        raw = self.payload.get("intel_quote")
-        assert raw, "attestation report carries no intel_quote"
-        return bytes.fromhex(raw)
+        return _hex(self.payload.get("intel_quote"), "intel_quote")
 
     @property
     def info(self):
@@ -171,11 +204,7 @@ class Report:
         ))
 
     def address_bytes(self):
-        value = self.signing_address.removeprefix("0x")
-        assert len(value) == ADDRESS_BYTES * 2, (
-            f"signing_address is {len(value) // 2} bytes, expected {ADDRESS_BYTES}"
-        )
-        return bytes.fromhex(value)
+        return _hex(self.signing_address, "signing_address", ADDRESS_BYTES)
 
     def expected_report_data(self):
         """What the quote must carry: the signing address, then the padding the
@@ -202,13 +231,19 @@ class ComposeLog:
     manager launches them after boot and RTMR3 does not move when it does."""
 
     def __init__(self, payload, nonce):
-        assert isinstance(payload, dict), "compose_manager_attestation must be an object"
+        if not isinstance(payload, dict):
+            raise MalformedReport(
+                f"compose_manager_attestation is {type(payload).__name__}, not an object")
         self.payload = payload
         self.nonce = nonce
 
     @property
     def actions(self):
-        return self.payload.get("actions") or []
+        actions = self.payload.get("actions") or []
+        if not isinstance(actions, list):
+            raise MalformedReport(
+                f"compose_manager_attestation actions is {type(actions).__name__}, not a list")
+        return actions
 
     @property
     def claimed_hash(self):
@@ -216,9 +251,7 @@ class ComposeLog:
 
     @property
     def quote(self):
-        raw = self.payload.get("quote")
-        assert raw, "compose_manager_attestation carries no quote"
-        return bytes.fromhex(raw)
+        return _hex(self.payload.get("quote"), "compose_manager_attestation quote")
 
     def computed_hash(self):
         """SHA-256 over the actions as compact JSON with sorted keys, which is
@@ -231,7 +264,7 @@ class ComposeLog:
         return self.computed_hash() == self.claimed_hash
 
     def expected_report_data(self):
-        return bytes.fromhex(self.claimed_hash) + bytes.fromhex(self.nonce)
+        return _hex(self.claimed_hash, "actions_hash") + bytes.fromhex(self.nonce)
 
     def started(self):
         """Compose file -> its SHA-256, for every compose brought up and not
@@ -279,11 +312,17 @@ def verify(provider):
         return quote_policy.Verdict(False, provider.name,
                                     reason=f"attestation report unavailable: {err}")
 
-    subject = f"{provider.name}:{report.identity()}"
-    cached = _CACHE.get(subject)
-    if cached is not None:
-        return cached
+    try:
+        subject = f"{provider.name}:{report.identity()}"
+    except MalformedReport as err:
+        return quote_policy.Verdict(False, provider.name, reason=f"malformed report: {err}")
 
+    # Before the cache, not after. `identity()` is what the endpoint says about
+    # itself, so an endpoint replaying a previously verified instance's fields
+    # would otherwise be handed that instance's pass without echoing anything.
+    # These two cost nothing here -- the fetch has already happened -- and they
+    # narrow what a cache hit means to "the quote is not re-verified for a day",
+    # which is the trade the cache was for.
     if not report.echoed_our_nonce():
         return quote_policy.Verdict(
             False, subject,
@@ -295,12 +334,21 @@ def verify(provider):
             reason=f"enclave serves model {report.model!r}, not {provider.model!r}",
         )
 
-    verdict = quote_policy.verify(
-        report.quote, policy(), subject,
-        report.expected_report_data(), scope=provider.name,
-    )
-    if verdict.ok:
-        verdict = _verify_composes(report, provider, subject) or verdict
+    cached = _CACHE.get(subject)
+    if cached is not None:
+        return cached
+
+    try:
+        verdict = quote_policy.verify(
+            report.quote, policy(), subject,
+            report.expected_report_data(), scope=provider.name,
+        )
+        if verdict.ok:
+            verdict = _verify_composes(report, provider, subject) or verdict
+    except MalformedReport as err:
+        # A field the provider wrote, in a shape it must not be. That is a
+        # denial with a reason, not a traceback out of the middle of drafting.
+        verdict = quote_policy.Verdict(False, subject, reason=f"malformed report: {err}")
     _CACHE.put(subject, verdict)
     return verdict
 

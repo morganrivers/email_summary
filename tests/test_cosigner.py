@@ -110,6 +110,31 @@ def test_second_wrap_for_a_uid_is_refused(cosigner):
     assert "already wrapped" in resp.json()[protocol.F_ERROR]
 
 
+def test_the_wrap_once_check_is_decided_under_the_lock(tmp_path, monkeypatch):
+    """Read the log, then write to it, with nothing in between: two wraps for
+    one uid arriving together must not both read "not yet wrapped". Driven
+    through `policy.authorize` rather than the running service because what is
+    being asserted is where the decision happens, not what it answers."""
+    audit.reset_for_test(tmp_path)
+    holder = {}
+    real = audit.ever_granted
+
+    def spy(uid, action):
+        holder["locked"] = policy._LOCK.locked()
+        return real(uid, action)
+
+    monkeypatch.setattr(policy.audit, "ever_granted", spy)
+    allowed = attest.Verdict(True, "fp", attested=True)
+    assert policy.authorize(UID, policy.ACTION_WRAP, allowed) is None
+    assert holder["locked"], (
+        "the wrap-once check ran outside policy._LOCK, so two concurrent wraps "
+        "can both be granted"
+    )
+    second = policy.authorize(UID, policy.ACTION_WRAP, allowed)
+    assert second is not None and "already wrapped" in second.reason
+    audit.reset_for_test()
+
+
 def test_proof_covers_the_request_and_carries_no_token_material(cosigner):
     outer = _outer(cosigner)
     resp = cosigner.unwrap(outer=outer, nonce="nonce-from-google")

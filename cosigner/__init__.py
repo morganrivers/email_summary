@@ -25,4 +25,13 @@ This package imports nothing from `backend/` except the one Telegram seam in
 dependency runs the other way: `backend/custody/client.py` imports
 `cosigner.protocol` for the wire contract, and `backend/site.py` imports its
 loopback port.
+
+`runtime_guard` is the one other exception, and it is deliberately not under
+`backend/`: invariants 1 and 4 are enforced here by asserts, and a co-signer
+started with `-O` would wrap under an unchecked key and answer with an unpinned
+JWK. It must refuse on its own rather than inherit the application's guard.
 """
+
+from runtime_guard import require_asserts
+
+require_asserts()

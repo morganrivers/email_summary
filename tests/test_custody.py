@@ -177,6 +177,18 @@ def test_record_round_trips_with_its_key_version():
     assert tokens.decode_record(blob) == (7, b"outer-bytes")
 
 
+def test_a_truncated_record_asks_for_re_consent_rather_than_crashing(enclave):
+    """A half-written token.bin is a fact about a file, not a broken invariant.
+    It should reach the mail path as the ReauthRequired it means, so the daemon
+    can say so, rather than as an IndexError out of the middle of a wake."""
+    path = tokens.token_path(UID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for blob in (b"", b"LLTK", tokens.RECORD_MAGIC + bytes([tokens.RECORD_VERSION, 1])):
+        path.write_bytes(blob)
+        with pytest.raises(tokens.ReauthRequired):
+            tokens.load_record(UID)
+
+
 def test_take_custody_stores_only_the_doubly_wrapped_token(enclave, co):
     path = tokens.take_custody(UID, REFRESH_TOKEN)
     blob = path.read_bytes()

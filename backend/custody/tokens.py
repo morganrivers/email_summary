@@ -38,6 +38,8 @@ from backend.integrations.gmail_gcal import oauth_app
 TOKEN_FILE = "token.bin"
 RECORD_MAGIC = b"LLTK"
 RECORD_VERSION = 1
+# magic | record version | key version, and then the ciphertext.
+HEADER_LEN = len(RECORD_MAGIC) + 2
 
 HTTP_TIMEOUT = 30
 # Refresh a little before Google would stop accepting it, so a long request
@@ -47,6 +49,12 @@ EXPIRY_MARGIN = datetime.timedelta(seconds=120)
 _lock = threading.Lock()
 _access_cache = {}
 _dpop_nonce = None
+
+
+class BadRecord(wrapping.CustodyError):
+    """A stored token record does not decode. Raised by `decode_record` and
+    turned into `ReauthRequired` by `load_record`, which is the only caller that
+    knows whose record it was."""
 
 
 class ReauthRequired(wrapping.CustodyError):
@@ -68,15 +76,25 @@ def log(msg):
 
 # --- the record on disk ---------------------------------------------------
 
+def check_uid(uid):
+    """Refuse a uid that would name a path outside the account's own directory.
+
+    Exported because onboarding has to make the same judgement before it wraps
+    anything, and the check was written out twice: once here and once in
+    `provisioning.provision`. Two copies of a path-traversal guard is one that
+    can be relaxed on its own."""
+    assert uid and "/" not in uid and "\\" not in uid and ".." not in uid, (
+        f"refusing to build a token path from {uid!r}"
+    )
+    return uid
+
+
 def token_path(uid):
     """Where one account's wrapped refresh token lives. Inside the account's own
     directory in the store -- the same root account._owned_paths() reasons
     about, so account.delete_account() removes the token with the rest of what
     that account owns rather than leaving it behind."""
-    assert uid and "/" not in uid and "\\" not in uid and ".." not in uid, (
-        f"refusing to build a token path from {uid!r}"
-    )
-    return account_store.ACCOUNTS_DIR / uid / TOKEN_FILE
+    return account_store.ACCOUNTS_DIR / check_uid(uid) / TOKEN_FILE
 
 
 def encode_record(key_version, outer):
@@ -91,14 +109,21 @@ def encode_record(key_version, outer):
 
 
 def decode_record(blob):
-    assert blob[:4] == RECORD_MAGIC, "not a Letterlock token record"
+    """The header and the ciphertext, or `BadRecord`.
+
+    A record that does not decode is a fact about a file on disk, not a broken
+    invariant: a truncated write, a restored backup, a record from a schema this
+    build predates. It is raised rather than asserted so `load_record` can turn
+    it into the ReauthRequired it actually means, instead of an IndexError
+    surfacing from the middle of a mailbox wake."""
+    if len(blob) <= HEADER_LEN:
+        raise BadRecord(f"token record is {len(blob)} bytes, too short to hold a header")
+    if blob[:4] != RECORD_MAGIC:
+        raise BadRecord("not a Letterlock token record")
     record_version, key_version = blob[4], blob[5]
-    assert record_version == RECORD_VERSION, (
-        f"token record version {record_version} is not {RECORD_VERSION}"
-    )
-    outer = blob[6:]
-    assert outer, "token record carries no ciphertext"
-    return key_version, outer
+    if record_version != RECORD_VERSION:
+        raise BadRecord(f"token record version {record_version} is not {RECORD_VERSION}")
+    return key_version, blob[HEADER_LEN:]
 
 
 def store_record(uid, outer, key_version=wrapping.KEY_VERSION):
@@ -119,7 +144,13 @@ def load_record(uid):
     path = token_path(uid)
     if not path.exists():
         raise ReauthRequired(uid, f"no token record at {path}")
-    return decode_record(path.read_bytes())
+    try:
+        return decode_record(path.read_bytes())
+    except BadRecord as err:
+        # Unreadable and unrecoverable are the same thing here: there is no
+        # second copy of a refresh token anywhere, so the only way forward is
+        # for the user to consent again.
+        raise ReauthRequired(uid, f"{path}: {err}") from err
 
 
 def take_custody(uid, refresh_token):

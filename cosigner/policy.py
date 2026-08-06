@@ -115,9 +115,25 @@ def allowed_target(htm, htu):
     return None
 
 
+def _wrap_once_refusal(uid):
+    """A second wrap for a uid that already has one is either a bug or an
+    attacker asking us to re-wrap something, so it is refused rather than
+    served: the enclave's stored `outer` stays the only one that exists
+    (invariant 4).
+
+    It is decided here rather than by the caller because it is a read of the
+    audit log followed by a write to it, and only this module holds the lock
+    that makes that pair atomic. Computed in the handler, two concurrent wraps
+    for one uid could both read "not yet wrapped" and both be granted, which is
+    exactly the outcome the check exists to prevent."""
+    if audit.ever_granted(uid, ACTION_WRAP):
+        return Refusal(KIND_REQUEST, "already wrapped for this uid")
+    return None
+
+
 def _rate_refusal(uid, action):
     """A wrap happens once per user at onboarding and is bounded by
-    `ever_granted` instead, so it consumes no budget.
+    `_wrap_once_refusal` instead, so it consumes no budget.
 
     A bare sign is counted against its own ceiling and nothing else: the uid is
     optional there (at the code exchange none exists yet), so charging it to a
@@ -158,8 +174,9 @@ def authorize(uid, action, verdict, precheck=None):
     (None when allowed).
 
     Order matters: the kill switch first, then attestation, then the request's
-    own shape, then the rate limit. A refused request must never have consumed
-    budget it was refused for."""
+    own shape, then whether this uid has been wrapped before, then the rate
+    limit. A refused request must never have consumed budget it was refused
+    for."""
     assert action in ACTIONS, f"unknown action {action!r}"
     with _LOCK:
         refusal = None
@@ -170,6 +187,8 @@ def authorize(uid, action, verdict, precheck=None):
             refusal = Refusal(KIND_ATTESTATION, verdict.reason or "attestation refused")
         if refusal is None and precheck is not None:
             refusal = Refusal(KIND_REQUEST, precheck)
+        if refusal is None and action == ACTION_WRAP:
+            refusal = _wrap_once_refusal(uid)
         if refusal is None:
             refusal = _rate_refusal(uid, action)
         audit.record(
