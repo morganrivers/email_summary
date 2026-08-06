@@ -1,0 +1,737 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1920" height="5132" viewBox="-13 -30 1920 5132" font-family="Helvetica,Arial,sans-serif">
+<rect x="-13" y="-30" width="1920" height="5132" fill="#ffffff"/>
+<rect x="1036.0" y="4730.0" width="306.0" height="24.0" rx="10" ry="10" fill="#6b7f96" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1189.0" y="4746.2" font-size="12.0" fill="#ffffff" text-anchor="middle" font-weight="700">BOOT · attest before anything runs</text>
+<rect x="597.0" y="3780.0" width="414.0" height="24.0" rx="10" ry="10" fill="#4f9b95" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="804.0" y="3796.2" font-size="12.0" fill="#ffffff" text-anchor="middle" font-weight="700">SIGN-UP · web UI, Google consent, subscription</text>
+<rect x="514.0" y="3460.0" width="378.0" height="24.0" rx="10" ry="10" fill="#5a9367" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="703.0" y="3476.2" font-size="12.0" fill="#ffffff" text-anchor="middle" font-weight="700">CUSTODY · the enclave&#x27;s half (inner layer)</text>
+<rect x="524.0" y="2630.0" width="477.0" height="24.0" rx="10" ry="10" fill="#c17a3a" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="762.5" y="2646.2" font-size="12.0" fill="#ffffff" text-anchor="middle" font-weight="700">CO-SIGNER · second account, second key, no ciphertext</text>
+<rect x="833.0" y="1932.0" width="342.0" height="24.0" rx="10" ry="10" fill="#6b7f96" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1004.0" y="1948.2" font-size="12.0" fill="#ffffff" text-anchor="middle" font-weight="700">INGEST · push → wake → per-account run</text>
+<rect x="737.0" y="1618.0" width="333.0" height="24.0" rx="10" ry="10" fill="#5b6675" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="903.5" y="1634.2" font-size="12.0" fill="#ffffff" text-anchor="middle" font-weight="700">GOOGLE · one seam for mail + calendar</text>
+<rect x="902.0" y="865.0" width="396.0" height="24.0" rx="10" ry="10" fill="#8a5fb0" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1100.0" y="881.2" font-size="12.0" fill="#ffffff" text-anchor="middle" font-weight="700">DRAFT · what to say, in this account&#x27;s voice</text>
+<rect x="807.0" y="419.0" width="369.0" height="24.0" rx="10" ry="10" fill="#5a9367" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="991.5" y="435.2" font-size="12.0" fill="#ffffff" text-anchor="middle" font-weight="700">INFERENCE · masked text, verified enclave</text>
+<rect x="1087.0" y="56.0" width="297.0" height="24.0" rx="10" ry="10" fill="#4f9b95" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1235.5" y="72.2" font-size="12.0" fill="#ffffff" text-anchor="middle" font-weight="700">NOTIFY · Telegram + daily summary</text>
+<path d="M1452.2,5020.0 L1452.0,5005.0 L1452.0,4982.0 L1452.0,4955.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1452.0,4955.0 1456.0,4964.0 1448.0,4964.0" fill="#c17a3a"/>
+<text x="1452.0" y="4993.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">app_secret + TDX quote (attested CVM only)</text>
+<path d="M1455.3,4901.0 L1457.0,4887.0 L1460.0,4865.0 L1463.8,4837.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1463.8,4837.0 1466.6,4846.5 1458.6,4845.4" fill="#c17a3a"/>
+<text x="1458.5" y="4876.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">/Info + /GetKey + /GetQuote</text>
+<path d="M1036.0,4905.1 L1052.0,4900.0 L1066.0,4896.0 L1066.0,4896.0 L1066.0,4896.0 L1251.0,4853.0 L1379.0,4823.3" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1379.0,4823.3 1371.1,4829.2 1369.3,4821.4" fill="#c17a3a"/>
+<text x="1066.0" y="4896.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">REQUIRED present? volume_secrets absent?</text>
+<path d="M1613.3,4901.0 L1590.0,4885.0 L1554.0,4861.0 L1518.9,4837.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1518.9,4837.0 1528.6,4838.8 1524.1,4845.4" fill="#c17a3a"/>
+<text x="1572.0" y="4873.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">asserts must be live</text>
+<path d="M1670.8,4901.0 L1708.0,4846.0 L1801.0,4709.0 L1801.0,4709.0 L1801.0,4709.0 L1801.0,4709.0 L1801.0,3851.0 L1801.0,3851.0 L953.0,3312.0 L953.0,3312.0 L953.0,3312.0 L896.0,3280.0 L843.4,3250.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="843.4,3250.0 853.2,3251.0 849.3,3257.9" fill="#c17a3a"/>
+<text x="1801.0" y="4280.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">same guard, imported separately</text>
+<path d="M977.2,4894.0 L985.0,4875.0 L996.0,4847.0 L1015.8,4820.0" fill="none" stroke="#9aa6b3" stroke-width="1.4"/>
+<polygon points="1015.8,4820.0 1013.7,4829.6 1007.3,4824.9" fill="#9aa6b3"/>
+<path d="M1164.3,4894.0 L1154.0,4875.0 L1139.0,4847.0 L1134.2,4820.0" fill="none" stroke="#9aa6b3" stroke-width="1.4"/>
+<polygon points="1134.2,4820.0 1139.7,4828.2 1131.8,4829.6" fill="#9aa6b3"/>
+<path d="M1183.0,5020.0 L1183.0,5007.0 L1183.0,4988.0 L1183.0,4963.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1183.0,4963.0 1187.0,4972.0 1179.0,4972.0" fill="#3d72b4"/>
+<text x="1183.0" y="4997.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">DCAP collateral</text>
+<path d="M897.5,4894.0 L869.0,4879.0 L828.0,4857.0 L789.8,4837.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="789.8,4837.0 799.7,4837.6 795.9,4844.7" fill="#3d72b4"/>
+<text x="848.5" y="4868.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">injected pair wins over .gmail-mcp/</text>
+<path d="M1505.0,4768.0 L1559.0,4717.0 L1669.0,4615.0 L1669.0,4615.0 L1669.0,4615.0 L1669.0,4615.0 L1669.0,4109.0 L1669.0,4109.0 L1735.0,3759.0 L1735.0,3759.0 L1735.0,3759.0 L1735.0,3759.0 L1735.0,2704.0 L1735.0,2704.0 L1438.0,2410.0 L1325.4,2297.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1325.4,2297.0 1334.6,2300.6 1328.9,2306.2" fill="#c17a3a"/>
+<text x="1702.0" y="3934.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">gate passed → start</text>
+<path d="M1481.6,4768.0 L1498.0,4725.0 L1529.0,4647.0 L1529.0,4647.0 L1529.0,4647.0 L1529.0,4582.0 L1529.0,4582.0 L1529.0,4582.0 L1512.0,4555.0 L1492.5,4523.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1492.5,4523.0 1500.6,4528.6 1493.8,4532.8" fill="#c17a3a"/>
+<text x="1529.0" y="4614.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">gate passed → start</text>
+<path d="M1487.0,4901.0 L1557.0,4847.0 L1735.0,4709.0 L1735.0,4709.0 L1735.0,4709.0 L1735.0,4709.0 L1735.0,4109.0 L1735.0,4109.0 L1297.0,3704.0 L1153.9,3570.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1153.9,3570.0 1163.2,3573.2 1157.7,3579.1" fill="#c17a3a"/>
+<text x="1735.0" y="4709.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">app_secret → HKDF</text>
+<path d="M1448.9,4587.0 L1452.0,4573.0 L1457.0,4550.0 L1463.4,4523.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1463.4,4523.0 1465.2,4532.7 1457.4,4530.8" fill="#2e8b57"/>
+<text x="1454.5" y="4561.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">sign in / subscribe</text>
+<path d="M1349.2,4580.0 L1369.0,4565.0 L1397.0,4545.0 L1426.0,4523.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1426.0,4523.0 1421.3,4531.6 1416.4,4525.3" fill="#3d72b4"/>
+<text x="1383.0" y="4555.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">hosts + callback URLs</text>
+<path d="M1385.0,4468.1 L1287.0,4445.0 L1123.0,4406.0 L1016.0,4380.6" fill="none" stroke="#8493a4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1016.0,4380.6 1025.7,4378.8 1023.8,4386.6" fill="#8493a4"/>
+<text x="1205.0" y="4425.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">signed cookie</text>
+<path d="M1002.5,4469.0 L994.0,4454.0 L977.0,4427.0 L959.6,4397.0" fill="none" stroke="#8493a4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="959.6,4397.0 967.5,4402.8 960.6,4406.8" fill="#8493a4"/>
+<text x="985.5" y="4440.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">SESSION_SECRET</text>
+<path d="M1385.0,4475.5 L1216.0,4450.0 L848.0,4395.0 L848.0,4395.0 L848.0,4395.0 L846.0,4394.0 L834.0,4391.3" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="834.0,4391.3 843.7,4389.4 841.9,4397.2" fill="#2e8b57"/>
+<text x="848.0" y="4395.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">/auth/start → /auth/callback</text>
+<path d="M722.8,4768.0 L720.0,4692.0 L713.0,4492.0 L709.3,4397.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="709.3,4397.0 713.7,4405.8 705.7,4406.1" fill="#3d72b4"/>
+<text x="716.5" y="4592.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">client keys + scopes</text>
+<path d="M697.1,4328.0 L692.0,4312.0 L691.0,4290.0 L695.5,4263.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="695.5,4263.0 698.0,4272.5 690.1,4271.2" fill="#2e8b57"/>
+<text x="691.5" y="4301.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">PKCE + dpop_jkt</text>
+<path d="M709.6,4263.0 L715.0,4278.0 L717.0,4300.0 L713.0,4328.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="713.0,4328.0 710.3,4318.5 718.2,4319.7" fill="#2e8b57"/>
+<text x="716.0" y="4289.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">code</text>
+<path d="M582.0,4331.0 L474.0,4304.0 L332.0,4269.0 L332.0,4269.0 L332.0,4269.0 L230.0,3885.0 L230.0,3885.0 L230.0,3885.0 L230.0,3820.0 L230.0,3820.0 L230.0,3820.0 L419.0,3746.0 L539.0,3699.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="539.0,3699.0 532.0,3706.0 529.1,3698.6" fill="#2e8b57"/>
+<text x="230.0" y="3885.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">take_custody(refresh_token) never touches disk plain</text>
+<path d="M760.3,4328.0 L827.0,4284.0 L958.0,4198.0 L1037.3,4145.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1037.3,4145.0 1032.1,4153.3 1027.6,4146.7" fill="#2e8b57"/>
+<text x="892.5" y="4241.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">register_account</text>
+<path d="M1111.8,4076.0 L1121.0,4062.0 L1138.0,4042.0 L1163.3,4019.0" fill="none" stroke="#b98a1e" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1163.3,4019.0 1159.3,4028.0 1153.9,4022.1" fill="#b98a1e"/>
+<text x="1129.5" y="4052.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">manifest write (0600 in 0700)</text>
+<path d="M1179.9,4019.0 L1170.0,4034.0 L1152.0,4054.0 L1127.5,4076.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1127.5,4076.0 1131.5,4067.0 1136.8,4073.0" fill="#3d72b4"/>
+<text x="1161.0" y="4044.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">load_accounts()</text>
+<path d="M582.0,4333.1 L466.0,4306.0 L308.0,4269.0 L308.0,4269.0 L308.0,4269.0 L57.0,3853.0 L57.0,3853.0 L57.0,3853.0 L57.0,3853.0 L57.0,2608.0 L57.0,2608.0 L306.0,2289.0 L399.8,2168.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="399.8,2168.0 397.4,2177.6 391.1,2172.7" fill="#2e8b57"/>
+<text x="57.0" y="3853.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">first users.watch</text>
+<path d="M636.2,4328.0 L605.0,4313.0 L560.0,4291.0 L518.0,4271.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="518.0,4271.0 527.8,4271.3 524.4,4278.5" fill="#2e8b57"/>
+<text x="582.5" y="4302.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">checkout redirect</text>
+<path d="M443.8,4202.0 L443.0,4186.0 L442.0,4164.0 L440.5,4137.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="440.5,4137.0 445.0,4145.8 437.0,4146.2" fill="#2e8b57"/>
+<text x="442.5" y="4175.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">checkout / customer / subscriptions</text>
+<path d="M437.8,4083.0 L437.0,4066.0 L435.0,4038.0 L433.2,4008.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="433.2,4008.0 437.7,4016.7 429.7,4017.2" fill="#2e8b57"/>
+<text x="436.0" y="4052.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">api.polar.sh</text>
+<path d="M419.0,3954.0 L412.0,3939.0 L400.0,3915.0 L386.6,3887.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="386.6,3887.0 394.1,3893.4 386.8,3896.8" fill="#2e8b57"/>
+<text x="406.0" y="3927.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">order.paid / subscription.*</text>
+<path d="M421.0,3887.0 L458.0,3912.0 L509.0,3946.0 L509.0,3946.0 L509.0,3946.0 L559.0,4078.0 L559.0,4078.0 L559.0,4078.0 L559.0,4143.0 L559.0,4143.0 L559.0,4143.0 L524.0,4172.0 L487.5,4202.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="487.5,4202.0 491.9,4193.2 497.0,4199.4" fill="#2e8b57"/>
+<text x="559.0" y="4078.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">verified event</text>
+<path d="M220.5,4328.0 L259.0,4312.0 L313.0,4291.0 L361.6,4271.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="361.6,4271.0 354.8,4278.1 351.8,4270.7" fill="#2e8b57"/>
+<text x="286.0" y="4301.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">periodic reconcile</text>
+<path d="M545.0,4216.8 L660.0,4194.0 L855.0,4157.0 L986.0,4131.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="986.0,4131.0 978.0,4136.6 976.4,4128.8" fill="#2e8b57"/>
+<text x="757.5" y="4175.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">set_plan_status</text>
+<path d="M481.0,4343.0 L476.0,4328.0 L467.0,4301.0 L457.0,4271.0" fill="none" stroke="#8493a4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="457.0,4271.0 463.6,4278.3 456.1,4280.8" fill="#8493a4"/>
+<text x="471.5" y="4314.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">POLAR_*</text>
+<path d="M1489.4,4454.0 L1523.0,4389.0 L1603.0,4237.0 L1603.0,4237.0 L1603.0,4237.0 L1603.0,4237.0 L1603.0,3758.0 L1603.0,3758.0 L1669.0,3439.0 L1669.0,3439.0 L1669.0,3439.0 L1669.0,3439.0 L1669.0,2704.0 L1669.0,2704.0 L1732.0,2389.0 L1732.0,2389.0 L1732.0,2389.0 L1732.0,2389.0 L1732.0,2003.0 L1732.0,2003.0 L1730.0,1691.0 L1730.0,1691.0 L1730.0,1691.0 L1730.0,1691.0 L1730.0,1571.0 L1730.0,1571.0 L1443.0,1428.0 L1301.4,1356.0" fill="none" stroke="#8493a4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1301.4,1356.0 1311.2,1356.5 1307.6,1363.6" fill="#8493a4"/>
+<text x="1700.5" y="2546.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">/voice → start() (background thread)</text>
+<path d="M1471.3,4454.0 L1471.0,4389.0 L1471.0,4237.0 L1471.0,4237.0 L1471.0,4237.0 L1471.0,4237.0 L1471.0,3851.0 L1471.0,3851.0 L1600.0,3088.0 L1600.0,3088.0 L1600.0,3088.0 L1600.0,3088.0 L1600.0,2608.0 L1600.0,2608.0 L1465.0,2169.0 L1465.0,2169.0 L1465.0,2169.0 L1446.0,1784.0 L1446.0,1784.0 L1446.0,1784.0 L1067.0,1472.0 L927.9,1356.0" fill="none" stroke="#8493a4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="927.9,1356.0 937.4,1358.7 932.2,1364.8" fill="#8493a4"/>
+<text x="1600.0" y="3088.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">/personal</text>
+<path d="M827.2,3573.0 L798.0,3589.0 L753.0,3610.0 L706.8,3630.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="706.8,3630.0 713.4,3622.8 716.6,3630.1" fill="#3d72b4"/>
+<text x="775.5" y="3599.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">outer ciphertext</text>
+<path d="M690.4,3630.0 L718.0,3615.0 L763.0,3593.0 L809.1,3573.0" fill="none" stroke="#b98a1e" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="809.1,3573.0 802.4,3580.3 799.2,3572.9" fill="#b98a1e"/>
+<text x="740.5" y="3604.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">store_record</text>
+<path d="M733.0,3637.5 L841.0,3610.0 L999.0,3571.0 L999.0,3571.0 L999.0,3571.0 L1002.0,3570.0 L1014.0,3566.4" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1014.0,3566.4 1006.5,3572.8 1004.2,3565.2" fill="#2e8b57"/>
+<text x="999.0" y="3571.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">seal_inner / open_inner</text>
+<path d="M536.1,3630.0 L494.0,3614.0 L433.0,3590.0 L380.3,3570.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="380.3,3570.0 390.2,3569.5 387.3,3576.9" fill="#2e8b57"/>
+<text x="463.5" y="3602.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">unwrap_and_sign(uid, outer, htm, htu, nonce)</text>
+<path d="M296.6,3501.0 L302.0,3475.0 L320.0,3438.0 L320.0,3438.0 L320.0,3438.0 L569.0,3314.0 L710.0,3249.1" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="710.0,3249.1 703.5,3256.5 700.2,3249.2" fill="#2e8b57"/>
+<text x="320.0" y="3438.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">mTLS + RA-TLS client cert</text>
+<path d="M719.9,3250.0 L612.0,3309.0 L352.0,3438.0 L352.0,3438.0 L352.0,3438.0 L338.0,3468.0 L314.3,3501.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="314.3,3501.0 316.3,3491.4 322.8,3496.0" fill="#2e8b57"/>
+<text x="352.0" y="3438.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">{inner, proof}</text>
+<path d="M1176.8,3121.0 L1113.0,3194.0 L953.0,3377.0 L953.0,3377.0 L953.0,3377.0 L546.0,3438.0 L546.0,3438.0 L546.0,3438.0 L456.0,3472.0 L380.0,3501.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="380.0,3501.0 386.9,3494.1 389.8,3501.5" fill="#3d72b4"/>
+<text x="749.5" y="3407.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">paths, fields, base64</text>
+<path d="M993.1,3637.0 L1013.0,3621.0 L1044.0,3595.0 L1074.7,3570.0" fill="none" stroke="#9aa6b3" stroke-width="1.4"/>
+<polygon points="1074.7,3570.0 1070.2,3578.8 1065.2,3572.6" fill="#9aa6b3"/>
+<path d="M584.3,3630.0 L562.0,3612.0 L537.0,3587.0 L517.8,3562.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="517.8,3562.0 526.4,3566.7 520.1,3571.6" fill="#2e8b57"/>
+<text x="549.5" y="3599.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">refresh_token grant + DPoP proof</text>
+<path d="M530.8,3562.0 L552.0,3579.0 L578.0,3603.0 L599.5,3630.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="599.5,3630.0 590.8,3625.5 597.0,3620.5" fill="#2e8b57"/>
+<text x="565.0" y="3591.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">access token (Bearer, 1h, cached; refresh token zeroized)</text>
+<path d="M717.4,3181.0 L687.0,3165.0 L643.0,3142.0 L602.9,3121.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="602.9,3121.0 612.7,3121.6 609.0,3128.7" fill="#c17a3a"/>
+<text x="665.0" y="3153.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">client cert → quote</text>
+<path d="M373.0,3178.0 L400.0,3163.0 L438.0,3142.0 L475.5,3121.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="475.5,3121.0 469.6,3128.9 465.7,3121.9" fill="#3d72b4"/>
+<text x="419.0" y="3152.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">authorized measurements (enclave cannot edit)</text>
+<path d="M491.7,3196.0 L498.0,3180.0 L510.0,3152.0 L522.8,3121.0" fill="none" stroke="#8493a4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="522.8,3121.0 523.0,3130.8 515.7,3127.8" fill="#8493a4"/>
+<path d="M564.7,3052.0 L576.0,3038.0 L592.0,3018.0 L610.8,2995.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="610.8,2995.0 608.2,3004.5 602.0,2999.4" fill="#2e8b57"/>
+<text x="584.0" y="3028.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">verdict</text>
+<path d="M763.7,3181.0 L739.0,3137.0 L691.0,3052.0 L658.6,2995.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="658.6,2995.0 666.5,3000.8 659.6,3004.8" fill="#2e8b57"/>
+<text x="715.0" y="3094.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">authorize(uid, action)</text>
+<path d="M742.0,2932.6 L822.0,2911.0 L937.0,2881.0 L1024.0,2857.2" fill="none" stroke="#b98a1e" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1024.0,2857.2 1016.4,2863.4 1014.3,2855.7" fill="#b98a1e"/>
+<text x="879.5" y="2896.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">count + row, one lock</text>
+<path d="M1164.2,2800.0 L1189.0,2785.0 L1224.0,2764.0 L1258.6,2743.0" fill="none" stroke="#b98a1e" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1258.6,2743.0 1253.0,2751.1 1248.9,2744.2" fill="#b98a1e"/>
+<text x="1206.5" y="2774.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">append-only</text>
+<path d="M694.8,2926.0 L719.0,2911.0 L753.0,2890.0 L786.9,2869.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="786.9,2869.0 781.3,2877.1 777.1,2870.3" fill="#2e8b57"/>
+<text x="736.0" y="2900.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">granted → unwrap + sign</text>
+<path d="M839.1,2869.0 L832.0,2941.0 L814.0,3119.0 L814.0,3119.0 L814.0,3119.0 L805.0,3147.0 L794.1,3181.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="794.1,3181.0 793.0,3171.2 800.6,3173.7" fill="#2e8b57"/>
+<text x="814.0" y="3119.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">{inner, proof}</text>
+<path d="M580.4,2926.0 L504.0,2881.0 L353.0,2793.0 L262.4,2740.0" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="262.4,2740.0 272.2,2741.1 268.2,2748.0" fill="#c0392b"/>
+<text x="428.5" y="2837.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">refusal</text>
+<path d="M824.8,3310.0 L818.0,3295.0 L809.0,3275.0 L798.1,3250.0" fill="none" stroke="#9aa6b3" stroke-width="1.4"/>
+<polygon points="798.1,3250.0 805.3,3256.6 798.0,3259.8" fill="#9aa6b3"/>
+<path d="M418.0,1545.0 L389.0,1528.0 L343.0,1501.0 L302.5,1477.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="302.5,1477.0 312.3,1478.2 308.2,1485.0" fill="#2e8b57"/>
+<text x="366.0" y="1514.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">users.watch</text>
+<path d="M257.0,1477.0 L257.0,1536.0 L256.0,1689.0 L256.0,1689.0 L256.0,2134.0 L256.0,2134.0 L256.0,2134.0 L256.0,2134.0 L289.0,2169.0 L289.0,2169.0 L289.0,2169.0 L534.0,2385.0 L640.7,2480.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="640.7,2480.0 631.4,2477.0 636.7,2471.0" fill="#2e8b57"/>
+<text x="256.0" y="2134.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">OIDC push {emailAddress, historyId}</text>
+<path d="M812.0,2542.1 L1027.0,2587.0 L1434.0,2670.0 L1434.0,2670.0 L1434.0,2670.0 L1468.0,2833.0 L1468.0,2833.0 L1468.0,3088.0 L1468.0,3088.0 L1468.0,3088.0 L1468.0,3088.0 L1234.0,3571.0 L1234.0,3571.0 L1234.0,3571.0 L1083.0,3697.0 L1083.0,3697.0 L1083.0,3697.0 L790.0,3758.0 L790.0,3758.0 L790.0,3758.0 L510.0,3885.0 L510.0,3885.0 L510.0,3885.0 L354.0,3946.0 L354.0,3946.0 L354.0,3946.0 L354.0,4017.0 L354.0,4017.0 L354.0,4017.0 L772.0,4070.0 L986.0,4097.3" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="986.0,4097.3 976.6,4100.2 977.6,4092.2" fill="#3d72b4"/>
+<text x="1083.0" y="3697.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">resolve address → account (unregistered dropped)</text>
+<path d="M722.4,2480.0 L741.0,2465.0 L767.0,2445.0 L794.5,2423.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="794.5,2423.0 789.9,2431.7 784.9,2425.5" fill="#2e8b57"/>
+<text x="754.0" y="2455.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">enqueue(account_id)</text>
+<path d="M782.4,2480.0 L857.0,2455.0 L960.0,2421.0 L960.0,2421.0 L960.0,2421.0 L1117.0,2346.0 L1219.1,2297.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1219.1,2297.0 1212.7,2304.5 1209.3,2297.3" fill="#2e8b57"/>
+<text x="960.0" y="2421.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">poke wake.fifo (0600)</text>
+<path d="M947.0,2358.1 L1012.0,2340.0 L1100.0,2316.0 L1178.0,2294.2" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1178.0,2294.2 1170.4,2300.4 1168.3,2292.7" fill="#2e8b57"/>
+<text x="1056.0" y="2328.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">drain() → which accounts</text>
+<path d="M1092.0,4076.0 L1096.0,4030.0 L1104.0,3946.0 L1104.0,3946.0 L1104.0,3946.0 L1534.0,3088.0 L1534.0,3088.0 L1534.0,3088.0 L1534.0,3088.0 L1534.0,2833.0 L1534.0,2833.0 L1467.0,2670.0 L1467.0,2670.0 L1467.0,2670.0 L1353.0,2408.0 L1305.7,2297.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1305.7,2297.0 1312.9,2303.7 1305.5,2306.8" fill="#3d72b4"/>
+<text x="1534.0" y="3088.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">load_accounts() (inactive dropped)</text>
+<path d="M1368.9,2228.0 L1405.0,2212.0 L1457.0,2189.0 L1504.3,2168.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1504.3,2168.0 1497.7,2175.3 1494.4,2168.0" fill="#2e8b57"/>
+<text x="1431.0" y="2200.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">process_account</text>
+<path d="M1029.1,2096.0 L1043.0,2081.0 L1061.0,2062.0 L1082.4,2039.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1082.4,2039.0 1079.2,2048.3 1073.3,2042.9" fill="#3d72b4"/>
+<path d="M1211.0,2029.1 L1285.0,2048.0 L1391.0,2077.0 L1479.0,2103.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1479.0,2103.0 1469.2,2104.3 1471.5,2096.6" fill="#3d72b4"/>
+<text x="1338.0" y="2062.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">lastHistoryId</text>
+<path d="M1479.0,2106.6 L1404.0,2087.0 L1298.0,2059.0 L1211.0,2033.2" fill="none" stroke="#b98a1e" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1211.0,2033.2 1220.8,2031.9 1218.5,2039.6" fill="#b98a1e"/>
+<text x="1351.0" y="2073.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">advance cursor</text>
+<path d="M424.7,2099.0 L421.0,2027.0 L413.0,1849.0 L413.0,1849.0 L413.0,1849.0 L413.0,1784.0 L413.0,1784.0 L413.0,1784.0 L449.0,1755.0 L485.3,1725.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="485.3,1725.0 480.9,1733.8 475.8,1727.7" fill="#2e8b57"/>
+<text x="413.0" y="1816.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">users.watch (weekly)</text>
+<path d="M549.0,2110.4 L678.0,2086.0 L886.0,2048.0 L1018.0,2022.9" fill="none" stroke="#b98a1e" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1018.0,2022.9 1009.9,2028.5 1008.4,2020.6" fill="#b98a1e"/>
+<text x="782.0" y="2067.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">watchExpiration</text>
+<path d="M1544.3,2099.0 L1483.0,2043.0 L1365.0,1920.0 L1308.7,1851.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1308.7,1851.0 1317.5,1855.4 1311.3,1860.5" fill="#2e8b57"/>
+<text x="1424.0" y="1981.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">fetch_since_history</text>
+<path d="M1128.0,1786.8 L1119.0,1785.0 L1113.0,1784.0 L1113.0,1784.0 L1113.0,1784.0 L708.0,1723.0 L708.0,1723.0 L708.0,1723.0 L703.0,1722.0 L686.0,1719.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="686.0,1719.0 695.6,1716.6 694.2,1724.5" fill="#2e8b57"/>
+<text x="910.5" y="1753.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">history.list + messages.get</text>
+<path d="M686.0,1707.0 L947.0,1734.0 L1446.0,1784.0 L1446.0,1784.0 L1446.0,1784.0 L1446.0,1849.0 L1446.0,1849.0 L1446.0,1849.0 L1418.0,2295.0 L1418.0,2295.0 L1418.0,2295.0 L827.0,2608.0 L827.0,2608.0 L827.0,2608.0 L827.0,2609.0 L827.0,2609.0 L827.0,2609.0 L1204.0,2802.0 L1204.0,2802.0 L1204.0,2802.0 L1301.0,3054.0 L1301.0,3054.0 L1301.0,3054.0 L1301.0,3119.0 L1301.0,3119.0 L1301.0,3119.0 L1006.0,3377.0 L1006.0,3377.0 L1006.0,3377.0 L676.0,3438.0 L676.0,3438.0 L676.0,3438.0 L650.0,3556.0 L634.3,3630.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="634.3,3630.0 632.3,3620.4 640.1,3622.0" fill="#3d72b4"/>
+<text x="1015.5" y="2705.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">refresh_handler_for(account) (no refresh token in Credentials)</text>
+<path d="M508.5,1656.0 L501.0,1642.0 L491.0,1623.0 L478.3,1599.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="478.3,1599.0 486.0,1605.1 479.0,1608.8" fill="#2e8b57"/>
+<text x="496.0" y="1632.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">REST (Bearer)</text>
+<path d="M1318.0,1851.0 L1379.0,1907.0 L1497.0,2030.0 L1553.7,2099.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1553.7,2099.0 1544.9,2094.6 1551.0,2089.5" fill="#2e8b57"/>
+<text x="1438.0" y="1968.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">received + sent</text>
+<path d="M835.2,1782.0 L782.0,1766.0 L707.0,1744.0 L643.1,1725.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="643.1,1725.0 652.8,1723.7 650.6,1731.4" fill="#2e8b57"/>
+<text x="744.5" y="1755.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">drafts.create / update</text>
+<path d="M587.3,1789.0 L578.0,1774.0 L564.0,1751.0 L548.1,1725.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="548.1,1725.0 556.2,1730.6 549.4,1734.8" fill="#2e8b57"/>
+<text x="571.0" y="1762.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">events.list / insert</text>
+<path d="M1598.5,2099.0 L1646.0,2000.0 L1796.0,1691.0 L1796.0,1691.0 L1796.0,1691.0 L1796.0,1691.0 L1796.0,1571.0 L1796.0,1571.0 L1755.0,1415.0 L1755.0,1415.0 L1755.0,1415.0 L1496.0,1292.0 L1361.1,1227.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1361.1,1227.0 1370.9,1227.3 1367.5,1234.5" fill="#2e8b57"/>
+<text x="1796.0" y="1631.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">is_bot_request → user+bot@…</text>
+<path d="M1685.0,2106.4 L1793.0,2078.0 L1953.0,2037.0 L1953.0,2037.0 L1953.0,2037.0 L1994.0,1911.0 L1994.0,1911.0 L1994.0,1911.0 L1994.0,1911.0 L1994.0,1571.0 L1994.0,1571.0 L1780.0,1289.0 L1780.0,1289.0 L1780.0,1289.0 L1729.0,1257.0 L1680.9,1227.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1680.9,1227.0 1690.6,1228.4 1686.4,1235.2" fill="#2e8b57"/>
+<text x="1994.0" y="1911.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">everything else</text>
+<path d="M1685.0,2108.6 L1803.0,2080.0 L1988.0,2037.0 L1988.0,2037.0 L1988.0,2037.0 L2060.0,1911.0 L2060.0,1911.0 L2060.0,1911.0 L2060.0,1911.0 L2060.0,1191.0 L2060.0,1191.0 L1871.0,1047.0 L1774.4,972.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1774.4,972.0 1784.0,974.4 1779.1,980.7" fill="#2e8b57"/>
+<text x="2060.0" y="1911.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">sent mail, if auto_schedule</text>
+<path d="M1337.0,1287.0 L1388.0,1270.0 L1460.0,1247.0 L1520.7,1227.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1520.7,1227.0 1513.4,1233.6 1510.9,1226.0" fill="#3d72b4"/>
+<text x="1424.0" y="1258.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">resolve(account)</text>
+<path d="M1019.0,1298.2 L1151.0,1275.0 L1361.0,1239.0 L1503.0,1214.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1503.0,1214.0 1494.8,1219.5 1493.4,1211.7" fill="#3d72b4"/>
+<text x="1256.0" y="1257.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">section(account)</text>
+<path d="M1009.0,1228.7 L1054.0,1245.0 L1109.0,1267.0 L1154.7,1287.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1154.7,1287.0 1144.8,1287.1 1148.0,1279.7" fill="#3d72b4"/>
+<path d="M1137.7,1287.0 L1096.0,1272.0 L1041.0,1250.0 L995.3,1230.0" fill="none" stroke="#b98a1e" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="995.3,1230.0 1005.1,1229.9 1001.9,1237.3" fill="#b98a1e"/>
+<text x="1068.5" y="1261.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">generate() overwrites wholesale</text>
+<path d="M949.0,1417.5 L1003.0,1399.0 L1072.0,1376.0 L1131.3,1356.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1131.3,1356.0 1124.0,1362.7 1121.5,1355.1" fill="#3d72b4"/>
+<text x="1037.5" y="1387.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">operator&#x27;s own profile</text>
+<path d="M565.6,1420.0 L620.0,1403.0 L705.0,1378.0 L775.7,1356.0" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="775.7,1356.0 768.3,1362.5 765.9,1354.9" fill="#3d72b4"/>
+<path d="M1503.0,1159.0 L1437.0,1141.0 L1349.0,1118.0 L1275.4,1098.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1275.4,1098.0 1285.2,1096.5 1283.1,1104.2" fill="#2e8b57"/>
+<text x="1393.0" y="1129.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">drafting_instructions + fenced email</text>
+<path d="M1243.2,1158.0 L1223.0,1143.0 L1199.0,1121.0 L1178.8,1098.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1178.8,1098.0 1187.7,1102.1 1181.7,1107.4" fill="#2e8b57"/>
+<text x="1211.0" y="1132.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">user context + original thread</text>
+<path d="M1194.8,1098.0 L1215.0,1113.0 L1239.0,1135.0 L1259.2,1158.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1259.2,1158.0 1250.3,1153.9 1256.3,1148.6" fill="#2e8b57"/>
+<text x="1227.0" y="1124.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">on_iteration → progressive draft</text>
+<path d="M1134.6,1029.0 L1129.0,1015.0 L1121.0,996.0 L1111.2,972.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1111.2,972.0 1118.3,978.8 1110.9,981.8" fill="#2e8b57"/>
+<text x="1125.0" y="1005.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">search_emails, get_calendar_events, get_email_thread</text>
+<path d="M1200.3,972.0 L1377.0,1031.0 L1762.0,1157.0 L1762.0,1157.0 L1762.0,1157.0 L1762.0,1228.0 L1762.0,1228.0 L1762.0,1228.0 L1573.0,1289.0 L1573.0,1289.0 L1573.0,1289.0 L963.0,1486.0 L963.0,1486.0 L963.0,1486.0 L689.0,1547.0 L689.0,1547.0 L689.0,1547.0 L619.0,1609.0 L565.9,1656.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="565.9,1656.0 570.0,1647.0 575.3,1653.0" fill="#2e8b57"/>
+<text x="1573.0" y="1289.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">per-account calls only</text>
+<path d="M1575.8,1227.0 L1511.0,1272.0 L1391.0,1354.0 L1391.0,1354.0 L1391.0,1354.0 L1132.0,1486.0 L1132.0,1486.0 L1132.0,1486.0 L980.0,1547.0 L980.0,1547.0 L980.0,1547.0 L962.0,1658.0 L962.0,1658.0 L962.0,1658.0 L957.0,1727.0 L952.7,1782.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="952.7,1782.0 949.4,1772.7 957.4,1773.3" fill="#2e8b57"/>
+<text x="1056.0" y="1516.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">build_draft_payload → submit_draft</text>
+<path d="M1316.6,1227.0 L1337.0,1253.0 L1366.0,1289.0 L1366.0,1289.0 L1366.0,1289.0 L1366.0,1354.0 L1366.0,1354.0 L1366.0,1354.0 L847.0,1547.0 L847.0,1547.0 L847.0,1547.0 L847.0,1597.0 L847.0,1597.0 L847.0,1597.0 L906.0,1723.0 L906.0,1723.0 L906.0,1723.0 L919.0,1750.0 L933.9,1782.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="933.9,1782.0 926.5,1775.5 933.7,1772.2" fill="#2e8b57"/>
+<text x="847.0" y="1547.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">placeholder, then update in place</text>
+<path d="M1738.9,972.0 L1754.0,1031.0 L1787.0,1157.0 L1787.0,1157.0 L1787.0,1157.0 L1787.0,1228.0 L1787.0,1228.0 L1787.0,1228.0 L1226.0,1486.0 L1226.0,1486.0 L1226.0,1486.0 L980.0,1547.0 L980.0,1547.0 L980.0,1547.0 L744.0,1716.0 L641.8,1789.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="641.8,1789.0 646.8,1780.5 651.4,1787.0" fill="#2e8b57"/>
+<text x="1506.5" y="1357.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">create_event (no attendees)</text>
+<path d="M1190.0,1029.0 L1220.0,1004.0 L1262.0,970.0 L1262.0,970.0 L1262.0,970.0 L1347.0,782.0 L1347.0,782.0 L1347.0,782.0 L1372.0,710.0 L1391.7,655.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1391.7,655.0 1392.4,664.8 1384.9,662.1" fill="#2e8b57"/>
+<text x="1304.5" y="876.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">complete() until final draft</text>
+<path d="M1302.2,1287.0 L1352.0,1262.0 L1422.0,1228.0 L1422.0,1228.0 L1422.0,1228.0 L1422.0,1157.0 L1422.0,1157.0 L1422.0,1157.0 L1410.0,790.0 L1405.2,655.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1405.2,655.0 1409.5,663.9 1401.5,664.1" fill="#2e8b57"/>
+<text x="1422.0" y="1192.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">synthesize from masked samples</text>
+<path d="M1694.5,903.0 L1637.0,847.0 L1509.0,723.0 L1439.3,655.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1439.3,655.0 1448.6,658.4 1443.0,664.1" fill="#2e8b57"/>
+<text x="1573.0" y="785.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">extract_events</text>
+<path d="M1350.0,655.0 L1325.0,671.0 L1283.0,694.0 L1239.7,715.0" fill="none" stroke="#1e7a3a" stroke-width="2"/>
+<polygon points="1239.7,715.0 1246.0,707.5 1249.5,714.7" fill="#1e7a3a"/>
+<text x="1304.0" y="682.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">pseudonymize() before anything leaves</text>
+<path d="M1222.8,715.0 L1248.0,699.0 L1290.0,676.0 L1333.1,655.0" fill="none" stroke="#1e7a3a" stroke-width="2"/>
+<polygon points="1333.1,655.0 1326.8,662.5 1323.3,655.3" fill="#1e7a3a"/>
+<text x="1269.0" y="687.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">restore() on the way back</text>
+<path d="M889.0,734.4 L979.0,714.0 L1150.0,677.0 L1278.0,648.5" fill="none" stroke="#8493a4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1278.0,648.5 1270.1,654.4 1268.3,646.6" fill="#8493a4"/>
+<text x="1064.5" y="695.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">provider keys</text>
+<path d="M1348.7,586.0 L1323.0,570.0 L1287.0,548.0 L1251.4,526.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1251.4,526.0 1261.1,527.3 1256.9,534.1" fill="#c17a3a"/>
+<text x="1305.0" y="559.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">require(provider) before a client exists</text>
+<path d="M741.0,586.4 L829.0,568.0 L942.0,545.0 L1033.0,525.8" fill="none" stroke="#3d72b4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1033.0,525.8 1025.0,531.6 1023.4,523.7" fill="#3d72b4"/>
+<text x="885.5" y="556.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">pinned measurements + compose file hashes</text>
+<path d="M939.9,601.0 L979.0,584.0 L1054.0,553.0 L1116.1,526.0" fill="none" stroke="#8493a4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1116.1,526.0 1109.5,533.3 1106.3,525.9" fill="#8493a4"/>
+<path d="M1220.0,457.0 L1230.0,443.0 L1244.0,423.0 L1260.1,400.0" fill="none" stroke="#c17a3a" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1260.1,400.0 1258.2,409.7 1251.7,405.1" fill="#c17a3a"/>
+<text x="1237.0" y="433.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">report?nonce → quote, signing address, ComposeLog</text>
+<path d="M1440.8,586.0 L1460.0,568.0 L1488.0,543.0 L1514.7,518.0" fill="none" stroke="#1e7a3a" stroke-width="2"/>
+<polygon points="1514.7,518.0 1510.8,527.1 1505.4,521.2" fill="#1e7a3a"/>
+<text x="1474.0" y="555.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">MASKED text only</text>
+<path d="M1489.5,586.0 L1554.0,560.0 L1646.0,524.0 L1646.0,524.0 L1646.0,524.0 L1646.0,459.0 L1646.0,459.0 L1646.0,459.0 L1498.0,425.0 L1382.0,397.5" fill="none" stroke="#1e7a3a" stroke-width="2"/>
+<polygon points="1382.0,397.5 1391.7,395.6 1389.8,403.4" fill="#1e7a3a"/>
+<text x="1646.0" y="491.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">MASKED text only, attested enclave</text>
+<path d="M1375.2,289.0 L1585.0,351.0 L2060.0,490.0 L2060.0,490.0 L2060.0,750.0 L2060.0,750.0 L2060.0,750.0 L2060.0,750.0 L1787.0,1228.0 L1787.0,1228.0 L1787.0,1228.0 L1619.0,1289.0 L1619.0,1289.0 L1619.0,1289.0 L1501.0,1354.0 L1501.0,1354.0 L1501.0,1354.0 L980.0,1547.0 L980.0,1547.0 L980.0,1547.0 L980.0,1597.0 L980.0,1597.0 L980.0,1597.0 L1114.0,1723.0 L1114.0,1723.0 L1114.0,1723.0 L1168.0,1753.0 L1219.4,1782.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1219.4,1782.0 1209.6,1781.1 1213.5,1774.1" fill="#2e8b57"/>
+<text x="1560.0" y="1321.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">fetch_daily(account)</text>
+<path d="M1308.7,289.0 L1345.0,314.0 L1396.0,348.0 L1396.0,348.0 L1396.0,348.0 L1396.0,398.0 L1396.0,398.0 L1396.0,398.0 L1019.0,459.0 L1019.0,459.0 L1019.0,459.0 L1019.0,524.0 L1019.0,524.0 L1019.0,524.0 L1159.0,559.0 L1278.0,588.9" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1278.0,588.9 1268.3,590.6 1270.2,582.8" fill="#2e8b57"/>
+<text x="1207.5" y="428.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">summarise</text>
+<path d="M1307.6,220.0 L1329.0,205.0 L1359.0,184.0 L1389.1,163.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1389.1,163.0 1384.0,171.4 1379.4,164.9" fill="#2e8b57"/>
+<text x="1344.0" y="194.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">per-account target</text>
+<path d="M1675.1,1158.0 L1770.0,1092.0 L1994.0,938.0 L1994.0,938.0 L1994.0,938.0 L1994.0,938.0 L1994.0,372.0 L1994.0,372.0 L1675.0,233.0 L1516.6,163.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1516.6,163.0 1526.4,163.0 1523.2,170.3" fill="#2e8b57"/>
+<text x="1994.0" y="938.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">one message per run</text>
+<path d="M1802.6,903.0 L1910.0,852.0 L2126.0,750.0 L2126.0,750.0 L2126.0,750.0 L2126.0,750.0 L2126.0,372.0 L2126.0,372.0 L2019.0,222.0 L2019.0,222.0 L2019.0,222.0 L1738.0,177.0 L1558.0,147.9" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1558.0,147.9 1567.5,145.3 1566.2,153.2" fill="#2e8b57"/>
+<text x="2126.0" y="561.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">what was scheduled</text>
+<path d="M1498.7,586.0 L1570.0,560.0 L1671.0,524.0 L1671.0,524.0 L1671.0,524.0 L1671.0,459.0 L1671.0,459.0 L1671.0,459.0 L1529.0,257.0 L1462.8,163.0" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1462.8,163.0 1471.3,168.1 1464.7,172.7" fill="#c0392b"/>
+<text x="1671.0" y="491.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">ProviderUnavailable → operator, once per provider per 6h</text>
+<path d="M188.9,2671.0 L167.0,2619.0 L123.0,2515.0 L123.0,2515.0 L123.0,2515.0 L123.0,2515.0 L123.0,372.0 L123.0,372.0 L981.0,214.0 L1319.0,150.8" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1319.0,150.8 1310.9,156.4 1309.4,148.6" fill="#c0392b"/>
+<text x="123.0" y="2515.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">operator_target() only</text>
+<path d="M1079.3,235.0 L1094.0,229.0 L1112.0,222.0 L1112.0,222.0 L1112.0,222.0 L1225.0,190.0 L1319.0,162.9" fill="none" stroke="#8493a4" stroke-width="1.4" stroke-dasharray="5,4"/>
+<polygon points="1319.0,162.9 1311.5,169.3 1309.2,161.6" fill="#8493a4"/>
+<text x="1112.0" y="222.0" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">TELEGRAM_BOT_TOKEN</text>
+<path d="M1438.9,94.0 L1439.0,80.0 L1439.0,61.0 L1438.7,37.0" fill="none" stroke="#2e8b57" stroke-width="1.4"/>
+<polygon points="1438.7,37.0 1442.8,46.0 1434.8,46.0" fill="#2e8b57"/>
+<text x="1439.0" y="70.5" font-size="9" fill="#5b6675" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="3" stroke-linejoin="round">sendMessage</text>
+<rect x="1588.0" y="4903.0" width="129.0" height="50.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="1652.5" y="4925.0" font-size="11.0" fill="#1b2733" text-anchor="middle">runtime_guard</text>
+<text x="1652.5" y="4938.7" font-size="11.0" fill="#1b2733" text-anchor="middle">runtime_guard.py</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/tee/tee_boot.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/tee/tee_boot.py" target="_blank">
+<rect x="1381.0" y="4770.0" width="175.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="1468.5" y="4792.6" font-size="11.0" fill="#1b2733" text-anchor="middle">tee_boot.run_gate()</text>
+<text x="1468.5" y="4806.4" font-size="11.0" fill="#1b2733" text-anchor="middle">(attest before run)</text>
+<text x="1468.5" y="4820.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/tee/tee_boot.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/tee/dstack_client.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/tee/dstack_client.py" target="_blank">
+<rect x="1348.0" y="4903.0" width="208.0" height="50.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="1452.0" y="4925.0" font-size="11.0" fill="#1b2733" text-anchor="middle">dstack_client</text>
+<text x="1452.0" y="4938.7" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/tee/dstack_client.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/tee/quote_policy.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/tee/quote_policy.py" target="_blank">
+<rect x="1082.0" y="4896.0" width="202.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="1183.0" y="4918.6" font-size="11.0" fill="#1b2733" text-anchor="middle">quote_policy</text>
+<text x="1183.0" y="4932.4" font-size="11.0" fill="#1b2733" text-anchor="middle">(the five checks)</text>
+<text x="1183.0" y="4946.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/tee/quote_policy.py</text>
+</a>
+<path d="M1096.0,4786.0 L1152.0,4786.0 L1166.0,4800.0 L1166.0,4818.0 L1096.0,4818.0 Z" fill="#fdf3cf" stroke="#c9a227" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<path d="M1152.0,4786.0 L1152.0,4800.0 L1166.0,4800.0" fill="none" stroke="#c9a227" stroke-width="1" opacity="1.0"/>
+<text x="1131.0" y="4806.2" font-size="12.0" fill="#5b4a00" text-anchor="middle">✳</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/secrets.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/secrets.py" target="_blank">
+<rect x="892.0" y="4896.0" width="142.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="963.0" y="4918.6" font-size="11.0" fill="#1b2733" text-anchor="middle">secrets.load()</text>
+<text x="963.0" y="4932.4" font-size="11.0" fill="#1b2733" text-anchor="middle">+ *_configured()</text>
+<text x="963.0" y="4946.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/secrets.py</text>
+</a>
+<path d="M994.0,4786.0 L1050.0,4786.0 L1064.0,4800.0 L1064.0,4818.0 L994.0,4818.0 Z" fill="#fdf3cf" stroke="#c9a227" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<path d="M1050.0,4786.0 L1050.0,4800.0 L1064.0,4800.0" fill="none" stroke="#c9a227" stroke-width="1" opacity="1.0"/>
+<text x="1029.0" y="4806.2" font-size="12.0" fill="#5b4a00" text-anchor="middle">✳</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/oauth_app.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/oauth_app.py" target="_blank">
+<rect x="567.0" y="4770.0" width="314.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="724.0" y="4792.6" font-size="11.0" fill="#1b2733" text-anchor="middle">oauth_app</text>
+<text x="724.0" y="4806.4" font-size="11.0" fill="#1b2733" text-anchor="middle">(client keys + scopes)</text>
+<text x="724.0" y="4820.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/integrations/gmail_gcal/oauth_app.py</text>
+</a>
+<rect x="1391.0" y="5022.0" width="123.0" height="50.0" rx="25.0" ry="25.0" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="1452.5" y="5044.0" font-size="11.0" fill="#ffffff" text-anchor="middle">dstack KMS +</text>
+<text x="1452.5" y="5057.7" font-size="11.0" fill="#ffffff" text-anchor="middle">TDX guest agent</text>
+<rect x="1115.0" y="5022.0" width="136.0" height="50.0" rx="25.0" ry="25.0" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="1183.0" y="5044.0" font-size="11.0" fill="#ffffff" text-anchor="middle">Intel PCCS</text>
+<text x="1183.0" y="5057.7" font-size="11.0" fill="#ffffff" text-anchor="middle">(DCAP collateral)</text>
+<rect x="1398.0" y="4589.0" width="90.0" height="50.0" rx="25.0" ry="25.0" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="1443.0" y="4611.0" font-size="11.0" fill="#ffffff" text-anchor="middle">End user</text>
+<text x="1443.0" y="4624.7" font-size="11.0" fill="#ffffff" text-anchor="middle">(browser)</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/frontend/web_server.py" href="https://github.com/morganrivers/email_summary/blob/main/frontend/web_server.py" target="_blank">
+<rect x="1387.0" y="4456.0" width="169.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="1471.5" y="4478.6" font-size="11.0" fill="#163a37" text-anchor="middle">web_server</text>
+<text x="1471.5" y="4492.4" font-size="11.0" fill="#163a37" text-anchor="middle">(product UI)</text>
+<text x="1471.5" y="4506.1" font-size="11.0" fill="#163a37" text-anchor="middle">frontend/web_server.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/site.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/site.py" target="_blank">
+<rect x="1242.0" y="4582.0" width="123.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="1303.5" y="4604.6" font-size="11.0" fill="#163a37" text-anchor="middle">site</text>
+<text x="1303.5" y="4618.4" font-size="11.0" fill="#163a37" text-anchor="middle">(hosts + URLs)</text>
+<text x="1303.5" y="4632.1" font-size="11.0" fill="#163a37" text-anchor="middle">backend/site.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/frontend/session.py" href="https://github.com/morganrivers/email_summary/blob/main/frontend/session.py" target="_blank">
+<rect x="865.0" y="4330.0" width="149.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="939.5" y="4352.6" font-size="11.0" fill="#163a37" text-anchor="middle">session</text>
+<text x="939.5" y="4366.4" font-size="11.0" fill="#163a37" text-anchor="middle">(HMAC cookie)</text>
+<text x="939.5" y="4380.1" font-size="11.0" fill="#163a37" text-anchor="middle">frontend/session.py</text>
+</a>
+<rect x="949.0" y="4471.0" width="129.0" height="35.0" rx="10" ry="10" fill="#eef2f7" stroke="#8493a4" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<text x="1013.5" y="4491.6" font-size="9.0" fill="#5b6675" text-anchor="middle">secrets.load() ✳</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/onboarding/provisioning.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/onboarding/provisioning.py" target="_blank">
+<rect x="584.0" y="4330.0" width="248.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="708.0" y="4352.6" font-size="11.0" fill="#163a37" text-anchor="middle">provisioning</text>
+<text x="708.0" y="4366.4" font-size="11.0" fill="#163a37" text-anchor="middle">(consent → account)</text>
+<text x="708.0" y="4380.1" font-size="11.0" fill="#163a37" text-anchor="middle">backend/onboarding/provisioning.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/accounts/account.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/accounts/account.py" target="_blank">
+<rect x="988.0" y="4078.0" width="202.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="1089.0" y="4100.6" font-size="11.0" fill="#163a37" text-anchor="middle">account.Account</text>
+<text x="1089.0" y="4114.4" font-size="11.0" fill="#163a37" text-anchor="middle">(per-user context)</text>
+<text x="1089.0" y="4128.1" font-size="11.0" fill="#163a37" text-anchor="middle">backend/accounts/account.py</text>
+</a>
+<path d="M1120.0,3953.0 C1120.0,3944.0 1289.0,3944.0 1289.0,3953.0 L1289.0,4010.0 C1289.0,4019.0 1120.0,4019.0 1120.0,4010.0 Z" fill="#e6ecf3" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<path d="M1120.0,3953.0 C1120.0,3962.0 1289.0,3962.0 1289.0,3953.0" fill="none" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<text x="1204.5" y="3971.6" font-size="11.0" fill="#1b2733" text-anchor="middle">accounts.json</text>
+<text x="1204.5" y="3985.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(tenant manifest)</text>
+<text x="1204.5" y="3999.1" font-size="11.0" fill="#1b2733" text-anchor="middle">database/accounts.json</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/billing/billing.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/billing/billing.py" target="_blank">
+<rect x="348.0" y="4204.0" width="195.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="445.5" y="4226.6" font-size="11.0" fill="#163a37" text-anchor="middle">PolarBilling</text>
+<text x="445.5" y="4240.4" font-size="11.0" fill="#163a37" text-anchor="middle">(entitlement → plan)</text>
+<text x="445.5" y="4254.1" font-size="11.0" fill="#163a37" text-anchor="middle">backend/billing/billing.py</text>
+</a>
+<rect x="423.0" y="4345.0" width="129.0" height="35.0" rx="10" ry="10" fill="#eef2f7" stroke="#8493a4" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<text x="487.5" y="4365.6" font-size="9.0" fill="#5b6675" text-anchor="middle">secrets.load() ✳</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/billing/polar_api.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/billing/polar_api.py" target="_blank">
+<rect x="335.0" y="4085.0" width="208.0" height="50.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="439.0" y="4107.0" font-size="11.0" fill="#163a37" text-anchor="middle">polar_api</text>
+<text x="439.0" y="4120.7" font-size="11.0" fill="#163a37" text-anchor="middle">backend/billing/polar_api.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/billing/billing_webhook.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/billing/billing_webhook.py" target="_blank">
+<rect x="246.0" y="3820.0" width="248.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="370.0" y="3842.6" font-size="11.0" fill="#163a37" text-anchor="middle">billing_webhook</text>
+<text x="370.0" y="3856.3" font-size="11.0" fill="#163a37" text-anchor="middle">(instant flip)</text>
+<text x="370.0" y="3870.1" font-size="11.0" fill="#163a37" text-anchor="middle">backend/billing/billing_webhook.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/billing/billing_poller.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/billing/billing_poller.py" target="_blank">
+<rect x="17.0" y="4330.0" width="241.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="137.5" y="4352.6" font-size="11.0" fill="#163a37" text-anchor="middle">billing_poller</text>
+<text x="137.5" y="4366.4" font-size="11.0" fill="#163a37" text-anchor="middle">(timer reconcile)</text>
+<text x="137.5" y="4380.1" font-size="11.0" fill="#163a37" text-anchor="middle">backend/billing/billing_poller.py</text>
+</a>
+<rect x="642.0" y="4211.0" width="116.0" height="50.0" rx="25.0" ry="25.0" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="700.0" y="4233.0" font-size="11.0" fill="#ffffff" text-anchor="middle">Google OAuth</text>
+<text x="700.0" y="4246.7" font-size="11.0" fill="#ffffff" text-anchor="middle">consent screen</text>
+<rect x="370.0" y="3956.0" width="123.0" height="50.0" rx="25.0" ry="25.0" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="431.5" y="3978.0" font-size="11.0" fill="#ffffff" text-anchor="middle">Polar.sh</text>
+<text x="431.5" y="3991.7" font-size="11.0" fill="#ffffff" text-anchor="middle">(subscriptions)</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/custody/tokens.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/custody/tokens.py" target="_blank">
+<rect x="523.0" y="3632.0" width="208.0" height="65.0" rx="10" ry="10" fill="#cfe6cf" stroke="#5a9367" stroke-width="1" opacity="1.0"/>
+<text x="627.0" y="3654.6" font-size="11.0" fill="#1e3a24" text-anchor="middle">tokens</text>
+<text x="627.0" y="3668.3" font-size="11.0" fill="#1e3a24" text-anchor="middle">(access token, the hard way)</text>
+<text x="627.0" y="3682.1" font-size="11.0" fill="#1e3a24" text-anchor="middle">backend/custody/tokens.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/custody/wrapping.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/custody/wrapping.py" target="_blank">
+<rect x="1016.0" y="3503.0" width="202.0" height="65.0" rx="10" ry="10" fill="#cfe6cf" stroke="#5a9367" stroke-width="1" opacity="1.0"/>
+<text x="1117.0" y="3525.6" font-size="11.0" fill="#1e3a24" text-anchor="middle">wrapping</text>
+<text x="1117.0" y="3539.3" font-size="11.0" fill="#1e3a24" text-anchor="middle">(inner AES-GCM layer)</text>
+<text x="1117.0" y="3553.1" font-size="11.0" fill="#1e3a24" text-anchor="middle">backend/custody/wrapping.py</text>
+</a>
+<path d="M852.0,3639.0 L1053.0,3639.0 L1067.0,3653.0 L1067.0,3689.0 L852.0,3689.0 Z" fill="#fdf3cf" stroke="#c9a227" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<path d="M1053.0,3639.0 L1053.0,3653.0 L1067.0,3653.0" fill="none" stroke="#c9a227" stroke-width="1" opacity="1.0"/>
+<text x="959.5" y="3660.7" font-size="12.0" fill="#5b4a00" text-anchor="middle">layer order is the guarantee:</text>
+<text x="959.5" y="3675.7" font-size="12.0" fill="#5b4a00" text-anchor="middle">ours inside, theirs outside</text>
+<path d="M808.0,3507.0 C808.0,3498.0 983.0,3498.0 983.0,3507.0 L983.0,3564.0 C983.0,3573.0 808.0,3573.0 808.0,3564.0 Z" fill="#e6ecf3" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<path d="M808.0,3507.0 C808.0,3516.0 983.0,3516.0 983.0,3507.0" fill="none" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<text x="895.5" y="3525.6" font-size="11.0" fill="#1b2733" text-anchor="middle">token.bin</text>
+<text x="895.5" y="3539.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(nested ciphertext)</text>
+<text x="895.5" y="3553.1" font-size="11.0" fill="#1b2733" text-anchor="middle">database/{id}/token.bin</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/custody/client.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/custody/client.py" target="_blank">
+<rect x="195.0" y="3503.0" width="189.0" height="65.0" rx="10" ry="10" fill="#cfe6cf" stroke="#5a9367" stroke-width="1" opacity="1.0"/>
+<text x="289.5" y="3525.6" font-size="11.0" fill="#1e3a24" text-anchor="middle">custody.client</text>
+<text x="289.5" y="3539.3" font-size="11.0" fill="#1e3a24" text-anchor="middle">(sole co-signer wire)</text>
+<text x="289.5" y="3553.1" font-size="11.0" fill="#1e3a24" text-anchor="middle">backend/custody/client.py</text>
+</a>
+<rect x="416.0" y="3510.0" width="162.0" height="50.0" rx="25.0" ry="25.0" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="497.0" y="3532.0" font-size="11.0" fill="#ffffff" text-anchor="middle">oauth2.googleapis.com</text>
+<text x="497.0" y="3545.7" font-size="11.0" fill="#ffffff" text-anchor="middle">/token</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/cosigner/server.py" href="https://github.com/morganrivers/email_summary/blob/main/cosigner/server.py" target="_blank">
+<rect x="712.0" y="3183.0" width="142.0" height="65.0" rx="10" ry="10" fill="#f6d9c0" stroke="#c17a3a" stroke-width="1" opacity="1.0"/>
+<text x="783.0" y="3205.6" font-size="11.0" fill="#5a3410" text-anchor="middle">cosigner.server</text>
+<text x="783.0" y="3219.3" font-size="11.0" fill="#5a3410" text-anchor="middle">(3 RPCs + health)</text>
+<text x="783.0" y="3233.1" font-size="11.0" fill="#5a3410" text-anchor="middle">cosigner/server.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/cosigner/protocol.py" href="https://github.com/morganrivers/email_summary/blob/main/cosigner/protocol.py" target="_blank">
+<rect x="1129.0" y="3054.0" width="156.0" height="65.0" rx="10" ry="10" fill="#f6d9c0" stroke="#c17a3a" stroke-width="1" opacity="1.0"/>
+<text x="1207.0" y="3076.6" font-size="11.0" fill="#5a3410" text-anchor="middle">protocol</text>
+<text x="1207.0" y="3090.3" font-size="11.0" fill="#5a3410" text-anchor="middle">(the wire contract)</text>
+<text x="1207.0" y="3104.1" font-size="11.0" fill="#5a3410" text-anchor="middle">cosigner/protocol.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/cosigner/attest.py" href="https://github.com/morganrivers/email_summary/blob/main/cosigner/attest.py" target="_blank">
+<rect x="466.0" y="3054.0" width="142.0" height="65.0" rx="10" ry="10" fill="#f6d9c0" stroke="#c17a3a" stroke-width="1" opacity="1.0"/>
+<text x="537.0" y="3076.6" font-size="11.0" fill="#5a3410" text-anchor="middle">attest</text>
+<text x="537.0" y="3090.3" font-size="11.0" fill="#5a3410" text-anchor="middle">(inbound RA-TLS)</text>
+<text x="537.0" y="3104.1" font-size="11.0" fill="#5a3410" text-anchor="middle">cosigner/attest.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/cosigner/allowlist.json" href="https://github.com/morganrivers/email_summary/blob/main/cosigner/allowlist.json" target="_blank">
+<path d="M218.0,3187.0 C218.0,3178.0 393.0,3178.0 393.0,3187.0 L393.0,3244.0 C393.0,3253.0 218.0,3253.0 218.0,3244.0 Z" fill="#e6ecf3" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<path d="M218.0,3187.0 C218.0,3196.0 393.0,3196.0 393.0,3187.0" fill="none" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<text x="305.5" y="3205.6" font-size="11.0" fill="#1b2733" text-anchor="middle">allowlist.json</text>
+<text x="305.5" y="3219.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(this box&#x27;s own pins)</text>
+<text x="305.5" y="3233.1" font-size="11.0" fill="#1b2733" text-anchor="middle">cosigner/allowlist.json</text>
+</a>
+<rect x="426.0" y="3198.0" width="116.0" height="35.0" rx="10" ry="10" fill="#eef2f7" stroke="#8493a4" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<text x="484.0" y="3218.7" font-size="9.0" fill="#5b6675" text-anchor="middle">quote_policy ✳</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/cosigner/policy.py" href="https://github.com/morganrivers/email_summary/blob/main/cosigner/policy.py" target="_blank">
+<rect x="538.0" y="2928.0" width="202.0" height="65.0" rx="10" ry="10" fill="#f6d9c0" stroke="#c17a3a" stroke-width="1" opacity="1.0"/>
+<text x="639.0" y="2950.6" font-size="11.0" fill="#5a3410" text-anchor="middle">policy</text>
+<text x="639.0" y="2964.3" font-size="11.0" fill="#5a3410" text-anchor="middle">(rate limit = blast radius)</text>
+<text x="639.0" y="2978.1" font-size="11.0" fill="#5a3410" text-anchor="middle">cosigner/policy.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/cosigner/keys.py" href="https://github.com/morganrivers/email_summary/blob/main/cosigner/keys.py" target="_blank">
+<rect x="758.0" y="2802.0" width="169.0" height="65.0" rx="10" ry="10" fill="#f6d9c0" stroke="#c17a3a" stroke-width="1" opacity="1.0"/>
+<text x="842.5" y="2824.6" font-size="11.0" fill="#5a3410" text-anchor="middle">keys</text>
+<text x="842.5" y="2838.3" font-size="11.0" fill="#5a3410" text-anchor="middle">(outer key + DPoP key)</text>
+<text x="842.5" y="2852.1" font-size="11.0" fill="#5a3410" text-anchor="middle">cosigner/keys.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/cosigner/audit.py" href="https://github.com/morganrivers/email_summary/blob/main/cosigner/audit.py" target="_blank">
+<rect x="1026.0" y="2802.0" width="162.0" height="65.0" rx="10" ry="10" fill="#f6d9c0" stroke="#c17a3a" stroke-width="1" opacity="1.0"/>
+<text x="1107.0" y="2824.6" font-size="11.0" fill="#5a3410" text-anchor="middle">audit</text>
+<text x="1107.0" y="2838.3" font-size="11.0" fill="#5a3410" text-anchor="middle">(one row per request)</text>
+<text x="1107.0" y="2852.1" font-size="11.0" fill="#5a3410" text-anchor="middle">cosigner/audit.py</text>
+</a>
+<path d="M1223.0,2677.0 C1223.0,2668.0 1418.0,2668.0 1418.0,2677.0 L1418.0,2734.0 C1418.0,2743.0 1223.0,2743.0 1223.0,2734.0 Z" fill="#e6ecf3" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<path d="M1223.0,2677.0 C1223.0,2686.0 1418.0,2686.0 1418.0,2677.0" fill="none" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<text x="1320.5" y="2695.6" font-size="11.0" fill="#1b2733" text-anchor="middle">audit.db</text>
+<text x="1320.5" y="2709.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(append-only)</text>
+<text x="1320.5" y="2723.1" font-size="11.0" fill="#1b2733" text-anchor="middle">/var/lib/cosigner/audit.db</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/cosigner/alerts.py" href="https://github.com/morganrivers/email_summary/blob/main/cosigner/alerts.py" target="_blank">
+<rect x="106.0" y="2673.0" width="195.0" height="65.0" rx="10" ry="10" fill="#f6d9c0" stroke="#c17a3a" stroke-width="1" opacity="1.0"/>
+<text x="203.5" y="2695.6" font-size="11.0" fill="#5a3410" text-anchor="middle">alerts</text>
+<text x="203.5" y="2709.3" font-size="11.0" fill="#5a3410" text-anchor="middle">(the one seam to backend/)</text>
+<text x="203.5" y="2723.1" font-size="11.0" fill="#5a3410" text-anchor="middle">cosigner/alerts.py</text>
+</a>
+<path d="M743.0,3312.0 L924.0,3312.0 L938.0,3326.0 L938.0,3377.0 L743.0,3377.0 Z" fill="#fdf3cf" stroke="#c9a227" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<path d="M924.0,3312.0 L924.0,3326.0 L938.0,3326.0" fill="none" stroke="#c9a227" stroke-width="1" opacity="1.0"/>
+<text x="840.5" y="3333.7" font-size="12.0" fill="#5b4a00" text-anchor="middle">hard dependency by design:</text>
+<text x="840.5" y="3348.7" font-size="12.0" fill="#5b4a00" text-anchor="middle">co-signer down = no mail</text>
+<text x="840.5" y="3363.7" font-size="12.0" fill="#5b4a00" text-anchor="middle">processed, for anyone</text>
+<rect x="386.0" y="1547.0" width="156.0" height="50.0" rx="25.0" ry="25.0" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="464.0" y="1569.0" font-size="11.0" fill="#ffffff" text-anchor="middle">Gmail + Calendar</text>
+<text x="464.0" y="1582.7" font-size="11.0" fill="#ffffff" text-anchor="middle">(the user&#x27;s mailbox)</text>
+<rect x="199.0" y="1425.0" width="116.0" height="50.0" rx="25.0" ry="25.0" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="257.0" y="1447.0" font-size="11.0" fill="#ffffff" text-anchor="middle">Google Pub/Sub</text>
+<text x="257.0" y="1460.7" font-size="11.0" fill="#ffffff" text-anchor="middle">watch push</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/daemons/gmail_hook_server.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/daemons/gmail_hook_server.py" target="_blank">
+<rect x="549.0" y="2482.0" width="261.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="679.5" y="2504.6" font-size="11.0" fill="#1b2733" text-anchor="middle">gmail_hook_server</text>
+<text x="679.5" y="2518.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(verify → route → wake)</text>
+<text x="679.5" y="2532.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/daemons/gmail_hook_server.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/daemons/wake_queue.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/daemons/wake_queue.py" target="_blank">
+<rect x="730.0" y="2356.0" width="215.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="837.5" y="2378.6" font-size="11.0" fill="#1b2733" text-anchor="middle">wake_queue</text>
+<text x="837.5" y="2392.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(who woke us)</text>
+<text x="837.5" y="2406.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/daemons/wake_queue.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/daemons/daemon_loop.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/daemons/daemon_loop.py" target="_blank">
+<rect x="1180.0" y="2230.0" width="222.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="1291.0" y="2252.6" font-size="11.0" fill="#1b2733" text-anchor="middle">daemon_loop</text>
+<text x="1291.0" y="2266.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(FIFO listener)</text>
+<text x="1291.0" y="2280.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/daemons/daemon_loop.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/daemons/pipeline.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/daemons/pipeline.py" target="_blank">
+<rect x="1481.0" y="2101.0" width="202.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="1582.0" y="2123.6" font-size="11.0" fill="#1b2733" text-anchor="middle">pipeline.process_account</text>
+<text x="1582.0" y="2137.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(fetch → route → advance)</text>
+<text x="1582.0" y="2151.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/daemons/pipeline.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/accounts/state.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/accounts/state.py" target="_blank">
+<rect x="1020.0" y="1972.0" width="189.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="1114.5" y="1994.6" font-size="11.0" fill="#1b2733" text-anchor="middle">StateStore</text>
+<text x="1114.5" y="2008.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(per-account cursor)</text>
+<text x="1114.5" y="2022.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/accounts/state.py</text>
+</a>
+<path d="M907.0,2105.0 C907.0,2096.0 1082.0,2096.0 1082.0,2105.0 L1082.0,2162.0 C1082.0,2171.0 907.0,2171.0 907.0,2162.0 Z" fill="#e6ecf3" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<path d="M907.0,2105.0 C907.0,2114.0 1082.0,2114.0 1082.0,2105.0" fill="none" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<text x="994.5" y="2123.6" font-size="11.0" fill="#1b2733" text-anchor="middle">state.json</text>
+<text x="994.5" y="2137.3" font-size="11.0" fill="#1b2733" text-anchor="middle">+ wake.fifo, wake_queue</text>
+<text x="994.5" y="2151.1" font-size="11.0" fill="#1b2733" text-anchor="middle">state/state.json</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/onboarding/watch_renew.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/onboarding/watch_renew.py" target="_blank">
+<rect x="306.0" y="2101.0" width="241.0" height="65.0" rx="10" ry="10" fill="#dfe7ef" stroke="#6b7f96" stroke-width="1" opacity="1.0"/>
+<text x="426.5" y="2123.6" font-size="11.0" fill="#1b2733" text-anchor="middle">watch_renew</text>
+<text x="426.5" y="2137.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(weekly, per account)</text>
+<text x="426.5" y="2151.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/onboarding/watch_renew.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/gmail_api.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/gmail_api.py" target="_blank">
+<rect x="370.0" y="1658.0" width="314.0" height="65.0" rx="10" ry="10" fill="#e3e8ef" stroke="#5b6675" stroke-width="1" opacity="1.0"/>
+<text x="527.0" y="1680.6" font-size="11.0" fill="#1b2733" text-anchor="middle">gmail_api</text>
+<text x="527.0" y="1694.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(credentials + calls)</text>
+<text x="527.0" y="1708.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/integrations/gmail_gcal/gmail_api.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/mailbox.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/mailbox.py" target="_blank">
+<rect x="1130.0" y="1784.0" width="301.0" height="65.0" rx="10" ry="10" fill="#e3e8ef" stroke="#5b6675" stroke-width="1" opacity="1.0"/>
+<text x="1280.5" y="1806.6" font-size="11.0" fill="#1b2733" text-anchor="middle">mailbox</text>
+<text x="1280.5" y="1820.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(the two fetch shapes)</text>
+<text x="1280.5" y="1834.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/integrations/gmail_gcal/mailbox.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/drafts.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/drafts.py" target="_blank">
+<rect x="803.0" y="1784.0" width="294.0" height="65.0" rx="10" ry="10" fill="#e3e8ef" stroke="#5b6675" stroke-width="1" opacity="1.0"/>
+<text x="950.0" y="1806.6" font-size="11.0" fill="#1b2733" text-anchor="middle">drafts</text>
+<text x="950.0" y="1820.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(RFC822 + create/update)</text>
+<text x="950.0" y="1834.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/integrations/gmail_gcal/drafts.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/calendar_api.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/gmail_gcal/calendar_api.py" target="_blank">
+<rect x="437.0" y="1791.0" width="334.0" height="50.0" rx="10" ry="10" fill="#e3e8ef" stroke="#5b6675" stroke-width="1" opacity="1.0"/>
+<text x="604.0" y="1813.0" font-size="11.0" fill="#1b2733" text-anchor="middle">calendar_api</text>
+<text x="604.0" y="1826.7" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/integrations/gmail_gcal/calendar_api.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/manual_draft.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/manual_draft.py" target="_blank">
+<rect x="1172.0" y="1160.0" width="235.0" height="65.0" rx="10" ry="10" fill="#e6d6f2" stroke="#8a5fb0" stroke-width="1" opacity="1.0"/>
+<text x="1289.5" y="1182.6" font-size="11.0" fill="#3d2757" text-anchor="middle">manual_draft</text>
+<text x="1289.5" y="1196.3" font-size="11.0" fill="#3d2757" text-anchor="middle">(forward-to-bot path)</text>
+<text x="1289.5" y="1210.1" font-size="11.0" fill="#3d2757" text-anchor="middle">backend/drafting/manual_draft.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/draft_replies.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/draft_replies.py" target="_blank">
+<rect x="1505.0" y="1160.0" width="241.0" height="65.0" rx="10" ry="10" fill="#e6d6f2" stroke="#8a5fb0" stroke-width="1" opacity="1.0"/>
+<text x="1625.5" y="1182.6" font-size="11.0" fill="#3d2757" text-anchor="middle">draft_replies</text>
+<text x="1625.5" y="1196.3" font-size="11.0" fill="#3d2757" text-anchor="middle">(auto-reply path)</text>
+<text x="1625.5" y="1210.1" font-size="11.0" fill="#3d2757" text-anchor="middle">backend/drafting/draft_replies.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/agentic_drafter.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/agentic_drafter.py" target="_blank">
+<rect x="1011.0" y="1031.0" width="275.0" height="65.0" rx="10" ry="10" fill="#e6d6f2" stroke="#8a5fb0" stroke-width="1" opacity="1.0"/>
+<text x="1148.5" y="1053.6" font-size="11.0" fill="#3d2757" text-anchor="middle">🤖 agentic_drafter</text>
+<text x="1148.5" y="1067.3" font-size="11.0" fill="#3d2757" text-anchor="middle">(tool loop)</text>
+<text x="1148.5" y="1081.1" font-size="11.0" fill="#3d2757" text-anchor="middle">backend/drafting/agentic_drafter.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/tool_executors.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/tool_executors.py" target="_blank">
+<rect x="973.0" y="905.0" width="248.0" height="65.0" rx="10" ry="10" fill="#e6d6f2" stroke="#8a5fb0" stroke-width="1" opacity="1.0"/>
+<text x="1097.0" y="927.6" font-size="11.0" fill="#3d2757" text-anchor="middle">tool_executors</text>
+<text x="1097.0" y="941.4" font-size="11.0" fill="#3d2757" text-anchor="middle">(search / calendar / thread)</text>
+<text x="1097.0" y="955.1" font-size="11.0" fill="#3d2757" text-anchor="middle">backend/drafting/tool_executors.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/voice_dna.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/voice_dna.py" target="_blank">
+<rect x="1116.0" y="1289.0" width="235.0" height="65.0" rx="10" ry="10" fill="#e6d6f2" stroke="#8a5fb0" stroke-width="1" opacity="1.0"/>
+<text x="1233.5" y="1311.6" font-size="11.0" fill="#3d2757" text-anchor="middle">🤖 voice_dna</text>
+<text x="1233.5" y="1325.3" font-size="11.0" fill="#3d2757" text-anchor="middle">(profile + generator)</text>
+<text x="1233.5" y="1339.1" font-size="11.0" fill="#3d2757" text-anchor="middle">backend/drafting/voice_dna.py</text>
+</a>
+<path d="M812.0,1164.0 C812.0,1155.0 1007.0,1155.0 1007.0,1164.0 L1007.0,1221.0 C1007.0,1230.0 812.0,1230.0 812.0,1221.0 Z" fill="#e6ecf3" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<path d="M812.0,1164.0 C812.0,1173.0 1007.0,1173.0 1007.0,1164.0" fill="none" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<text x="909.5" y="1182.6" font-size="11.0" fill="#1b2733" text-anchor="middle">voice-dna.md</text>
+<text x="909.5" y="1196.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(per account)</text>
+<text x="909.5" y="1210.1" font-size="11.0" fill="#1b2733" text-anchor="middle">database/{id}/voice-dna.md</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/personal_context.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/personal_context.py" target="_blank">
+<rect x="756.0" y="1289.0" width="261.0" height="65.0" rx="10" ry="10" fill="#e6d6f2" stroke="#8a5fb0" stroke-width="1" opacity="1.0"/>
+<text x="886.5" y="1311.6" font-size="11.0" fill="#3d2757" text-anchor="middle">personal_context</text>
+<text x="886.5" y="1325.3" font-size="11.0" fill="#3d2757" text-anchor="middle">(what is true of you)</text>
+<text x="886.5" y="1339.1" font-size="11.0" fill="#3d2757" text-anchor="middle">backend/drafting/personal_context.py</text>
+</a>
+<path d="M349.0,1429.0 C349.0,1420.0 590.0,1420.0 590.0,1429.0 L590.0,1471.0 C590.0,1480.0 349.0,1480.0 349.0,1471.0 Z" fill="#e6ecf3" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<path d="M349.0,1429.0 C349.0,1438.0 590.0,1438.0 590.0,1429.0" fill="none" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<text x="469.5" y="1447.0" font-size="11.0" fill="#1b2733" text-anchor="middle">personal-context.md</text>
+<text x="469.5" y="1460.7" font-size="11.0" fill="#1b2733" text-anchor="middle">database/{id}/personal-context.md</text>
+<path d="M758.0,1422.0 C758.0,1413.0 947.0,1413.0 947.0,1422.0 L947.0,1479.0 C947.0,1488.0 758.0,1488.0 758.0,1479.0 Z" fill="#e6ecf3" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<path d="M758.0,1422.0 C758.0,1431.0 947.0,1431.0 947.0,1422.0" fill="none" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<text x="852.5" y="1440.6" font-size="11.0" fill="#1b2733" text-anchor="middle">config/ prompts</text>
+<text x="852.5" y="1454.3" font-size="11.0" fill="#1b2733" text-anchor="middle">(operator only)</text>
+<text x="852.5" y="1468.1" font-size="11.0" fill="#1b2733" text-anchor="middle">config/voice-dna-email.md</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/schedule_from_sent.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/schedule_from_sent.py" target="_blank">
+<rect x="1583.0" y="905.0" width="294.0" height="65.0" rx="10" ry="10" fill="#e6d6f2" stroke="#8a5fb0" stroke-width="1" opacity="1.0"/>
+<text x="1730.0" y="927.6" font-size="11.0" fill="#3d2757" text-anchor="middle">🤖 schedule_from_sent</text>
+<text x="1730.0" y="941.4" font-size="11.0" fill="#3d2757" text-anchor="middle">(opt-in)</text>
+<text x="1730.0" y="955.1" font-size="11.0" fill="#3d2757" text-anchor="middle">backend/drafting/schedule_from_sent.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/masking/pseudonymizer.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/masking/pseudonymizer.py" target="_blank">
+<rect x="1051.0" y="717.0" width="235.0" height="65.0" rx="10" ry="10" fill="#cfe6cf" stroke="#5a9367" stroke-width="1" opacity="1.0"/>
+<text x="1168.5" y="739.6" font-size="11.0" fill="#1e3a24" text-anchor="middle">pseudonymizer</text>
+<text x="1168.5" y="753.4" font-size="11.0" fill="#1e3a24" text-anchor="middle">(mask → tags → restore)</text>
+<text x="1168.5" y="767.1" font-size="11.0" fill="#1e3a24" text-anchor="middle">backend/masking/pseudonymizer.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/llm_client.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/llm_client.py" target="_blank">
+<rect x="1280.0" y="588.0" width="248.0" height="65.0" rx="10" ry="10" fill="#cfe6cf" stroke="#5a9367" stroke-width="1" opacity="1.0"/>
+<text x="1404.0" y="610.6" font-size="11.0" fill="#1e3a24" text-anchor="middle">llm_client.complete()</text>
+<text x="1404.0" y="624.4" font-size="11.0" fill="#1e3a24" text-anchor="middle">(the one boundary)</text>
+<text x="1404.0" y="638.1" font-size="11.0" fill="#1e3a24" text-anchor="middle">backend/integrations/llm_client.py</text>
+</a>
+<rect x="758.0" y="732.0" width="129.0" height="35.0" rx="10" ry="10" fill="#eef2f7" stroke="#8493a4" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<text x="822.5" y="752.6" font-size="9.0" fill="#5b6675" text-anchor="middle">secrets.load() ✳</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/inference_attestation.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/inference_attestation.py" target="_blank">
+<rect x="1035.0" y="459.0" width="321.0" height="65.0" rx="10" ry="10" fill="#cfe6cf" stroke="#5a9367" stroke-width="1" opacity="1.0"/>
+<text x="1195.5" y="481.6" font-size="11.0" fill="#1e3a24" text-anchor="middle">inference_attestation</text>
+<text x="1195.5" y="495.4" font-size="11.0" fill="#1e3a24" text-anchor="middle">(makes confidential mean something)</text>
+<text x="1195.5" y="509.1" font-size="11.0" fill="#1e3a24" text-anchor="middle">backend/integrations/inference_attestation.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/inference_allowlist.json" href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/inference_allowlist.json" target="_blank">
+<path d="M418.0,592.0 C418.0,583.0 739.0,583.0 739.0,592.0 L739.0,649.0 C739.0,658.0 418.0,658.0 418.0,649.0 Z" fill="#e6ecf3" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<path d="M418.0,592.0 C418.0,601.0 739.0,601.0 739.0,592.0" fill="none" stroke="#8493a4" stroke-width="1" opacity="1.0"/>
+<text x="578.5" y="610.6" font-size="11.0" fill="#1b2733" text-anchor="middle">inference_allowlist.json</text>
+<text x="578.5" y="624.4" font-size="11.0" fill="#1b2733" text-anchor="middle">(reviewed pins)</text>
+<text x="578.5" y="638.1" font-size="11.0" fill="#1b2733" text-anchor="middle">backend/integrations/inference_allowlist.json</text>
+</a>
+<rect x="837.0" y="603.0" width="116.0" height="35.0" rx="10" ry="10" fill="#eef2f7" stroke="#8493a4" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<text x="895.0" y="623.6" font-size="9.0" fill="#5b6675" text-anchor="middle">quote_policy ✳</text>
+<rect x="1456.0" y="466.0" width="175.0" height="50.0" rx="25.0" ry="25.0" fill="#c0392b" stroke="#7d2318" stroke-width="1" opacity="1.0"/>
+<text x="1543.5" y="488.0" font-size="11.0" fill="#ffffff" text-anchor="middle">DeepSeek</text>
+<text x="1543.5" y="501.7" font-size="11.0" fill="#ffffff" text-anchor="middle">(default, not attested)</text>
+<rect x="1178.0" y="348.0" width="202.0" height="50.0" rx="25.0" ry="25.0" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="1279.0" y="370.0" font-size="11.0" fill="#ffffff" text-anchor="middle">NEAR AI per-model endpoints</text>
+<text x="1279.0" y="383.7" font-size="11.0" fill="#ffffff" text-anchor="middle">glm-5-2 / gpt-oss-120b</text>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/email_summary.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/drafting/email_summary.py" target="_blank">
+<rect x="1128.0" y="222.0" width="261.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="1258.5" y="244.6" font-size="11.0" fill="#163a37" text-anchor="middle">🤖 email_summary</text>
+<text x="1258.5" y="258.4" font-size="11.0" fill="#163a37" text-anchor="middle">(daily 05:00 UTC)</text>
+<text x="1258.5" y="272.1" font-size="11.0" fill="#163a37" text-anchor="middle">backend/drafting/email_summary.py</text>
+</a>
+<a xlink:href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/telegram.py" href="https://github.com/morganrivers/email_summary/blob/main/backend/integrations/telegram.py" target="_blank">
+<rect x="1321.0" y="96.0" width="235.0" height="65.0" rx="10" ry="10" fill="#cfe8e6" stroke="#4f9b95" stroke-width="1" opacity="1.0"/>
+<text x="1438.5" y="118.6" font-size="11.0" fill="#163a37" text-anchor="middle">telegram</text>
+<text x="1438.5" y="132.3" font-size="11.0" fill="#163a37" text-anchor="middle">(explicit target, always)</text>
+<text x="1438.5" y="146.1" font-size="11.0" fill="#163a37" text-anchor="middle">backend/integrations/telegram.py</text>
+</a>
+<rect x="967.0" y="237.0" width="129.0" height="35.0" rx="10" ry="10" fill="#eef2f7" stroke="#8493a4" stroke-width="1" opacity="1.0" stroke-dasharray="4,3"/>
+<text x="1031.5" y="257.6" font-size="9.0" fill="#5b6675" text-anchor="middle">secrets.load() ✳</text>
+<rect x="1374.0" y="-0.0" width="129.0" height="35.0" rx="17.5" ry="17.5" fill="#2f7dc4" stroke="#1c4f80" stroke-width="1" opacity="1.0"/>
+<text x="1438.5" y="21.4" font-size="11.0" fill="#ffffff" text-anchor="middle">Telegram Bot API</text>
+</svg>
