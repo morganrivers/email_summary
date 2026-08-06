@@ -19,14 +19,16 @@ They reach the model masked (llm_client.complete) and fenced
 (agentic_drafter.untrusted), because a sent message quotes whatever was sent to
 the user and is therefore not all the user's own words.
 
-`DEFAULT_CONSTRAINTS` is the starting Constraints section: the em-dash ban and
-the plain-text rules. It is part of the document, not something appended behind
-the user's back at prompt time, so what the /voice box shows is exactly what the
-drafter reads and every rule in it can be edited or deleted. The drafter's own
-em-dash rejection follows the document rather than overriding it: see
-`agentic_drafter.dashes_banned()`. A synthesized profile is saved with this
-section appended, which is why `SYNTHESIS_PROMPT` tells the model not to write
-one of its own.
+`DEFAULT_CONSTRAINTS` is the starting Constraints section: the plain-text rules
+a new profile begins with. It is part of the document, not something appended
+behind the user's back at prompt time, so what the /voice box shows is exactly
+what the drafter reads and every rule in it can be edited or deleted. The
+em-dash ban is deliberately not among them: it is enforced by retrying and
+rejecting drafts, so it belongs to the Settings switch that decides whether that
+happens (`agentic_drafter.dashes_banned()`), not to prose the user could delete
+while the rejections carried on. A synthesized profile is saved with this section
+appended, which is why `SYNTHESIS_PROMPT` tells the model not to write one of
+its own.
 
 Generation is slow (a Gmail sweep plus one reasoning-heavy completion), so
 `start()` runs it on a thread and `status()` reports progress. The registry is
@@ -81,9 +83,10 @@ MAX_TOKENS = 8000
 MAX_PROFILE_CHARS = 20000
 
 # The output rules a profile starts with. They ship inside the document rather
-# than around it: a user who wants em-dashes, or a longer reply than the one it
-# answers, edits this section out and the drafter obeys, including its em-dash
-# rejection (agentic_drafter.dashes_banned reads the instructions it was given).
+# than around it: a user who wants a longer reply than the one it answers edits
+# this section out and the drafter obeys. The dash ban is not here, because it is
+# the one rule with teeth behind it (draft rejection); it lives in Settings, and
+# agentic_drafter puts it into the prompt when that switch is on.
 CONSTRAINTS_HEADING = "## Constraints"
 
 DEFAULT_CONSTRAINTS = """## Constraints
@@ -91,7 +94,6 @@ DEFAULT_CONSTRAINTS = """## Constraints
 - Never invent facts, commitments, dates, prices, or opinions the owner has not
   expressed. An honest "let me check and come back to you" beats a confident
   guess.
-- Do not use em-dashes or en-dashes.
 - No markdown, no bullet lists unless the incoming email used them, no subject
   line, no commentary about the draft itself.
 - Keep it roughly as long as the email it answers. Shorter is usually better."""

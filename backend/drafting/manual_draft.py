@@ -143,8 +143,9 @@ def reply_subject(subj):
     return f"Re: {s}" if s else "Re:"
 
 
-def draft_with_context(client, voice, parsed, account, thread_id=None, on_iteration=None):
-    sys_prompt = voice + DRAFTER_WITH_CONTEXT
+def draft_with_context(client, instructions, parsed, account, thread_id=None,
+                       on_iteration=None):
+    sys_prompt = instructions + DRAFTER_WITH_CONTEXT
     owner = account.display_name
     # The owner's own instructions are trusted; the forwarded email is not, so
     # only the latter is fenced.
@@ -221,7 +222,7 @@ def process_draft_request(account, forwarded_email):
         )
         return None
 
-    voice = draft_replies.voice_profile_for(account)
+    instructions = draft_replies.drafting_instructions(account)
 
     thread_info = find_thread(account, parsed["original_email"], parsed["original_subject"])
     client = agentic_drafter.make_client(account)
@@ -253,7 +254,7 @@ def process_draft_request(account, forwarded_email):
 
     try:
         body, run_url = draft_with_context(
-            client, voice, parsed, account,
+            client, instructions, parsed, account,
             thread_id=f"manual-{forwarded_email.get('id', '')}",
             on_iteration=on_iteration,
         )
@@ -271,7 +272,7 @@ def process_draft_request(account, forwarded_email):
         )
         return None
 
-    if agentic_drafter.dashes_banned(voice) and agentic_drafter.contains_em_dash(body):
+    if agentic_drafter.dashes_banned(account) and agentic_drafter.contains_em_dash(body):
         rejection_body = f"🚫 Draft rejected (em-dash detected):\n\n{body}"
         draft_replies.submit_draft(account, make_payload(rejection_body), draft_id=draft_id)
         draft_replies.send_telegram(

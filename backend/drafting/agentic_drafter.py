@@ -32,13 +32,6 @@ GREETING_RE = re.compile(
 
 EM_DASH_RE = re.compile(r'[—–]')
 
-# Whether the instructions in front of us ban dashes at all. The ban lives in the
-# account's own voice document (voice_dna.DEFAULT_CONSTRAINTS ships with it), so
-# a user who deletes that line means it: retrying and rejecting drafts for a rule
-# their profile no longer states would be enforcing an instruction they cannot
-# see and cannot edit.
-DASH_RULE_RE = re.compile(r'\b(em|en)[- ]dash', re.IGNORECASE)
-
 EM_DASH_CORRECTION_PROMPT = (
     "Your previous draft contained an em-dash (—) or en-dash (–). "
     "These characters cause the draft to be rejected. "
@@ -81,11 +74,17 @@ def contains_em_dash(text):
     return bool(EM_DASH_RE.search(text or ''))
 
 
-def dashes_banned(instructions):
-    """Does this voice profile (or assembled system prompt) ask for no dashes?
+def dashes_banned(account):
+    """Does this account reject drafts containing an em-dash or en-dash?
+
     Single source of the question, asked by the drafter before it adds the
-    punctuation rule and by every caller before it rejects a draft."""
-    return bool(DASH_RULE_RE.search(instructions or ''))
+    punctuation rule to the prompt and by every caller before it rejects a
+    finished draft, so the model is told the rule exactly when we enforce it.
+    The answer is the account's own Settings switch: it used to be read out of
+    the voice document's wording, which enforced a rule the user could only
+    change by editing prose and could not see the state of anywhere."""
+    assert account is not None, "dashes_banned needs an account to ask about"
+    return bool(account.ban_dashes)
 
 
 def _strip_preamble(body):
@@ -136,13 +135,16 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
     now = datetime.now(timezone.utc).isoformat()
     # Both the masking identity and the mailbox the tools read come from the one
     # account. They used to be separate arguments, which made it possible to
-    # draft under one user's identity while searching another user's mail.
-    identity = account.identity if account is not None else pseudonymizer.DEFAULT_IDENTITY
+    # draft under one user's identity while searching another user's mail. The
+    # DEFAULT_IDENTITY fallback that used to sit here is gone with it: drafting
+    # under a stand-in identity masks the wrong person's name out of the prompt.
+    assert account is not None, "draft needs the account it is drafting for"
+    identity = account.identity
     # The account owner's own name, not a hardcoded one. It is masked to
     # [USER_FIRST] by the pseudonymizer below (the identity's own rules tag it)
     # and restored on the way out, so the model never sees it either way.
     owner = identity.first
-    ban_dashes = dashes_banned(system_prompt)
+    ban_dashes = dashes_banned(account)
     punctuation_rule = (
         "PUNCTUATION RULE: Never use em-dashes (—) or en-dashes (–) in the body. "
         "Use commas, periods, parentheses, or restructured sentences instead. "

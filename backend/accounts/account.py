@@ -23,6 +23,7 @@ Store schema (database/accounts.json), one object per user:
       "auto_schedule": false,
       "inference_provider": "<optional; llm_client provider name, default deepseek>",
       "pii_analyzer": true,
+      "ban_dashes": true,
       "voice_file": "<optional; per-user voice profile>",
       "plan_status": "active",
       "polar_customer_id": "<optional; set at checkout for exact billing link>"
@@ -70,7 +71,7 @@ class Account:
     def __init__(self, id, identity, state, telegram=None, token_file=None,
                  plan_status="active", polar_customer_id=None,
                  timezone=DEFAULT_TIMEZONE, auto_schedule=False, voice_file=None,
-                 inference_provider=None, pii_analyzer=True):
+                 inference_provider=None, pii_analyzer=True, ban_dashes=True):
         assert id and identity and state, "account requires id, identity, state"
         assert identity.account_id == id, (
             f"identity account_id {identity.account_id!r} does not match account id {id!r}"
@@ -100,6 +101,11 @@ class Account:
         # pseudonymizer.new_state() is where the two are reconciled. Keeping the
         # preference intact means it comes back if the model is installed later.
         self.pii_analyzer = bool(pii_analyzer)
+        # Whether a draft carrying an em-dash or en-dash is retried and then
+        # rejected. Sole answer to that question: the rule used to be read out of
+        # the voice document's text, which meant two places (the document and
+        # the drafter's own punctuation rule) had to agree about one behaviour.
+        self.ban_dashes = bool(ban_dashes)
 
     @property
     def display_name(self):
@@ -217,6 +223,7 @@ def _account_from_entry(entry):
         voice_file=_resolve(voice_file) if voice_file else None,
         inference_provider=entry.get("inference_provider"),
         pii_analyzer=pii_analyzer,
+        ban_dashes=bool(entry.get("ban_dashes", True)),
     )
 
 
@@ -466,7 +473,7 @@ def set_voice(account_id, voice_file=None, clear=False):
 
 
 def set_settings(account_id, timezone=None, auto_schedule=None,
-                 inference_provider=None, pii_analyzer=None):
+                 inference_provider=None, pii_analyzer=None, ban_dashes=None):
     """Persist the per-user preferences the web UI owns and return the loaded
     Account. Sole writer of them, for the same reason as set_telegram.
 
@@ -475,7 +482,8 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
     pseudonymizer.new_state() decides what actually runs."""
     assert (timezone is not None or auto_schedule is not None
             or inference_provider is not None
-            or pii_analyzer is not None), "set_settings needs something to set"
+            or pii_analyzer is not None
+            or ban_dashes is not None), "set_settings needs something to set"
     data = _read_manifest()
     assert data is not None, "cannot set settings without an accounts manifest"
     entry = _entry_for(data, account_id)
@@ -496,33 +504,33 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
         entry["inference_provider"] = provider.name
     if pii_analyzer is not None:
         entry["pii_analyzer"] = bool(pii_analyzer)
+    if ban_dashes is not None:
+        entry["ban_dashes"] = bool(ban_dashes)
     _write_manifest(data)
     return _account_from_entry(entry)
 
 
 def _owned_paths(entry):
-    """The files an entry owns outright, meaning the ones under its own
+    """The files an entry owns outright, meaning everything under its own
     directory in the store (ACCOUNTS_DIR/<id>/) -- where provisioning puts a
-    signup's wrapped token and where an unspecified state file defaults to.
+    signup's wrapped token, where an unspecified state file defaults to, and
+    where the documents the user writes about themselves live.
 
-    Anything outside it is shared: the seeded owner points at the box's own
-    state/, which outlives any one entry, so deleting the owner's account must
-    not wipe it. The same rule covers the voice profile: a generated one lives
-    in the account's own directory and goes, while the operator's copy under
-    config/ is only unlinked from. Keying on the entry's own directory rather
-    than on the store root keeps that true even if the store were ever
-    configured to sit at the app root."""
+    The directory is the unit rather than a list of manifest keys, because not
+    every document has a key: backend.drafting.personal_context derives its path
+    instead of storing a pointer, so a key list would have quietly left a user's
+    personal information on disk after they asked to be deleted.
+
+    Anything outside the directory is shared: the seeded owner points at the
+    box's own state/, which outlives any one entry, so deleting the owner's
+    account must not wipe it. The same rule covers the voice profile: a
+    generated one lives in the account's own directory and goes, while the
+    operator's copy under config/ is only unlinked from."""
     home = ACCOUNTS_DIR / entry["id"]
-    owned = []
-    for value in (entry.get("token_file"), entry.get("state_file"),
-                  entry.get("voice_file")):
-        if not value:
-            continue
-        path = _resolve(value)
-        if path != home and home not in path.parents:
-            continue
-        owned.append(path)
-    return owned
+    assert home.parent == ACCOUNTS_DIR, (
+        f"account id {entry['id']!r} does not name a directory in the store"
+    )
+    return [home] if home.is_dir() else []
 
 
 def delete_account(account_id):

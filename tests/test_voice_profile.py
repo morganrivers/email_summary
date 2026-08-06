@@ -1,18 +1,20 @@
-"""The voice document is the whole instruction set: what the box shows is what
-the drafter reads, and a rule the user deletes stops being enforced.
+"""The documents the drafter is given, and who decides each rule in them: the
+voice document is what the box shows, the personal information document is the
+owner's own facts, and the dash ban is a Settings switch rather than prose.
 
 Unit-level (not golden) because these pin who decides a rule, not the outbound
 payloads the golden tests already cover.
 """
 
 from backend.drafting import agentic_drafter
+from backend.drafting import draft_replies
+from backend.drafting import personal_context
 from backend.drafting import voice_dna
 
 
 def test_default_text_carries_the_constraints():
     text = voice_dna.default_text()
     assert voice_dna.CONSTRAINTS_HEADING in text
-    assert agentic_drafter.dashes_banned(text)
 
 
 def test_resolve_adds_nothing_to_a_saved_profile(wire, monkeypatch, tmp_path):
@@ -28,17 +30,37 @@ def test_with_constraints_does_not_double_up():
     assert voice_dna.with_constraints(once) == once
 
 
-def test_dashes_banned_follows_the_document():
-    assert agentic_drafter.dashes_banned("- Do not use em-dashes or en-dashes.")
-    assert agentic_drafter.dashes_banned("no em dash, please")
-    assert not agentic_drafter.dashes_banned("## Voice\n\nWrite warmly.")
+def test_dashes_banned_follows_the_setting_not_the_document(wire):
+    assert agentic_drafter.dashes_banned(wire.account)
+    wire.account.ban_dashes = False
+    assert not agentic_drafter.dashes_banned(wire.account)
+    wire.account.voice_file = None
+    assert "em-dash" not in draft_replies.drafting_instructions(wire.account)
 
 
-def test_draft_with_a_dash_is_kept_when_the_profile_allows_dashes(wire, monkeypatch):
-    from backend.drafting import draft_replies
+def test_personal_information_reaches_the_drafter_and_survives_clearing(wire):
+    assert personal_context.section(wire.account) == ""
+    personal_context.save(wire.account, "I take calls on Tuesdays.")
+    instructions = draft_replies.drafting_instructions(wire.account)
+    assert personal_context.CONTEXT_HEADING in instructions
+    assert "I take calls on Tuesdays." in instructions
+    personal_context.save(wire.account, "   ")
+    assert personal_context.load(wire.account) == ""
+    assert personal_context.CONTEXT_HEADING not in \
+        draft_replies.drafting_instructions(wire.account)
 
-    monkeypatch.setattr(voice_dna, "DEFAULT_CONSTRAINTS",
-                        "## Constraints\n\n- Never invent facts.")
+
+def test_personal_information_over_the_limit_is_refused(wire):
+    import pytest
+
+    with pytest.raises(personal_context.ContextError):
+        personal_context.save(wire.account,
+                              "x" * (personal_context.MAX_CONTEXT_CHARS + 1))
+    assert personal_context.load(wire.account) == ""
+
+
+def test_draft_with_a_dash_is_kept_when_the_setting_is_off(wire, monkeypatch):
+    wire.account.ban_dashes = False
     dash_body = "Hi Alice — lunch works.\n\nBest,\nMorgan"
     rec = wire.install(
         responses=[

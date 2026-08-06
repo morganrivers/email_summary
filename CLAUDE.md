@@ -162,9 +162,11 @@ is what protects it from `--delete-after`.
   `gmail_api.register_watch()` for each.
 - `frontend/web_server.py` — the product web UI run by the `letterlock-web`
   service, behind Caddy (`127.0.0.1:8790` on `APP_HOST`). Sign-in with Google,
-  dashboard, voice DNA, settings, billing. `/voice` generates a profile from the
-  user's sent mail on a background thread (`voice_dna.start()`, page polls by
-  meta refresh) and shows it as editable plaintext.
+  dashboard, voice DNA, personal info, settings, billing. `/voice` generates a
+  profile from the user's sent mail on a background thread (`voice_dna.start()`,
+  page polls by meta refresh) and shows it as editable plaintext; `/personal` is
+  the second box, the owner's own facts (`personal_context`), kept apart from the
+  profile precisely because generating a profile overwrites the profile.
   The standalone `/onboard` flow it superseded was
   removed; its OAuth sequence now lives in `backend/onboarding/provisioning.py`.
   Telegram is linked by a round trip through the bot (`/settings/telegram/*`),
@@ -339,22 +341,36 @@ copy.
   linking. `send_telegram(msg, target)` always takes an explicit target;
   `operator_target()` (env) is only for box-level failures, never for a user's
   mail. There is deliberately no env fallback on the per-account path.
+- `draft_replies.drafting_instructions()` — everything the drafter is told about
+  an account before it sees an email: the voice profile, then the owner's
+  personal information. One assembly, so the auto-reply path and the
+  forwarded-email path cannot hand the model different briefs. It replaced
+  `voice_profile_for()`, which knew about one document only.
 - `backend/drafting/voice_dna.py` — every voice profile question: where a
-  profile lives, which one applies (`resolve()`, called by
-  `draft_replies.voice_profile_for()`), and how one is generated from the
-  account's own sent mail. The operator's personal profile is reachable only
+  profile lives, which one applies (`resolve()`), and how one is generated from
+  the account's own sent mail. The operator's personal profile is reachable only
   through their own manifest entry; everyone else gets
   `backend/drafting/default_voice.md` until they generate or write their own,
   which lands in `database/<id>/voice-dna.md` (never in `config/`, which the
   deploy overwrites). `DEFAULT_CONSTRAINTS` is the Constraints section a profile
-  starts with (the em-dash ban among them), written into the document by
-  `with_constraints()` when one is first created, never appended at prompt time:
-  `resolve()` hands the drafter exactly what the /voice box shows, so a rule the
-  user edits or deletes is a rule the drafter stops following. That includes the
-  em-dash rejection, which `agentic_drafter.dashes_banned()` gates on the
-  instructions it was actually given, in `draft()`, `draft_replies` and
-  `manual_draft` alike. `account.set_voice()` is the sole writer of the manifest
-  pointer.
+  starts with, written into the document by `with_constraints()` when one is
+  first created, never appended at prompt time: `resolve()` hands the drafter
+  exactly what the /voice box shows, so a rule the user edits or deletes is a
+  rule the drafter stops following. The em-dash ban is deliberately not one of
+  them, because it rejects finished drafts rather than merely asking: it is the
+  `ban_dashes` Settings switch, and `agentic_drafter.dashes_banned(account)` is
+  the only reader, consulted in `draft()` (which is also what puts the
+  PUNCTUATION RULE in the prompt), `draft_replies` and `manual_draft` alike. So
+  the model is told the rule exactly when we enforce it.
+  `account.set_voice()` is the sole writer of the manifest pointer.
+- `backend/drafting/personal_context.py` — the second document: facts the owner
+  writes about themselves (scheduling preferences, where they are, what they do),
+  read into every draft prompt beneath the voice profile. Separate from the voice
+  document because `voice_dna.generate()` overwrites that one wholesale and these
+  facts must survive it. The path is derived (`database/<id>/personal-context.md`),
+  with no manifest pointer, which is why `account._owned_paths()` owns the
+  account's directory rather than a list of manifest keys: a key list would have
+  left a deleted user's personal information on disk.
 - `agentic_drafter.untrusted()` — the fence put around anything that came from
   outside the account (email bodies, tool results) before it reaches the model,
   paired with `INJECTION_RULE` in the system prompt.

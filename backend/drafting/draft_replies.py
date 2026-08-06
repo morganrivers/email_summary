@@ -2,7 +2,7 @@
 """
 Generate Gmail drafts for incoming emails that likely warrant a personal reply.
 
-Voice profile: per account (see voice_profile_for).
+Drafting instructions: per account (see drafting_instructions).
 Classifier: plain DeepSeek call.
 Drafter: agentic_drafter — DeepSeek with calendar + email-search tools.
 Drafts created through gmail_gcal.drafts (sibling).
@@ -14,6 +14,7 @@ import html
 
 from backend import secrets
 from backend.drafting import agentic_drafter
+from backend.drafting import personal_context
 from backend.drafting import voice_dna
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal import drafts
@@ -61,13 +62,18 @@ DRAFTER_INSTRUCTION = (
 )
 
 
-def voice_profile_for(account):
-    """The voice profile that applies to one account, as the drafter sees it.
+def drafting_instructions(account):
+    """Everything the drafter is told about this account before it sees an email:
+    the voice profile, then the owner's own personal information.
 
-    Resolution, generation, and custody live in voice_dna, which the web UI
-    writes through as well. This stays as the name the drafting path calls, so
-    the store has one entry point rather than two callers reaching into it."""
-    return voice_dna.resolve(account)
+    Two documents, one assembly. Resolution, generation, and custody of the
+    profile live in voice_dna; the facts live in personal_context; both are
+    written through the web UI. Composing them here rather than at each call site
+    means the auto-reply path and the forwarded-email path cannot end up giving
+    the model different briefs. Nothing else is added here: the punctuation rule
+    the drafter enforces comes from the account's Settings switch, not from this
+    text (agentic_drafter.dashes_banned)."""
+    return voice_dna.resolve(account) + personal_context.section(account)
 
 
 def thread_participation_line(email):
@@ -98,8 +104,8 @@ def classify(client, emails, identity=None):
     return {d["index"]: d for d in parsed.get("decisions", [])}
 
 
-def draft_body(client, voice, email, account):
-    sys_prompt = voice + DRAFTER_INSTRUCTION
+def draft_body(client, instructions, email, account):
+    sys_prompt = instructions + DRAFTER_INSTRUCTION
     user_prompt = (
         "Original email:\n"
         + agentic_drafter.untrusted(
@@ -225,8 +231,8 @@ def process_emails(account, emails):
     assert isinstance(emails, list), "emails must be a list"
     if not emails:
         return []
-    voice = voice_profile_for(account)
-    ban_dashes = agentic_drafter.dashes_banned(voice)
+    instructions = drafting_instructions(account)
+    ban_dashes = agentic_drafter.dashes_banned(account)
 
     client = agentic_drafter.make_client(account)
     decisions = classify(client, emails, account.identity)
@@ -237,7 +243,7 @@ def process_emails(account, emails):
         d = decisions.get(i)
         if not d or not d.get("needs_reply"):
             continue
-        body, run_url = draft_body(client, voice, email, account)
+        body, run_url = draft_body(client, instructions, email, account)
         if ban_dashes and agentic_drafter.contains_em_dash(body):
             rejected.append({
                 "from": email["from"],

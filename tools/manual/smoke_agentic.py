@@ -13,7 +13,7 @@ from backend.accounts import account
 from backend.drafting import draft_replies
 
 acct = account.owner_account()
-voice = draft_replies.voice_profile_for(acct)
+instructions = draft_replies.drafting_instructions(acct)
 
 DRAFTER_INSTRUCTION = (
     "\n\nWrite a reply email that follows the voice profile above. "
@@ -28,7 +28,7 @@ fake_email = {
     "body": "Hi Morgan, I'd love to grab coffee. Could you do Thursday afternoon (after 2pm) or Friday morning this week? Either works for me. Best, Alice",
 }
 
-sys_prompt = voice + DRAFTER_INSTRUCTION
+sys_prompt = instructions + DRAFTER_INSTRUCTION
 user_prompt = (
     f"Original email:\n"
     f"From: {fake_email['from']}\n"

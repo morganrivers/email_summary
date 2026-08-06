@@ -26,10 +26,12 @@ Authenticated:
   POST /voice            save the edited profile
   POST /voice/generate   build a profile from the account's sent mail
   POST /voice/reset      drop the profile, back to the default
+  GET  /personal         personal information, as editable plaintext
+  POST /personal         save it (empty clears it)
   GET  /settings         settings (telegram link, timezone, auto-scheduling,
-                         inference provider, PII analyzer)
-  POST /settings         save timezone + auto-scheduling + inference provider
-                         + PII analyzer
+                         dash ban, inference provider, PII analyzer)
+  POST /settings         save timezone + auto-scheduling + dash ban
+                         + inference provider + PII analyzer
   POST /settings/telegram/start    mint a one-time chat link code
   POST /settings/telegram/confirm  claim the chat that posted the code
   POST /settings/telegram/unlink   drop the linked chat
@@ -56,6 +58,7 @@ from backend import secrets as app_secrets
 from backend import site
 from backend.accounts import account
 from backend.billing import billing
+from backend.drafting import personal_context
 from backend.drafting import voice_dna
 from backend.integrations import llm_client
 from backend.integrations import telegram
@@ -225,6 +228,7 @@ def _layout(title, body, active=None, user_email=None, refresh=None):
     auth_nav = [
         ("/dashboard", "Dashboard"),
         ("/voice", "Voice DNA"),
+        ("/personal", "Personal info"),
         ("/settings", "Settings"),
         ("/billing", "Billing"),
         ("/account", "Account"),
@@ -849,6 +853,7 @@ Drafts only. The assistant never sends email autonomously.
 
 <ul style="font-size:11px;line-height:1.9;padding-left:18px;">
   <li><a href="/voice">Voice DNA</a> (teach the assistant your writing style)</li>
+  <li><a href="/personal">Personal info</a> (facts it needs to answer for you)</li>
   <li><a href="/settings">Settings</a> (Telegram target, inference model)</li>
   <li><a href="/billing">Billing</a> (plan status and Polar portal)</li>
   <li><a href="/account">Account</a> (details and delete)</li>
@@ -867,8 +872,9 @@ def _page_voice(acct, error=None, notice=None):
 
     The box holds the whole document, output rules included. Nothing is appended
     behind it at prompt time, so a rule the user deletes here is a rule the
-    drafter stops following, down to the em-dash rejection. "Revert to default"
-    is how they get the shipped rules back."""
+    drafter stops following. The one rule not in it is the dash ban, which
+    rejects drafts and therefore belongs to a switch the user can see the state
+    of. "Revert to default" is how they get the shipped rules back."""
     own = voice_dna.load(acct)
     job = voice_dna.status(acct.id)
     running = bool(job and job["state"] == "running")
@@ -947,11 +953,13 @@ Letterlock securely analyze recent emails you have sent and generate the the pro
 <h3>Edit the profile</h3>
 
 <p>
-This is the whole text the assistant reads before every draft, nothing hidden
+This is the whole text the assistant reads about how you write, nothing hidden
 and nothing added on top. Edit it freely: plain prose works better than a form.
 The Constraints section at the bottom is where the output rules live (plain
-text, no dashes, never invent facts). They are the defaults, not our rules about
-you: change them or delete them and the assistant follows what you leave.
+text, never invent facts, keep it short). They are the defaults, not our rules
+about you: change them or delete them and the assistant follows what you leave.
+The em-dash rule is not here, because it rejects finished drafts rather than
+just asking: it is a switch in <a href="/settings">Settings</a>.
 </p>
 
 <div class="contact-form" style="max-width:100%;">
@@ -966,6 +974,80 @@ you: change them or delete them and the assistant follows what you leave.
 <a href="/dashboard">&larr; Back to dashboard</a>
 """
     return _layout("Voice DNA", body, active="/voice", user_email=acct.id)
+
+
+def _page_personal(acct, error=None, notice=None):
+    """The owner's personal information, as editable plaintext.
+
+    A second box rather than another section of the voice profile: generating a
+    profile from sent mail overwrites that whole document, and these facts have
+    to survive it. Empty is the default and a legitimate answer, so the page
+    never nags: the drafter simply reads nothing about the owner.
+
+    The placeholder is examples rather than a form of fields. What a drafter
+    needs to know varies per person, and a fixed set of inputs would collect the
+    ones we guessed at instead of the ones that come up in their mail."""
+    text = personal_context.load(acct)
+    status_badge = (
+        '<span class="status-ok">SET</span>' if text
+        else '<span class="status-warn">EMPTY</span>'
+    )
+    error_html = (
+        f'<div class="form-error" style="margin-bottom:10px;">{_h(error)}</div>'
+        if error else ""
+    )
+    notice_html = (
+        f'<div class="form-success" style="margin-bottom:10px;">{_h(notice)}</div>'
+        if notice else ""
+    )
+    placeholder = (
+        "I take calls on Tuesdays and Thursdays, afternoons Berlin time, and I "
+        "keep Mondays clear.\n"
+        "I am based in Berlin and travel to London about once a month.\n"
+        "I run the data team at Acme; questions about billing go to my "
+        "colleague, not to me.\n"
+        "I never agree to speak at an event without checking the date first."
+    )
+    body = f"""
+<h2>Personal information</h2>
+
+{error_html}{notice_html}
+
+<p>
+Facts about you that help Letterlock answer your email: when you prefer to meet,
+where you are, what you do, what you never agree to. Your <a href="/voice">Voice
+DNA</a> says how you write. This says what is true of you, so a draft can propose
+a time or answer a question instead of hedging.
+</p>
+
+<table class="data-table" style="width:auto;min-width:280px;">
+<tbody>
+<tr><td style="font-weight:bold;width:160px;">Your information</td><td>{status_badge}</td></tr>
+</tbody>
+</table>
+
+<h3>Edit</h3>
+
+<p>
+Plain prose, one fact per line. The assistant reads this before every draft and
+uses what the reply needs. Leave it empty and it is told nothing about you.
+Generating a voice profile does not touch this box.
+</p>
+
+<div class="contact-form" style="max-width:100%;">
+  <form method="post" action="/personal">
+    <textarea name="context" rows="16" style="width:100%;font-family:monospace;font-size:12px;"
+              maxlength="{personal_context.MAX_CONTEXT_CHARS}"
+              placeholder="{_h(placeholder)}">{_h(text)}</textarea>
+    <button type="submit" class="form-submit">Save information</button>
+  </form>
+</div>
+
+<hr>
+<a href="/dashboard">&larr; Back to dashboard</a>
+"""
+    return _layout("Personal information", body, active="/personal",
+                   user_email=acct.id)
 
 
 def _telegram_section(acct, link_code=None, error=None, notice=None):
@@ -1099,6 +1181,7 @@ def _page_settings(acct, saved=False, link_code=None, error=None, notice=None,
         if settings_error else ""
     )
     auto_checked = " checked" if acct.auto_schedule else ""
+    dash_checked = " checked" if acct.ban_dashes else ""
     body = f"""
 <h2>Settings</h2>
 
@@ -1130,6 +1213,17 @@ def _page_settings(acct, saved=False, link_code=None, error=None, notice=None,
       <span style="font-size:10px;color:#666;">
         When an email you send commits to a date and time, add it to your primary
         calendar. Off by default. No invitations are sent.
+      </span>
+    </div>
+    <div class="form-row">
+      <label>
+        <input type="checkbox" name="ban_dashes" value="1"{dash_checked}>
+        Never use em-dashes or en-dashes
+      </label>
+      <span style="font-size:10px;color:#666;">
+        On by default. The assistant is told to avoid them, and a draft that
+        contains one is rewritten, then rejected if it keeps them. Switch this
+        off and dashes are left alone.
       </span>
     </div>
 {_provider_section(acct)}
@@ -1450,6 +1544,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             return self._send(200, _page_voice(acct))
 
+        if path == "/personal":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            return self._send(200, _page_personal(acct))
+
         if path == "/settings":
             acct = self._require_auth()
             if acct is None:
@@ -1556,6 +1656,7 @@ class Handler(BaseHTTPRequestHandler):
             acct = account.set_settings(
                 acct.id, timezone=tz, auto_schedule=bool(form.get("auto_schedule")),
                 inference_provider=provider, pii_analyzer=analyzer,
+                ban_dashes=bool(form.get("ban_dashes")),
             )
             return self._send(200, _page_settings(acct, saved=True))
 
@@ -1616,6 +1717,22 @@ class Handler(BaseHTTPRequestHandler):
             except voice_dna.VoiceError as e:
                 return self._send(200, _page_voice(acct, error=str(e)))
             return self._send(200, _page_voice(acct, notice="Profile saved."))
+
+        if path == "/personal":
+            acct = self._require_auth()
+            if acct is None:
+                return
+            form = self._read_body()
+            if form is None:
+                return self._send(400, _page_error(400, "Malformed request."))
+            text = form.get("context", "")
+            try:
+                personal_context.save(acct, text)
+            except personal_context.ContextError as e:
+                return self._send(200, _page_personal(acct, error=str(e)))
+            notice = ("Saved." if text.strip() else
+                      "Cleared. The assistant is told nothing about you.")
+            return self._send(200, _page_personal(acct, notice=notice))
 
         if path == "/voice/generate":
             acct = self._require_auth()
