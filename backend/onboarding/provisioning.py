@@ -30,6 +30,7 @@ from urllib.parse import urlencode
 
 import requests
 
+from backend import audit
 from backend import paths
 from backend.accounts import account
 from backend.billing import billing
@@ -180,7 +181,12 @@ def provision(code, redirect_uri, state):
     There is no staging directory any more. It existed because the owning email
     was unknown before the exchange and the credentials file had to land
     somewhere first; nothing is written before the identity is known now, so the
-    move-into-place dance is gone with it."""
+    move-into-place dance is gone with it.
+
+    The consent is audited here rather than in account.register_account, and in
+    addition to it: taking custody of a refresh token and writing a manifest
+    entry are two different facts, and this is the only one that says we now
+    hold a way into somebody's mailbox."""
     profile = exchange_code(code, redirect_uri, state)
     # Checked here as well as in token_path, so a uid that cannot be stored is
     # refused before the co-signer is asked to wrap anything for it -- but
@@ -205,7 +211,9 @@ def provision(code, redirect_uri, state):
         # on disk. Refusing after the exchange is the only place we can refuse:
         # the identity is not known before it.
         tokens.discard(email)
+        audit.record(email, audit.CONSENT, "refused", ("account-limit",))
         raise ProvisionError(503, f"signup refused: {err}") from err
+    audit.record(acct.id, audit.CONSENT, "granted")
     # A re-consent replaces the custody this account's credentials derive from,
     # so anything cached against the old one has to go with it.
     tokens.forget(email)

@@ -1,7 +1,7 @@
 # Security hardening plan
 
-Status: proposed, except the item in "Already done" below and Tracks B and D,
-which are implemented. Each finished track says so in its own heading.
+Status: proposed, except the item in "Already done" below and Tracks B, C and
+D, which are implemented. Each finished track says so in its own heading.
 Written 2026-08-07. Owner: Morgan.
 
 ## How to read this
@@ -481,6 +481,14 @@ zero.
 ---
 
 # Track C. Web-tier audit log
+
+**Done.** `backend/audit.py`, called from the account mutators, with
+`frontend/web_server.py` supplying the request origin through
+`audit.request_context()`. Tests in `tests/test_audit.py`. Two decisions the
+plan left open, settled: retention is `RETENTION_DAYS = 180`, and an account
+deletion does *not* remove that account's rows, so the retention window is the
+only bound on how long a departed user's address stays in the table. The
+description below is what was built; it is kept for the reasoning.
 
 **Parallel with A, B, D, E.** Mild file overlap with Track G if G changes the
 settings writers, so land it before G or accept a rebase. Touches

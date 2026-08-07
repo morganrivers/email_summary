@@ -26,6 +26,7 @@ pseudonymized on the way out and restored on the way back.
 
 import sys
 
+from backend import audit
 from backend.accounts import account
 
 CONTEXT_NAME = "personal-context.md"
@@ -76,7 +77,11 @@ def save(acct, text):
     and unlike voice_dna.save it touches no manifest entry: the path is derived,
     so there is no pointer to keep in step. Empty text clears it, because a user
     who selects all and deletes is asking for the assistant to stop being told
-    any of it."""
+    any of it.
+
+    This module writes its own audit row rather than inheriting one from a
+    manifest writer, because there is no manifest writer to inherit it from. The
+    row carries the document's length and never a word of it."""
     text = (text or "").strip()
     if len(text) > MAX_CONTEXT_CHARS:
         raise ContextError(
@@ -90,15 +95,18 @@ def save(acct, text):
     path.write_text(text + "\n")
     path.chmod(0o600)
     log(f"saved personal information for {acct.id} ({len(text)} chars)")
+    audit.record(acct.id, audit.PERSONAL, "saved", (f"chars:{len(text)}",))
 
 
 def clear(acct):
     """Drop the document. The drafter is then told nothing about the owner
-    beyond their voice profile."""
+    beyond their voice profile. Audited only when there was something to drop,
+    so the log never reports an edit that changed nothing."""
     path = context_path(acct)
     if path.exists():
         path.unlink()
         log(f"cleared personal information for {acct.id}")
+        audit.record(acct.id, audit.PERSONAL, "cleared")
 
 
 def section(acct):
