@@ -15,6 +15,7 @@ token*.json
 *.key
 
 state.json
+state/
 database/
 wake_queue.jsonl
 *.log

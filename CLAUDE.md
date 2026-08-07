@@ -229,7 +229,17 @@ copy.
   the enclave's custody client import `cosigner.protocol`, the wire contract.
   `keys.py` is the only place the outer key is derived or the DPoP proof signed;
   `policy.py` is the only place a request is decided, and the same call writes
-  its audit row, so the rate limit it enforced and the log cannot disagree;
+  its audit row, so the rate limit it enforced and the log cannot disagree —
+  including the sweep rule (`_sweep_refusal`), which meters how many *different*
+  accounts were unwrapped in a short window rather than how many requests, since
+  bulk exfiltration is one request per account and every per-account rule reads
+  that as normal. `audit.py` keeps two tables for one reason: `grants` is the
+  wrap-once state and is never deleted, `requests` is the log and every reader of
+  it is windowed, which is what lets `retention.py` prune. `retention.py` is the
+  only code in the package that deletes a row, it runs on a thread inside the
+  co-signer rather than as its own unit (a second process would VACUUM under the
+  one that answers every request), and its floor is derived from
+  `policy.longest_window()` so a new limiter cannot outlive what it deletes.
   `attest.py` holds this box's own measurement allowlist, which is the point of
   the second machine — the enclave cannot edit it, so a new `compose_hash` must
   be authorized here *and* in the AppAuth contract before deploying, or every

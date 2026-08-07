@@ -8,10 +8,15 @@ path. Every test below fails if one of the four invariants in
     `inner` that came in sealed goes out still sealed;
   * no plaintext here -- the audit log is searched for every byte that crossed
     the wire;
-  * no bypass -- the kill switch, the rate limits and the aggregate ceiling
-    each refuse, and refusals never consume budget;
+  * no bypass -- the kill switch, the rate limits, the aggregate ceiling and
+    the distinct-account sweep limit each refuse, and refusals never consume
+    budget;
   * no stored ciphertext -- the schema has nowhere to put one, and `/wrap`
     refuses a second time for a uid using the log rather than a saved record.
+
+The last group covers retention, which is the one thing here that deletes: what
+it may remove is bounded by what the limiters read, and the tests pin that a
+prune cannot change an answer the co-signer would have given.
 
 The server is driven over a real socket so routing, status codes and the
 client-certificate header are exercised as deployed, with Caddy's role played
@@ -19,6 +24,7 @@ by setting the header directly.
 """
 
 import json
+import time
 
 import pytest
 import requests
@@ -28,6 +34,7 @@ from cosigner import attest
 from cosigner import audit
 from cosigner import policy
 from cosigner import protocol
+from cosigner import retention
 
 UID = "alice@example.com"
 SEALED = b"\x01" * 12 + b"pretend this is AES-GCM output from the enclave"
@@ -226,6 +233,46 @@ def test_per_user_rate_limit(cosigner, monkeypatch):
     assert "per-user rate limit" in resp.json()[protocol.F_ERROR]
 
 
+def test_a_sweep_across_accounts_is_refused(cosigner, monkeypatch):
+    """The pattern every per-account rule reads as normal: one unwrap each,
+    across the whole user base. Nobody exceeds their own ceiling, so breadth is
+    the only thing that sees it."""
+    monkeypatch.setenv("COSIGNER_RATE_DISTINCT_UIDS", "2")
+    uids = ["a@example.com", "b@example.com", "c@example.com"]
+    outers = {uid: _outer(cosigner, uid=uid) for uid in uids}
+    assert cosigner.unwrap(uid=uids[0], outer=outers[uids[0]]).status_code == 200
+    assert cosigner.unwrap(uid=uids[1], outer=outers[uids[1]]).status_code == 200
+
+    resp = cosigner.unwrap(uid=uids[2], outer=outers[uids[2]])
+    assert resp.status_code == 429
+    assert policy.SWEEP_REASON in resp.json()[protocol.F_ERROR]
+    assert audit.recent(1)[0]["uid"] == uids[2], "the refused account is named in the log"
+
+
+def test_the_sweep_limit_does_not_refuse_an_account_already_counted(cosigner, monkeypatch):
+    """An account already inside the window has contributed its uid to the count
+    already, so refusing it narrows no breach and only stops that user's mail."""
+    monkeypatch.setenv("COSIGNER_RATE_DISTINCT_UIDS", "1")
+    mine = _outer(cosigner, uid="a@example.com")
+    theirs = _outer(cosigner, uid="b@example.com")
+    assert cosigner.unwrap(uid="a@example.com", outer=mine).status_code == 200
+    assert cosigner.unwrap(uid="b@example.com", outer=theirs).status_code == 429
+    assert cosigner.unwrap(uid="a@example.com", outer=mine).status_code == 200
+
+
+def test_a_sweep_alerts_once_rather_than_once_per_account(cosigner, monkeypatch):
+    """A hundred identical alerts is how an operator learns to mute the channel,
+    and a sweep produces one refusal per account it reaches for."""
+    monkeypatch.setenv("COSIGNER_RATE_DISTINCT_UIDS", "1")
+    outers = {uid: _outer(cosigner, uid=uid)
+              for uid in ("a@example.com", "b@example.com", "c@example.com")}
+    for uid, outer in outers.items():
+        cosigner.unwrap(uid=uid, outer=outer)
+
+    swept = [text for text in cosigner.alerts if policy.SWEEP_REASON in text]
+    assert len(swept) == 1, cosigner.alerts
+
+
 def test_aggregate_ceiling_bounds_a_live_breach(cosigner, monkeypatch):
     """The number that decides how long draining the user base takes."""
     monkeypatch.setenv("COSIGNER_RATE_PER_USER_HOUR", "100")
@@ -290,6 +337,8 @@ def test_audit_schema_cannot_hold_a_ciphertext(cosigner):
     columns = {row[1] for row in audit.connect().execute("PRAGMA table_info(requests)")}
     assert columns == {"id", "ts", "uid", "action", "decision", "reason",
                        "fingerprint", "measurement", "attested"}
+    grants = {row[1] for row in audit.connect().execute("PRAGMA table_info(grants)")}
+    assert grants == {"uid", "action", "first_granted_ts"}
 
 
 def test_attestation_required_refuses_a_connection_without_a_certificate(cosigner,
@@ -347,3 +396,80 @@ def test_unknown_endpoint_and_oversized_body(cosigner):
     assert cosigner.post("/anything").status_code == 404
     assert cosigner.get("/anything").status_code == 404
     assert cosigner.wrap(inner=b"x" * protocol.MAX_BODY).status_code == 413
+
+
+# --- retention ------------------------------------------------------------
+
+@pytest.fixture
+def log(tmp_path, monkeypatch):
+    """The audit log alone, no server: retention is about what the rows mean,
+    not about the wire."""
+    monkeypatch.setenv("COSIGNER_STATE_DIR", str(tmp_path))
+    audit.reset_for_test()
+    yield audit
+    audit.reset_for_test()
+
+
+def _aged(uid, action, decision, days_ago):
+    audit.record(uid, action, decision, reason="aged" if decision == audit.DENY else None,
+                 ts=time.time() - days_ago * retention.DAY)
+
+
+def test_wrap_once_survives_a_prune(log):
+    """The landmine the split exists for: prune the wrap row and the uid becomes
+    eligible for a second wrap, which is exactly what `/wrap` refuses."""
+    _aged(UID, policy.ACTION_WRAP, audit.ALLOW, days_ago=400)
+    assert audit.ever_granted(UID, policy.ACTION_WRAP)
+
+    allowed, _ = retention.prune()
+    assert allowed == 1
+    assert audit.ever_granted(UID, policy.ACTION_WRAP), (
+        "pruning the log re-opened a wrapped uid for a second wrap"
+    )
+
+
+def test_prune_keeps_denials_far_longer_than_grants(log):
+    """Nothing enforcement-side reads a denial, and it is the best evidence in
+    the table."""
+    _aged(UID, policy.ACTION_UNWRAP, audit.ALLOW, days_ago=60)
+    _aged(UID, policy.ACTION_UNWRAP, audit.DENY, days_ago=60)
+    allowed, denied = retention.prune()
+    assert (allowed, denied) == (1, 0)
+
+    reasons = {row["decision"] for row in audit.recent()}
+    assert reasons == {audit.DENY}
+
+
+def test_prune_leaves_no_readable_row_behind(log):
+    """A deleted row still sitting in the file's free list is a row that was not
+    deleted, which for this table means an activity timeline outliving the
+    period it was kept for."""
+    _aged("someone@example.com", policy.ACTION_UNWRAP, audit.DENY, days_ago=400)
+    assert b"someone@example.com" in audit.db_path().read_bytes()
+
+    assert retention.prune() == (0, 1)
+    assert audit.connect().execute("PRAGMA freelist_count").fetchone()[0] == 0
+    assert b"someone@example.com" not in audit.db_path().read_bytes()
+
+
+def test_prune_never_touches_a_row_a_limiter_still_counts(log, monkeypatch):
+    """The floor is derived from the windows rather than restated, so a limiter
+    with a longer window than the retention period refuses to prune at all."""
+    since = time.time() - policy.longest_window()
+    audit.record(UID, policy.ACTION_UNWRAP, audit.ALLOW)
+    assert retention.prune() == (0, 0)
+    assert audit.granted_since(since, action=policy.ACTION_UNWRAP, uid=UID) == 1
+
+    monkeypatch.setattr(policy, "WINDOW_SECONDS", retention.ALLOW_RETENTION_SECONDS)
+    with pytest.raises(AssertionError, match="rate limiter still counts"):
+        retention.prune()
+
+
+def test_the_backfill_recovers_wrap_state_from_an_older_log(log):
+    """A box whose audit.db predates the grants table has its wrap grants only
+    as log rows; an empty grants table would say every user may wrap again."""
+    audit.record(UID, policy.ACTION_WRAP, audit.ALLOW)
+    with audit.transaction() as conn:
+        conn.execute("DROP TABLE grants")
+    audit.reset_for_test()
+    assert audit.ever_granted(UID, policy.ACTION_WRAP)
