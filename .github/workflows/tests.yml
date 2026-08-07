@@ -1,0 +1,67 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# contents: write is for the regenerate job below, which pushes to the pull
+# request's own branch. Workflow runs triggered by Dependabot get a read-only
+# token unless a workflow asks for more, which is what this does.
+permissions:
+  contents: write
+
+jobs:
+  # Dependabot edits requirements.txt and cannot know that
+  # deploy/phala/pyproject.toml is generated from it and that
+  # deploy/phala/uv.lock is generated from that. So every pull request it files
+  # arrives failing tests/test_requirements.py. Regenerating here, on its
+  # branch, is the difference between a feed that maintains itself and a feed
+  # where every entry needs a hand-written follow-up commit and so gets muted.
+  regenerate:
+    if: startsWith(github.head_ref, 'dependabot/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: install the generators
+        run: python -m pip install --quiet -r requirements-dev.txt
+      - name: regenerate the image manifest and its lock
+        run: |
+          python -m deploy.render_pyproject
+          (cd deploy/phala && uv lock)
+      - name: commit the result back to the branch
+        run: |
+          if git diff --quiet; then
+            echo "requirements.txt change needed no regeneration"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -am 'Regenerate the image manifest and lock from requirements.txt'
+          git push
+
+  pytest:
+    needs: [regenerate]
+    # The regenerate job is skipped on every branch that is not Dependabot's,
+    # and a skipped dependency skips its dependents unless said otherwise.
+    if: ${{ always() && needs.regenerate.result != 'failure' && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The commit the regenerate job just pushed, not the one that opened
+          # the pull request. A push by the workflow token starts no new run, so
+          # checking out the branch is what makes this job see the regeneration.
+          ref: ${{ github.head_ref || github.ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: install what the image ships
+        run: deploy/testenv.sh locked
+      - name: run the suite
+        run: python -m pytest -q

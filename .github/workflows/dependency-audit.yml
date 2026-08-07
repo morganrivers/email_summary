@@ -1,0 +1,38 @@
+name: dependency audit
+
+# Daily, and it blocks. The input that changes between two runs of this job is
+# not the code -- the pins are the committed ones -- it is the advisory
+# database, which is the whole reason the job is scheduled rather than run on
+# push: the same lock can become vulnerable overnight with no commit involved.
+#
+# Kept apart from .github/workflows/dependency-latest.yml on purpose. The two
+# fail for different reasons and at different rates, and a shared exit code
+# means the compatibility failures train you to ignore the vulnerability ones.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: install what the image ships
+        run: deploy/testenv.sh locked
+      - name: run the suite with the advisory check ungated
+        env:
+          # tests/test_dependency_audit.py skips the network-dependent check
+          # without this. The full suite runs too, so a red job here is never
+          # ambiguous between "vulnerable" and "also broken".
+          LETTERLOCK_AUDIT: '1'
+        run: python -m pytest -q
+      - name: print the report
+        if: always()
+        run: python -m deploy.audit | tee -a "$GITHUB_STEP_SUMMARY"

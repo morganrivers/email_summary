@@ -1,0 +1,29 @@
+version: 2
+
+# Security updates only, and only against requirements.txt.
+#
+# `open-pull-requests-limit: 0` switches off version updates for this ecosystem.
+# Security updates are not affected by it; they come from the repository's
+# "Dependabot security updates" setting, which has to be on for any of this to
+# file a pull request. Version updates are off because they are unreadable at
+# this repo's dependency count: openai alone shipped roughly 90 releases in the
+# last year, and a feed nobody reads is a feed that hides the advisory in it.
+# Bumping for the sake of being current is deploy/testenv.sh's weekly job and a
+# deliberate `requirements.txt` edit, not a robot's.
+#
+# Do not add a `uv` ecosystem entry for deploy/phala. That pyproject's
+# dependency array is generated from requirements.txt by
+# deploy/render_pyproject.py, so a bot editing it directly writes a change the
+# next render silently reverts. The lock beside it is regenerated instead, by
+# the `regenerate` job in .github/workflows/tests.yml, on the bot's own branch.
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    labels:
+      - "dependencies"
+      - "security"
+    commit-message:
+      prefix: "Bump"
