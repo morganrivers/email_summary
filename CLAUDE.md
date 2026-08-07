@@ -31,7 +31,7 @@ Dependencies are installed automatically when their manifests change in a push:
 no Node on the box: Gmail and Calendar are called from Python, so there is one
 language and one dependency tree.
 
-`requirements.txt` is also the only dependency list. The enclave image's
+`requirements.txt` is also the only list of what ships. The enclave image's
 `deploy/phala/pyproject.toml` is generated from it, so adding a pin is:
 
 ```bash
@@ -40,6 +40,48 @@ python -m deploy.render_pyproject      # rewrite the pyproject dependency array
 ```
 
 `tests/test_requirements.py` fails if the committed pyproject drifts.
+
+`requirements-dev.txt` is the second list, and the only other one: pytest,
+pip-audit and uv, installed on neither the box nor the image. The same test
+fails if a pin there reaches either shipped list, and `deploy/deploy.sh`
+excludes the file the way it excludes `tests/` and `docs/`.
+
+## Dependency advisories
+
+`python -m deploy.audit` says whether anything we ship has a known
+vulnerability. It audits `deploy/phala/uv.lock`, not `requirements.txt`: the
+lock is the full transitive closure, so a CVE in something pulled in indirectly
+is visible there and nowhere else.
+
+The check runs from `tests/test_dependency_audit.py` and is gated on
+`LETTERLOCK_AUDIT=1`, because it calls the advisory service and a test that
+fails offline gets deleted rather than debugged. Three GitHub workflows drive
+the rest:
+
+- `tests.yml` — the suite on every push and pull request, plus the `regenerate`
+  job that re-renders the pyproject and re-locks on Dependabot's own branch.
+  Dependabot cannot know those two files are generated, so without it every one
+  of its pull requests arrives failing `tests/test_requirements.py`.
+- `dependency-audit.yml` — daily, blocking. The pins do not change daily; the
+  advisory database does.
+- `dependency-latest.yml` — weekly, non-blocking. Installs the direct
+  dependencies unpinned and runs the suite, which answers whether the next
+  security bump will break the code.
+
+Kept separate on purpose: they fail for different reasons and at different
+rates, and one exit code for both trains you to ignore the one that matters.
+`deploy/testenv.sh` builds the environment for all of them, so no two workflows
+can disagree about what "installed" means.
+
+An advisory with no fixed version is the one case that needs a decision rather
+than a bump. It goes in `deploy/audit_ignores.toml` with an expiry date, and an
+entry past its date fails the audit exactly as the advisory did.
+
+Dependabot is configured for security updates only
+(`open-pull-requests-limit: 0` switches off version updates; security updates
+come from the repository setting and ignore that limit) and points at
+`requirements.txt` alone. Never point it at the `uv` ecosystem: it would edit
+the generated pyproject, and the next render reverts its work.
 
 The PII analyzer (Presidio + spaCy + `en_core_web_lg`) is commented out of
 `requirements.txt` and off by default, because it costs ~1.6 GB resident per
@@ -476,7 +518,17 @@ copy.
   a pin cannot be present on Hetzner and absent from the image. Maintained
   separately they had already drifted: the image carried presidio and spaCy,
   which are off by default because they do not fit a 2 GB confidential VM, and
-  lacked `standardwebhooks` and `certifi`.
+  lacked `standardwebhooks` and `certifi`. `deploy/requirements.py` also owns
+  the name-stripping (`names()`), so the weekly unpinned job asks its question
+  through the parser that decided what a pin is rather than through a `sed` in a
+  workflow file.
+- `deploy/audit.py` — what counts as a known vulnerability and what counts as a
+  deliberate exception. One module answers both, and `deploy/audit_ignores.toml`
+  is the only place an advisory can be excused, with an expiry date that fails
+  the audit once it passes. `tests/test_dependency_audit.py` and the daily
+  workflow are both callers; neither has its own idea of the rules.
+- `deploy/testenv.sh` — how CI installs this project, for all three workflows.
+  `locked` is the image's closure, `latest` is the same distributions unpinned.
 
 ## Progressive drafts
 

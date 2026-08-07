@@ -1,0 +1,52 @@
+name: latest dependencies
+
+# Weekly, and it does not block. It installs the same distributions unpinned,
+# resolves them today and runs the suite, which answers one question: will the
+# next security bump break this code? Knowing that a week early is the point.
+#
+# The failure it reports is a compatibility failure, not a vulnerability, and it
+# is expected to be red sometimes -- an upstream major lands and nobody has
+# looked yet. That is exactly why it is separate from
+# .github/workflows/dependency-audit.yml and why the job swallows its own exit
+# code: a red mark here must never be something anyone learns to ignore, because
+# the habit carries over to the job that does block.
+on:
+  schedule:
+    - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: resolve the direct dependencies unpinned
+        run: deploy/testenv.sh latest
+      - name: run the suite
+        id: suite
+        continue-on-error: true
+        run: python -m pytest -q | tee /tmp/latest.txt
+      - name: report what latest resolved to and how it went
+        run: |
+          {
+            echo "## Suite against latest resolvable versions"
+            echo
+            echo "Outcome: ${{ steps.suite.outcome }}"
+            echo
+            echo '```'
+            tail -n 40 /tmp/latest.txt
+            echo '```'
+            echo
+            echo "### What the pins would become"
+            echo
+            echo '```'
+            python -m deploy.requirements --names | sed 's/^/^/; s/$/==/' > /tmp/direct.txt
+            python -m pip freeze | grep -iEf /tmp/direct.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

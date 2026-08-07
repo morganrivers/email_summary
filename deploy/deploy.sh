@@ -55,6 +55,8 @@ EXCLUDES=(
     --exclude='CLAUDE.md'
     --exclude='tests/'
     --exclude='docs/'
+    --exclude='.github/'
+    --exclude='requirements-dev.txt'
     # Server-only, never shipped and never deleted:
     --exclude='.env'
     --exclude='.env.*'

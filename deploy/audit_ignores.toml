@@ -1,0 +1,16 @@
+# Advisories the audit is told not to block on, each with the date that decision
+# stops holding. Read deploy/audit.py before adding one.
+#
+# There is a use for this and only one: an advisory against something in
+# deploy/phala/uv.lock that has no fixed version to move to. Everything else is
+# fixed by bumping the pin. An entry past its expiry fails the audit exactly as
+# the advisory does, and an entry matching nothing in the lock fails too, so
+# this file cannot grow into a permanent mute.
+#
+# [[ignore]]
+# id = "GHSA-xxxx-xxxx-xxxx"   # the advisory id or any alias pip-audit reports
+# expires = "2026-11-01"       # re-decide by this date, do not extend by habit
+# reason = "no fixed version; only reachable from the X code path, which we do
+#           not call. Upstream tracking issue: <url>"
+
+# Empty on purpose. Every pin in the lock is currently clean.

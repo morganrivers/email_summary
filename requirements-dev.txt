@@ -1,0 +1,18 @@
+# Test-only pins. Deliberately not requirements.txt: nothing here is installed
+# on the Hetzner box or rendered into the measured enclave image, because an
+# auditor is not something the mail daemon should be able to import, and every
+# package in deploy/phala/pyproject.toml is a package in the image hash.
+# deploy/deploy.sh excludes this file the same way it excludes tests/ and docs/,
+# and tests/test_requirements.py fails if a pin here reaches the image manifest.
+#
+#     micromamba run -n py311 pip install -r requirements-dev.txt
+#
+# pip-audit reads deploy/phala/uv.lock, not this file or requirements.txt; see
+# deploy/audit.py for why the lock is the thing worth auditing.
+pip-audit==2.10.1
+pytest==9.0.2
+# uv is a test dependency because deploy/audit.py reads the closure through
+# `uv export --frozen` and CI regenerates the lock on Dependabot branches. Pinned
+# to the version that wrote the committed lock (`revision = 3`), so a newer uv
+# does not rewrite the lock format in a security-patch PR.
+uv==0.11.16
