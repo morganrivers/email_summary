@@ -198,7 +198,8 @@ copy.
   value is present", answered by calling the same code the services call
   (`PolarBilling()`, `telegram.operator_target()`) wherever presence is a
   judgement rather than a lookup, and owning the variable name itself where it
-  is not: `frontend/session.py` reads `SESSION_SECRET_ENV` from here rather than
+  is not: `frontend/session.py` reads `SESSION_SECRET_ENV` and
+  `SESSION_SECRET_PREVIOUS_ENV` from here rather than
   the reverse, so nothing in `backend/` reaches up into `frontend/` to ask. `tee_boot.run_gate()` and
   `deploy/preflight.py` both build on them, so the enclave's fail-closed set and
   the deploy's skip set cannot drift apart. `fingerprint()` is the third: how a
@@ -214,6 +215,20 @@ copy.
   calling `oauth_app.load_keys()`, which is what decides between the injected
   pair and the volume file, so the gate cannot approve a source the reader
   rejects.
+- `frontend/session.py` — the two signed cookies (the session and the OAuth
+  state) and the keyring that verifies them. Each cookie is
+  `kid:value:iat:mac`, the `kid` naming which key signed it, so more than one
+  key is live at once and verification still has exactly one key to try. That
+  is what makes the secret rotatable: put the new value in `SESSION_SECRET`,
+  the outgoing one in `SESSION_SECRET_PREVIOUS`, restart, and nobody is signed
+  out — only the current key mints, so the old one drains as cookies are
+  re-issued. Drop `SESSION_SECRET_PREVIOUS` on a later deploy to retire the
+  sessions it signed; `SESSION_TTL` (30 days) is how long that takes to empty
+  by itself. The web server's startup line fingerprints both, and a cookie's
+  `kid` is the digest half of one of those fingerprints, so "which key signed
+  this session" is answerable from the journal and a browser without either
+  holding the key. The OAuth state inherits all of it, which is why a restart
+  mid-consent no longer comes back as a CSRF alarm.
 - `backend/site.py` — public hostnames (`APP_HOST` = the product,
   `API_HOST` = the Pub/Sub push + Polar webhook box), loopback ports, and every
   externally visible URL built from them (OAuth callbacks, Polar webhook, the

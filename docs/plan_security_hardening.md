@@ -1,6 +1,7 @@
 # Security hardening plan
 
-Status: proposed, nothing started except the item in "Already done" below.
+Status: proposed, except the item in "Already done" below and Track D, which is
+implemented.
 Written 2026-08-07. Owner: Morgan.
 
 ## How to read this
@@ -532,6 +533,14 @@ body and find nothing.
 ---
 
 # Track D. Session key rotation
+
+**Done.** Landed on `feat/sessionkeyrotation`. What shipped differs from the
+plan below in one place: the key id is not a separately configured label but the
+digest half of `secrets.fingerprint()` of the key itself, so the kid in a cookie
+and the fingerprint in the startup line are the same string and no third
+variable exists to keep in step. `SESSION_SECRET_PREVIOUS` is optional, so
+`session_configured()` is unchanged and a box that has never rotated is
+unaffected.
 
 **Parallel.** Touches `frontend/session.py` only. Estimated effort: two hours.
 
