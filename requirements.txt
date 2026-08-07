@@ -1,21 +1,26 @@
-# The one dependency list. deploy.sh pip-installs this on the Hetzner box, and
-# deploy/phala/pyproject.toml -- which uv2nix builds the measured enclave image
-# from -- is generated from it by `python -m deploy.render_pyproject`. Add a pin
-# here, re-render, then `cd deploy/phala && uv lock`. A commented-out line is an
-# uninstalled dependency in both places.
+# The one list of what ships. deploy.sh pip-installs this on the Hetzner box,
+# and deploy/phala/pyproject.toml -- which uv2nix builds the measured enclave
+# image from -- is generated from it by `python -m deploy.render_pyproject`. Add
+# a pin here, re-render, then `cd deploy/phala && uv lock`. A commented-out line
+# is an uninstalled dependency in both places.
+#
+# Tools that only check the code (pytest, pip-audit, uv) go in
+# requirements-dev.txt, which is installed on neither. What is scanned for
+# advisories is the lock rather than this file, because this file names direct
+# dependencies only: see deploy/audit.py.
 
-openai==2.45.0
+openai==2.53.0
 python-dotenv==1.2.2
 requests==2.34.2
-langsmith==0.10.5
-certifi==2025.4.26
-standardwebhooks==1.0.1
+langsmith==0.10.16
+certifi==2026.7.22
+standardwebhooks==1.1.0
 
 # Gmail and Calendar, replacing the Node bridge. google-api-python-client makes
 # the calls; google-auth holds credentials that carry no refresh token and ask
 # backend.custody.tokens for one through its refresh_handler.
-google-api-python-client==2.184.0
-google-auth==2.41.1
+google-api-python-client==2.198.0
+google-auth==2.56.3
 
 # --- split custody (cosigner/, backend/custody/) ------------------------------
 # cryptography: AES-GCM and HKDF on both sides of the nested wrapping.
@@ -23,7 +28,7 @@ google-auth==2.41.1
 # implements DPoP, in Python or in JS, so this is bring-your-own in either
 # language. The co-signer signs the proofs; the enclave only ever handles the
 # finished header value.
-cryptography==46.0.7
+cryptography==50.0.0
 requests-oauth2client==1.8.0
 # dcap-qvl: Phala's own pure-Rust TDX quote verifier, used by cosigner/attest.py
 # to check the enclave's RA-TLS certificate against this box's allowlist. Only

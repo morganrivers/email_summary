@@ -6,15 +6,15 @@ requires-python = ">=3.11,<3.12"
 # edit this array. Add the pin there, re-render, then `cd deploy/phala &&
 # uv lock` so the lock this feeds is re-pinned too.
 dependencies = [
-    "openai==2.45.0",
+    "openai==2.53.0",
     "python-dotenv==1.2.2",
     "requests==2.34.2",
-    "langsmith==0.10.5",
-    "certifi==2025.4.26",
-    "standardwebhooks==1.0.1",
-    "google-api-python-client==2.184.0",
-    "google-auth==2.41.1",
-    "cryptography==46.0.7",
+    "langsmith==0.10.16",
+    "certifi==2026.7.22",
+    "standardwebhooks==1.1.0",
+    "google-api-python-client==2.198.0",
+    "google-auth==2.56.3",
+    "cryptography==50.0.0",
     "requests-oauth2client==1.8.0",
     "dcap-qvl==0.6.1",
 ]
