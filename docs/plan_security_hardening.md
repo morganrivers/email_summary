@@ -1,7 +1,7 @@
 # Security hardening plan
 
-Status: proposed, except the item in "Already done" below and Track D, which is
-implemented.
+Status: proposed, except the item in "Already done" below and Tracks B and D,
+which are implemented. Each finished track says so in its own heading.
 Written 2026-08-07. Owner: Morgan.
 
 ## How to read this
@@ -99,7 +99,7 @@ that makes it true or false. Never speculatively, never ahead of the code.
 
 | Claim | Where | Why it is wrong today | Corrected in |
 |---|---|---|---|
-| "no UPDATE and no DELETE appears anywhere in this package" | `cosigner/audit.py:9-11` | B3 adds a prune | **B3**, which is what falsifies it |
+| ~~"no UPDATE and no DELETE appears anywhere in this package"~~ | `cosigner/audit.py` | ~~B3 adds a prune~~ | **done in B3**: the claim is now "no UPDATE anywhere, and deletion only by `retention.py`, only by age" |
 | compromising this box yields a wrapping key with nothing to unwrap and a signing key that signs no secrets | `backend/custody/client.py:6-9` | both halves are true, but it omits that the box also holds the customer list and a per-user activity timeline | **F4**, which makes `uid` opaque |
 | the version prefix exists so the master key can be rotated | `cosigner/keys.py:54` | `keys.py:129` and `:157` both assert `version == KEY_VERSION`, so rotation cannot execute | **G4**, which implements rotation |
 | per-uid derivation makes a future per-user revocation meaningful | `cosigner/keys.py:12-15` | `KEY_VERSION` is a module constant (`keys.py:56`), not a per-account field, so there is nothing to advance for one user | **G5**, where the per-account DEK makes it true |
@@ -115,9 +115,9 @@ read a docstring against the code it describes and see which one is lying.
 
 ```
 A  dependency hygiene        ──────────────►  independent
-B  co-signer policy + audit  ──────────────►  independent
+B  co-signer policy + audit  ──────────────►  DONE
 C  web-tier audit log        ──────────────►  independent
-D  session key rotation      ──────────────►  independent
+D  session key rotation      ──────────────►  DONE
 E  egress allowlist          ──────────────►  independent
 
 F  opaque account handle  ──►  G  envelope + per-account encryption
@@ -253,6 +253,21 @@ ignore list with no expiry becomes permanent.
 ---
 
 # Track B. Co-signer policy, alerting, retention
+
+**Done.** Landed as written, with the decisions it asked for recorded below.
+`backend/custody/client.py:6-9` was deliberately left alone: the table above
+assigns that correction to F4, and a docstring edited twice is worse than one
+edited once.
+
+Decisions taken, all of them next to the constants in `cosigner/policy.py`:
+40 distinct accounts per 15 minutes (a full box at one unwrap per account per
+hour produces about 25); alert only, no automatic kill switch, because there is
+no bypass and a false positive would stop mail for everyone; an account already
+counted inside the window is not refused, since refusing it narrows no breach.
+Retention is 30 days for ALLOW rows and a year for DENY rows, pruned by
+`cosigner/retention.py` on a thread inside the co-signer rather than a systemd
+unit — a second process would take an exclusive VACUUM lock on the file the
+service answers every request out of.
 
 **Parallel.** Touches `cosigner/policy.py`, `cosigner/audit.py`,
 `cosigner/alerts.py`, docstrings in `cosigner/__init__.py` and

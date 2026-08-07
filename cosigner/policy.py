@@ -6,6 +6,12 @@ what talks to Google, so a refresh token has to exist in its RAM at the moment
 of use. What is available is the rate: set the aggregate ceiling low enough
 that draining the user base takes longer than noticing it (plan §0).
 
+Volume is only half of it. Draining the user base is one request per account,
+which every per-account rule reads as normal, so there is a second measure of
+breadth -- how many *different* accounts were unwrapped in a short window
+(`_sweep_refusal`). It is the rule aimed at the pattern that looks most
+ordinary to the other rules.
+
 Every decision in the service goes through `authorize()`, and it is also the
 only place a row is written for one. The count-then-log pair happens under one
 lock, so two concurrent unwraps cannot both read "59 used" and both proceed,
@@ -50,6 +56,30 @@ WINDOW_SECONDS = 3600
 DEFAULT_PER_USER_HOUR = 60
 DEFAULT_TOTAL_HOUR = 200
 
+# The sweep limit. A short window, because breadth is what it measures and a
+# breach that spreads itself over an hour has already been caught by the
+# aggregate ceiling.
+DISTINCT_WINDOW_SECONDS = 900
+
+# Bulk exfiltration looks like this and nothing else does: every account touched
+# once. Per account that is one unwrap, comfortably inside the per-user ceiling,
+# and 100 of them is half the aggregate one -- the exact pattern that reads as
+# normal to both existing rules. Counting distinct accounts is what sees it.
+#
+# A fully subscribed box (MAX_ACCOUNTS = 100, roughly one unwrap per active
+# account per hour once the access token is cached) produces about 25 distinct
+# accounts in a quarter hour. 40 leaves half again as much headroom over that
+# and still refuses a sweep before it has reached half the user base.
+DEFAULT_DISTINCT_UIDS = 40
+
+# Refuse and alert; do not trip the kill switch. Automatic disablement would
+# bound the loss without an operator awake, but there is deliberately no bypass
+# in this design, so a false positive stops mail for everyone until a human
+# clears it. At 100 accounts a sweep refused 40 accounts in and alerted is a
+# response fast enough to make by hand. Revisit when the account count makes
+# that too slow.
+SWEEP_REASON = "distinct-account ceiling reached"
+
 # `/sign-dpop` carries no uid, so the per-user limit cannot reach it and this
 # ceiling is the only thing bounding it. Without one it is the unmetered path
 # around the metered one: an enclave-side attacker skips `/unwrap-and-sign`,
@@ -63,6 +93,11 @@ DEFAULT_SIGN_HOUR = DEFAULT_TOTAL_HOUR
 # and over, and a Telegram channel that gets a thousand of them is a channel
 # the operator mutes.
 ALERT_INTERVAL = 300
+
+# The sweep refusal keeps firing for as long as its window holds the grants that
+# tripped it, so anything shorter than the window reports one incident several
+# times. One alert per incident is the whole point of the throttle.
+SWEEP_ALERT_INTERVAL = DISTINCT_WINDOW_SECONDS
 
 _LOCK = threading.Lock()
 _LAST_ALERT = {}
@@ -106,6 +141,19 @@ def sign_limit():
     return _limit("COSIGNER_RATE_SIGN_HOUR", DEFAULT_SIGN_HOUR)
 
 
+def distinct_uid_limit():
+    """How many different accounts may be unwrapped inside one
+    `DISTINCT_WINDOW_SECONDS`."""
+    return _limit("COSIGNER_RATE_DISTINCT_UIDS", DEFAULT_DISTINCT_UIDS)
+
+
+def longest_window():
+    """The oldest row any limiter still reads. Retention's floor is derived from
+    this rather than restated, so adding a limiter with a longer window cannot
+    leave a prune deleting rows it counts."""
+    return max(WINDOW_SECONDS, DISTINCT_WINDOW_SECONDS)
+
+
 def allowed_target(htm, htu):
     """None when this is a proof the co-signer is willing to sign."""
     if htm != "POST":
@@ -131,13 +179,39 @@ def _wrap_once_refusal(uid):
     return None
 
 
+def _sweep_refusal(uid, action):
+    """Breadth, not volume: how many *different* accounts have been unwrapped
+    recently.
+
+    An account already counted in the window is not refused by this rule. It has
+    contributed its uid to the total already, so refusing it would neither
+    narrow the breach nor bound anything -- it would only take ordinary mail
+    processing down for whoever was busiest when a sweep started. What the rule
+    stops is the next *new* account, which is the only direction a sweep can
+    go."""
+    since = time.time() - DISTINCT_WINDOW_SECONDS
+    if audit.granted_since(since, action=action, uid=uid):
+        return None
+    seen = audit.distinct_uids_since(since, action=action)
+    if seen >= distinct_uid_limit():
+        minutes = DISTINCT_WINDOW_SECONDS // 60
+        return Refusal(KIND_RATE, f"{SWEEP_REASON} ({seen}/{distinct_uid_limit()} accounts "
+                                  f"in {minutes} minutes)")
+    return None
+
+
 def _rate_refusal(uid, action):
     """A wrap happens once per user at onboarding and is bounded by
     `_wrap_once_refusal` instead, so it consumes no budget.
 
     A bare sign is counted against its own ceiling and nothing else: the uid is
     optional there (at the code exchange none exists yet), so charging it to a
-    user would meter only the callers honest enough to name one."""
+    user would meter only the callers honest enough to name one.
+
+    The sweep check sits between the per-user rule and the aggregate one because
+    it is the refusal that names what is happening: a sweep trips it long before
+    the hourly total, and an operator reading "aggregate ceiling" learns only
+    that the box is busy."""
     if action == ACTION_WRAP:
         return None
     since = time.time() - WINDOW_SECONDS
@@ -151,6 +225,9 @@ def _rate_refusal(uid, action):
     if used >= per_user_limit():
         return Refusal(KIND_RATE,
                        f"per-user rate limit reached ({used}/{per_user_limit()} per hour)")
+    sweep = _sweep_refusal(uid, action)
+    if sweep is not None:
+        return sweep
     total = audit.granted_since(since, action=action)
     if total >= total_limit():
         return Refusal(KIND_RATE,
@@ -158,10 +235,18 @@ def _rate_refusal(uid, action):
     return None
 
 
+def _alert_interval(reason):
+    """How long one refusal silences the next identical one. A sweep is refused
+    once per account for as long as its window holds the grants that tripped it,
+    which is one incident and wants one message."""
+    return SWEEP_ALERT_INTERVAL if reason == SWEEP_REASON else ALERT_INTERVAL
+
+
 def _alert(uid, action, refusal):
-    key = (action, refusal.kind, refusal.reason.split("(")[0].strip())
+    reason = refusal.reason.split("(")[0].strip()
+    key = (action, refusal.kind, reason)
     now = time.time()
-    if now - _LAST_ALERT.get(key, 0) < ALERT_INTERVAL:
+    if now - _LAST_ALERT.get(key, 0) < _alert_interval(reason):
         return
     _LAST_ALERT[key] = now
     alerts.notify_operator(

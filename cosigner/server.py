@@ -39,6 +39,7 @@ from cosigner import audit
 from cosigner import keys
 from cosigner import policy
 from cosigner import protocol
+from cosigner import retention
 
 HOST = os.environ.get("COSIGNER_BIND", "127.0.0.1")
 PORT = int(os.environ.get("COSIGNER_PORT", str(protocol.PORT)))
@@ -227,9 +228,11 @@ def main():
         log("WARNING attestation is DISABLED (dev). Every audit row is marked "
             "unattested. Never run this on a box the enclave trusts.")
     audit.connect()
+    retention.start()
     log(f"listening on {HOST}:{PORT}, attestation={mode}, audit={audit.db_path()}, "
         f"limits={policy.per_user_limit()}/user/h {policy.total_limit()}/h total "
-        f"{policy.sign_limit()}/h bare signs")
+        f"{policy.sign_limit()}/h bare signs "
+        f"{policy.distinct_uid_limit()} accounts/{policy.DISTINCT_WINDOW_SECONDS // 60}min")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 
