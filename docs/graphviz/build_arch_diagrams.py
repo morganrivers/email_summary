@@ -111,7 +111,7 @@ cur_edges = [
     {'from': 'daemon',  'to': 'router',  'label': 'fetched email', 'kind': 'flow'},
     {'from': 'router',  'to': 'llm',     'label': 'draft request', 'kind': 'flow'},
     {'from': 'llm',     'to': 'mask',    'label': 'pseudonymize()', 'kind': 'mask'},
-    {'from': 'mask',    'to': 'deepseek','label': 'MASKED text only', 'kind': 'mask'},
+    {'from': 'mask',    'to': 'deepseek','label': 'pseudonymized (best effort)', 'kind': 'mask'},
     {'from': 'deepseek','to': 'llm',     'label': 'masked reply -> restore', 'kind': 'flow'},
     {'from': 'llm',     'to': 'draft',   'label': 'restored payload', 'kind': 'flow'},
     {'from': 'draft',   'to': 'gmail',   'label': 'write draft', 'kind': 'flow'},
@@ -178,7 +178,7 @@ tgt_edges = [
     {'from': 'custody', 'to': 'mask',    'label': 'raw text', 'kind': 'flow'},
     {'from': 'cfg',     'to': 'mask',    'label': 'user identity rules', 'kind': 'loader'},
     {'from': 'mask',    'to': 'llm',     'label': 'masked', 'kind': 'mask'},
-    {'from': 'llm',     'to': 'deepseek','label': 'MASKED text only', 'kind': 'mask'},
+    {'from': 'llm',     'to': 'deepseek','label': 'pseudonymized (best effort)', 'kind': 'mask'},
     {'from': 'deepseek','to': 'llm',     'label': 'masked reply -> restore', 'kind': 'flow'},
     {'from': 'llm',     'to': 'draft',   'label': 'restored payload', 'kind': 'flow'},
     {'from': 'draft',   'to': 'gmail',   'label': 'write draft / event', 'kind': 'flow'},
@@ -213,7 +213,7 @@ att_nodes = [
     {'id': 'app',      'type': 'svc', 'grp': 'tee', 'lbl': 'app: fetch -> mask -> draft'},
 
     {'id': 'gmail',    'type': 'ext', 'lbl': 'Gmail\n(mail only via token, TLS)'},
-    {'id': 'llm',      'type': 'danger', 'lbl': 'Untrusted LLM\n(masked text only)'},
+    {'id': 'llm',      'type': 'danger', 'lbl': 'Untrusted LLM\n(pseudonymized, best effort)'},
 ]
 att_edges = [
     {'from': 'verifier', 'to': 'host', 'label': '1. nonce (fresh random)', 'kind': 'boot'},
@@ -227,7 +227,7 @@ att_edges = [
     {'from': 'tokenstore','to': 'ekey', 'label': '6. token encrypted to enclave pubkey', 'kind': 'loader'},
     {'from': 'ekey',     'to': 'app', 'label': 'token usable only in-enclave', 'kind': 'flow'},
     {'from': 'app',      'to': 'gmail', 'label': '7. fetch RAW email', 'kind': 'flow'},
-    {'from': 'app',      'to': 'llm', 'label': '8. MASKED only', 'kind': 'mask'},
+    {'from': 'app',      'to': 'llm', 'label': '8. pseudonymized (best effort)', 'kind': 'mask'},
 ]
 att_clusters = {
     'tee': {

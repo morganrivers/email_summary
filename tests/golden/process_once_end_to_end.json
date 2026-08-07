@@ -13,7 +13,7 @@
         },
         {
           "role": "user",
-          "content": "Original email [USER_FIRST] received:\n<<<EXTERNAL_CONTENT\nFrom: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 08:00:00 +0000\nSubject: Project sync\n\nHi [USER_FIRST], can we sync on the project this week?\nEXTERNAL_CONTENT>>>\n\n[USER_FIRST]'s context for this reply:\nPlease say yes and propose Friday.\n\nDraft the reply."
+          "content": "Original email [USER_FIRST] received:\n<<<EXTERNAL_CONTENT\nFrom: Bob Baker <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 08:00:00 +0000\nSubject: Project sync\n\nHi [USER_FIRST], can we sync on the project this week?\nEXTERNAL_CONTENT>>>\n\n[USER_FIRST]'s context for this reply:\nPlease say yes and propose Friday.\n\nDraft the reply."
         }
       ]
     },
@@ -32,7 +32,7 @@
         },
         {
           "role": "user",
-          "content": "[0] Thread: no earlier message from the recipient in this thread\n<<<EXTERNAL_CONTENT\nFrom: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nSubject: Lunch next week?\nBody: Hi [USER_FIRST], want to grab lunch next week? Best, [PERSON1_FIRST] [PERSON1_LAST]\nEXTERNAL_CONTENT>>>"
+          "content": "[0] Thread: no earlier message from the recipient in this thread\n<<<EXTERNAL_CONTENT\nFrom: Alice Adams <[EMAIL_ADDRESS1]>\nSubject: Lunch next week?\nBody: Hi [USER_FIRST], want to grab lunch next week? Best, Alice Adams\nEXTERNAL_CONTENT>>>"
         }
       ]
     },
@@ -49,7 +49,7 @@
         },
         {
           "role": "user",
-          "content": "Original email:\n<<<EXTERNAL_CONTENT\nFrom: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 09:00:00 +0000\nSubject: Lunch next week?\n\nHi [USER_FIRST], want to grab lunch next week? Best, [PERSON1_FIRST] [PERSON1_LAST]\nEXTERNAL_CONTENT>>>\n\nDraft a reply."
+          "content": "Original email:\n<<<EXTERNAL_CONTENT\nFrom: Alice Adams <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 09:00:00 +0000\nSubject: Lunch next week?\n\nHi [USER_FIRST], want to grab lunch next week? Best, Alice Adams\nEXTERNAL_CONTENT>>>\n\nDraft a reply."
         }
       ]
     },
@@ -68,7 +68,7 @@
         },
         {
           "role": "user",
-          "content": "Today: 2026-07-21 (Tuesday). Timezone: Europe/Berlin.\n\nSent email:\nTo: [EMAIL_ADDRESS1]\nSubject: Confirming Tuesday\nDate: Tue, 21 Jul 2026 09:00:00 +0000\n\nHi [PERSON1_FIRST], confirming Tuesday July 21 at 3pm. [USER_FIRST]"
+          "content": "Today: [PHONE_NUMBER1] (Tuesday). Timezone: Europe/Berlin.\n\nSent email:\nTo: [EMAIL_ADDRESS1]\nSubject: Confirming Tuesday\nDate: Tue, 21 Jul 2026 09:00:00 +0000\n\nHi Dave, confirming Tuesday July 21 at 3pm. [USER_FIRST]"
         }
       ]
     }

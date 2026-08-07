@@ -148,9 +148,10 @@ def test_api_base_follows_the_toggle_without_a_billing_object(monkeypatch):
 def test_checkout_url_mints_against_the_sandbox_when_toggled(monkeypatch):
     seen = {}
 
-    def fake_create(product_id, success_url, email, token):
+    def fake_create(product_id, success_url, email, token, metadata=None):
         seen["base"] = polar_api.api_base()
         seen["success_url"] = success_url
+        seen["metadata"] = metadata
         return 201, {"url": "https://sandbox.polar.sh/checkout/abc"}
 
     monkeypatch.setenv("POLAR_SANDBOX", "1")
@@ -161,3 +162,123 @@ def test_checkout_url_mints_against_the_sandbox_when_toggled(monkeypatch):
     assert url == "https://sandbox.polar.sh/checkout/abc"
     assert seen["base"] == polar_api.SANDBOX_BASE
     assert "{CHECKOUT_ID}" in seen["success_url"], "the return trip needs the id"
+    assert seen["metadata"] == {billing.CHECKOUT_ACCOUNT_KEY: "dan@x.com"}, (
+        "the return trip is only verifiable if the checkout carries its account"
+    )
+
+
+def _checkout(monkeypatch, body, status=200):
+    """Stand in for Polar's copy of a checkout, and record whether it was read."""
+    seen = {}
+
+    def fake_get(checkout_id, token):
+        seen["checkout_id"] = checkout_id
+        return status, body
+
+    monkeypatch.setattr(polar_api, "get_checkout", fake_get)
+    return seen
+
+
+def test_confirm_checkout_refuses_another_accounts_checkout(tmp_path, monkeypatch):
+    """The checkout id comes back in a query string the browser controls. Any
+    signed-in account presenting a paid checkout id used to get the subscription
+    it paid for, and the customer link then pointed portal_url() at that buyer's
+    Polar customer."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("victim@x.com", status="active"),
+        _entry("thief@x.com", status="inactive"),
+    ]))
+    _checkout(monkeypatch, {
+        "id": "co_1",
+        "status": "succeeded",
+        "customer_id": "cus_victim",
+        "customer_email": "victim@x.com",
+        "metadata": {billing.CHECKOUT_ACCOUNT_KEY: "victim@x.com"},
+    })
+    b = _billing(monkeypatch)
+    thief = account.account_for_email("thief@x.com")
+    paid, detail = b.confirm_checkout("co_1", thief)
+    assert paid is False
+    assert "does not belong" in detail
+    assert account.get_account("thief@x.com") is None, "no free subscription"
+    assert account.account_for_email("thief@x.com").polar_customer_id is None, (
+        "and no link to someone else's Polar customer"
+    )
+
+
+def test_confirm_checkout_activates_and_links_the_buyer(tmp_path, monkeypatch):
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("dan@x.com", status="inactive"),
+    ]))
+    seen = _checkout(monkeypatch, {
+        "id": "co_2",
+        "status": "succeeded",
+        "customer_id": "cus_dan",
+        "metadata": {billing.CHECKOUT_ACCOUNT_KEY: "dan@x.com"},
+    })
+    b = _billing(monkeypatch)
+    dan = account.account_for_email("dan@x.com")
+    paid, detail = b.confirm_checkout("co_2", dan)
+    assert paid is True
+    assert "inactive->active" in detail
+    assert seen["checkout_id"] == "co_2"
+    assert account.get_account("dan@x.com").polar_customer_id == "cus_dan"
+
+
+def test_confirm_checkout_falls_back_to_the_email_binding(tmp_path, monkeypatch):
+    """A checkout minted before the metadata stamp existed still resolves, by the
+    same ordering the webhook uses. It has to: those are in flight across a
+    deploy."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("dan@x.com", status="inactive"),
+    ]))
+    _checkout(monkeypatch, {"id": "co_3", "status": "confirmed",
+                            "customer": {"email": "dan@x.com"}})
+    b = _billing(monkeypatch)
+    paid, _ = b.confirm_checkout("co_3", account.account_for_email("dan@x.com"))
+    assert paid is True
+    assert account.get_account("dan@x.com") is not None
+
+
+def test_confirm_checkout_refuses_an_unresolvable_checkout(tmp_path, monkeypatch):
+    """Nobody to bind it to means it is not this buyer's either. The webhook
+    settles that case and the return page says pending, not failed."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("dan@x.com", status="inactive"),
+    ]))
+    _checkout(monkeypatch, {"id": "co_4", "status": "succeeded"})
+    b = _billing(monkeypatch)
+    paid, detail = b.confirm_checkout("co_4", account.account_for_email("dan@x.com"))
+    assert paid is False
+    assert "does not belong" in detail
+    assert account.get_account("dan@x.com") is None
+
+
+def test_confirm_checkout_refuses_an_unpaid_checkout_of_the_buyers_own(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("dan@x.com", status="inactive"),
+    ]))
+    _checkout(monkeypatch, {"id": "co_5", "status": "open", "customer_id": "cus_dan",
+                            "metadata": {billing.CHECKOUT_ACCOUNT_KEY: "dan@x.com"}})
+    b = _billing(monkeypatch)
+    paid, detail = b.confirm_checkout("co_5", account.account_for_email("dan@x.com"))
+    assert paid is False
+    assert "status=open" in detail
+    assert account.get_account("dan@x.com") is None
+
+
+def test_stamped_metadata_resolves_a_webhook_event(tmp_path, monkeypatch):
+    """Polar copies checkout metadata onto the order, so the exact binding is
+    available to the webhook too, ahead of the pay-email guess."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("dan@x.com", status="inactive"),
+        _entry("stranger@x.com", status="inactive"),
+    ]))
+    b = _billing(monkeypatch)
+    res = b.apply_event({"type": "order.paid", "data": {
+        "customer": {"email": "stranger@x.com"},
+        "metadata": {billing.CHECKOUT_ACCOUNT_KEY: "dan@x.com"},
+    }})
+    assert "account=dan@x.com inactive->active" in res
+    assert account.get_account("stranger@x.com") is None

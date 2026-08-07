@@ -15,7 +15,7 @@
         },
         {
           "role": "user",
-          "content": "[0] Thread: no earlier message from the recipient in this thread\n<<<EXTERNAL_CONTENT\nFrom: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nSubject: Lunch next week?\nBody: Hi [USER_FIRST], want to grab lunch next week? Best, [PERSON1_FIRST] [PERSON1_LAST]\nEXTERNAL_CONTENT>>>"
+          "content": "[0] Thread: no earlier message from the recipient in this thread\n<<<EXTERNAL_CONTENT\nFrom: Alice Adams <[EMAIL_ADDRESS1]>\nSubject: Lunch next week?\nBody: Hi [USER_FIRST], want to grab lunch next week? Best, Alice Adams\nEXTERNAL_CONTENT>>>"
         }
       ]
     }

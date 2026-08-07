@@ -13,7 +13,7 @@ voicedna/
 │   │   ├── tool_executors.py      tools the agent may call (search gmail, list calendar, get thread)                                                                                        
 │   │   └── email_summary.py       daily digest: fetch + summarise + Telegram (cron)
 │   ├── masking/                 the security kernel                                                                                                                                         
-│   │   ├── pseudonymizer.py       PII mask/unmask; only masked text may cross to the LLM
+│   │   ├── pseudonymizer.py       PII mask/unmask before content crosses to the LLM (best effort; see recall)
 │   │   └── masking_eval/          labeled PII corpus + recall evaluator                                                                                                                     
 │   ├── billing/                 Polar subscription context (gates account active/inactive)                                                                                                  
 │   │   ├── billing.py             PolarBilling; flips plan_status in the account store                                                                                                      

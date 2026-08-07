@@ -1,17 +1,13 @@
-"""Gmail, in process. The Python replacement for gmail_lib.mjs.
+"""Gmail, in process. The Python replacement for the mail half of gmail_lib.mjs.
 
 Every Gmail call in the app goes through this module, and every one of them
 starts from an Account: there is no ambient mailbox any more, the way there was
 when a per-user directory was passed to a Node subprocess through an
 environment variable.
 
-Credentials are the interesting part. `Credentials` is constructed with no
-refresh token at all, which routes every token acquisition through the
-`refresh_handler` in backend.custody.tokens -- the case google-auth's own
-docstring describes as "tokens are obtained by calling some external process on
-demand". The external process here is a co-signer on another machine. Everything
-below this line is stock google-api-python-client; nothing about split custody
-leaks into the API calls themselves.
+Credentials and the service cache are not here; they are shared with Calendar
+and live in `google_client`. Everything below is stock
+google-api-python-client, holding no state of its own.
 """
 
 from __future__ import annotations
@@ -19,15 +15,12 @@ from __future__ import annotations
 import base64
 import re
 import sys
-import threading
 
 import requests
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from backend.custody import tokens
-from backend.integrations.gmail_gcal import oauth_app
+from backend.integrations.gmail_gcal.google_client import service
+
 
 PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 HTTP_TIMEOUT = 30
@@ -35,10 +28,24 @@ HTTP_TIMEOUT = 30
 MAX_SEARCH_BODY = 2000
 MAX_THREAD_BODY = 3000
 
-# httplib2, under the Google client, is not thread-safe, and the web UI builds
-# voice profiles on a background thread while the daemon drafts. One service per
-# thread per account costs a discovery parse and removes the whole question.
-_local = threading.local()
+# The one header value that reaches a Gmail search query, and the shape it has
+# to have first: a bare address, with nothing in it that a query could read as
+# whitespace, a quote, or a second operator.
+ADDRESS_QUERY_RE = re.compile(r"^[^\s<>\"'(){}:@]+@[^\s<>\"'(){}:@]+\.[^\s<>\"'(){}:@]+$")
+
+REPLY_PREFIX_RE = re.compile(r"^\s*(re|fwd|fw)\s*:\s*", re.IGNORECASE)
+
+# How far back to look for the thread a forwarded email came from, and which
+# headers that costs. Candidates are read as metadata, so a miss is cheap and
+# the loop stops at the first match.
+THREAD_LOOKUP_CANDIDATES = 25
+THREAD_LOOKUP_HEADERS = ["Subject", "Message-ID", "References", "From"]
+
+# A forwarded subject is matched exactly, unless the sending client wrapped the
+# Subject line of the header block it quoted, in which case what arrives is a
+# prefix of the real one. A prefix is accepted only when it is long enough to
+# identify a thread rather than every thread.
+MIN_SUBJECT_PREFIX = 12
 
 
 def log(msg):
@@ -46,53 +53,8 @@ def log(msg):
     sys.stderr.flush()
 
 
-def credentials_for(account):
-    """Credentials that hold no refresh token, only a way to ask for a token.
-
-    That is not a limitation being worked around; it is the design. A refresh
-    token in this object would be a refresh token in this process's memory for
-    as long as the object lives, which is what split custody exists to prevent.
-    """
-    return Credentials(
-        None,
-        scopes=list(oauth_app.SCOPES),
-        refresh_handler=tokens.refresh_handler_for(account),
-    )
-
-
-def _service(account, api, version):
-    assert getattr(account, "id", None), "gmail_api needs a loaded Account"
-    cache = getattr(_local, "services", None)
-    if cache is None:
-        cache = _local.services = {}
-    key = (account.id, api, version)
-    if key not in cache:
-        cache[key] = build(
-            api, version, credentials=credentials_for(account),
-            cache_discovery=False,
-        )
-    return cache[key]
-
-
 def gmail(account):
-    return _service(account, "gmail", "v1")
-
-
-def calendar(account):
-    return _service(account, "calendar", "v3")
-
-
-def forget_services(account_id=None):
-    """Drop cached service objects for this thread. A re-consent changes which
-    credentials a service carries, so the cached one must not outlive it."""
-    cache = getattr(_local, "services", None)
-    if not cache:
-        return
-    if account_id is None:
-        cache.clear()
-        return
-    for key in [k for k in cache if k[0] == account_id]:
-        cache.pop(key)
+    return service(account, "gmail", "v1")
 
 
 def profile_address(access_token):
@@ -237,30 +199,75 @@ def annotate_thread_participation(account, emails):
     return emails
 
 
+def strip_reply_prefixes(subject):
+    """Subject with every leading Re:/Fwd:/Fw: removed. Repeatedly, because a
+    forwarded reply carries more than one and stripping only the outermost left
+    the rest in whatever the caller went on to build."""
+    text = (subject or "").strip()
+    while True:
+        shorter = REPLY_PREFIX_RE.sub("", text, count=1).strip()
+        if shorter == text:
+            return text
+        text = shorter
+
+
+def comparable_subject(subject):
+    """The form two subjects are compared in: no reply prefixes, one space
+    between words, case folded. Applied to both sides, so 'Fwd: Re: Lunch  plan'
+    and 'lunch plan' are the same thread."""
+    return re.sub(r"\s+", " ", strip_reply_prefixes(subject)).casefold()
+
+
+def _subject_matches(candidate, target):
+    if not target:
+        return True
+    found = comparable_subject(candidate)
+    return found == target or (
+        len(target) >= MIN_SUBJECT_PREFIX and found.startswith(target)
+    )
+
+
 def find_thread_by_from_subject(account, from_email, subject):
-    clean = re.sub(r"^(re:|fwd:|fw:)\s*", "", (subject or "").strip(),
-                   flags=re.IGNORECASE).strip()
-    query = f"from:{from_email}"
-    if clean:
-        escaped = clean.replace('"', '\\"')
-        query += f' subject:"{escaped}"'
+    """Locate the original thread of a forwarded email.
+
+    Both arguments come off headers an outside sender wrote, and Gmail's search
+    has no parameterized form: a query is one string, a space in it starts a new
+    operator, and there is no escape character. Quoting a phrase is documented
+    nowhere as a boundary you can rely on, so the subject does not go into the
+    query at all. Only the sender does, and only after being checked into the
+    shape of a bare address; a sender that is not one is refused, and the caller
+    drafts on a new thread the same way it does when nothing is found.
+
+    The subject is then matched here, over candidate metadata, where a string is
+    a string and cannot become a second operator. That also matches more
+    tightly than the query did: `subject:"lunch"` was a phrase search that would
+    take any thread mentioning lunch, and this takes the one whose subject is
+    the forwarded subject."""
+    sender = (from_email or "").strip().strip("<>")
+    if not ADDRESS_QUERY_RE.match(sender):
+        log(f"thread lookup refused: {sender[:80]!r} is not a bare address")
+        return {"found": False}
+    target = comparable_subject(subject)
     service = gmail(account)
     listing = service.users().messages().list(
-        userId="me", q=query, maxResults=5).execute()
-    messages = listing.get("messages", [])
-    if not messages:
-        return {"found": False}
-    full = service.users().messages().get(
-        userId="me", id=messages[0]["id"], format="full").execute()
-    head = headers_of(full.get("payload"))
-    return {
-        "found": True,
-        "threadId": full.get("threadId"),
-        "messageIdHeader": head.get("message-id", ""),
-        "referencesHeader": head.get("references", ""),
-        "subject": head.get("subject", ""),
-        "from": head.get("from", ""),
-    }
+        userId="me", q=f"from:{sender}",
+        maxResults=THREAD_LOOKUP_CANDIDATES).execute()
+    for message in listing.get("messages", []):
+        meta = service.users().messages().get(
+            userId="me", id=message["id"], format="metadata",
+            metadataHeaders=THREAD_LOOKUP_HEADERS).execute()
+        head = headers_of(meta.get("payload"))
+        if not _subject_matches(head.get("subject", ""), target):
+            continue
+        return {
+            "found": True,
+            "threadId": meta.get("threadId"),
+            "messageIdHeader": head.get("message-id", ""),
+            "referencesHeader": head.get("references", ""),
+            "subject": head.get("subject", ""),
+            "from": head.get("from", ""),
+        }
+    return {"found": False}
 
 
 # --- history and watch ----------------------------------------------------

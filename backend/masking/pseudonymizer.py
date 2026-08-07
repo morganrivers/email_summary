@@ -79,6 +79,10 @@ class UserIdentity:
         self.first_aliases = list(first_aliases)
         self.emails = list(emails)
         self.contacts = [" ".join(c.split()) for c in contacts if c.strip()]
+        # Kept so an identity can be copied faithfully. Masking uses the digit
+        # runs below; without the originals a copy silently loses every phone,
+        # which is a masking gap rather than a cosmetic one.
+        self.phones = list(phones)
         self._phone_digits = []
         for p in phones:
             d = _digits(p)

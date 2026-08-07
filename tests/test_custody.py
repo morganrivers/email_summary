@@ -30,6 +30,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from backend.custody import client as cosigner
 from backend.custody import tokens
 from backend.custody import wrapping
+from backend.integrations import telegram
 from backend.integrations.gmail_gcal import oauth_app
 from cosigner import protocol
 
@@ -175,6 +176,26 @@ def test_zeroize_clears_the_buffer(enclave):
 def test_record_round_trips_with_its_key_version():
     blob = tokens.encode_record(7, b"outer-bytes")
     assert tokens.decode_record(blob) == (7, b"outer-bytes")
+
+
+def test_an_account_with_no_grant_is_told_once_not_once_per_wake(enclave, monkeypatch):
+    """The daemon wakes on every Gmail push and every 300s besides. An account
+    that has not signed in is a standing condition, so it is one sentence a day
+    with a link, not a stack trace every five minutes."""
+    sent = []
+    monkeypatch.setattr(telegram, "send_telegram",
+                        lambda text, target=None: bool(sent.append(text)) or True)
+    telegram.reset_once_for_test()
+    acct = type("A", (), {"id": UID, "telegram": None})()
+
+    for _ in range(20):
+        tokens.notify_reauth_required(acct)
+
+    assert len(sent) == 1, f"{len(sent)} messages for one un-onboarded account"
+    assert "not connected to your Gmail" in sent[0]
+    assert "/auth/login" in sent[0]
+    assert "Traceback" not in sent[0]
+    telegram.reset_once_for_test()
 
 
 def test_a_truncated_record_asks_for_re_consent_rather_than_crashing(enclave):

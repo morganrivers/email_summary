@@ -79,8 +79,10 @@ def refusing(monkeypatch):
     """A client whose one call fails with a status we choose, plus a record of
     every operator alert it caused."""
     sent = []
-    monkeypatch.setattr(telegram, "notify_error",
-                        lambda text, err=None, target=None: sent.append(text))
+    # Captured at the send boundary rather than at notify_once, so these tests
+    # keep asserting what actually reaches a chat even as the layer above moves.
+    monkeypatch.setattr(telegram, "send_telegram",
+                        lambda text, target=None: bool(sent.append(text)) or True)
     llm_client.reset_alerts_for_test()
 
     def build(status):
@@ -145,7 +147,7 @@ def test_an_undeliverable_alert_does_not_replace_the_error(monkeypatch, refusing
     def broken(*args, **kwargs):
         raise RuntimeError("telegram is down")
 
-    monkeypatch.setattr(telegram, "notify_error", broken)
+    monkeypatch.setattr(telegram, "send_telegram", broken)
     llm_client.reset_alerts_for_test()
     with pytest.raises(RuntimeError) as err:
         call(build(402))

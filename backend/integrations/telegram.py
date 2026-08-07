@@ -22,6 +22,8 @@ import os
 import re
 import secrets
 import sys
+import threading
+import time
 import traceback
 
 import requests
@@ -101,7 +103,11 @@ def send_telegram(message, target):
 def notify_error(context, err=None, target=None):
     """Surface a failure to Telegram. Never raises: a broken notification must
     not crash the caller's except block. Falls back to the operator's chat, so
-    an account-level failure with no linked chat still reaches somebody."""
+    an account-level failure with no linked chat still reaches somebody.
+
+    For a condition that repeats on a timer -- a wake loop, a poll -- use
+    `notify_once` instead. A traceback every five minutes is how a channel gets
+    muted, and a muted channel reports nothing at all."""
     try:
         text = f"⚠️ <b>{html.escape(context)}</b>"
         if err is not None:
@@ -113,6 +119,44 @@ def notify_error(context, err=None, target=None):
             send_telegram(text, operator_target())
     except Exception as notify_err:
         log(f"notify_error failed to send: {notify_err}")
+
+
+_ONCE_LOCK = threading.Lock()
+_ONCE_SENT = {}
+
+
+def notify_once(key, text, cooldown, target=None):
+    """Send `text` at most once per `key` per `cooldown` seconds.
+
+    The one implementation of "tell somebody, but not on every cycle". A daemon
+    that wakes every five minutes, a provider that is out of credit for every
+    email in the queue and an account that has not signed in all produce the
+    same condition over and over, and the useful message is the first one.
+
+    Returns whether it sent. Never raises, for the same reason notify_error
+    does not: an undelivered alert must not replace the condition it describes.
+    In-process state, so a restart re-announces -- deliberately, because a
+    restart is also when an operator is watching."""
+    assert key, "notify_once needs a key to rate-limit on"
+    assert cooldown > 0, f"cooldown must be positive, got {cooldown}"
+    now = time.monotonic()
+    with _ONCE_LOCK:
+        last = _ONCE_SENT.get(key)
+        if last is not None and now - last < cooldown:
+            return False
+        _ONCE_SENT[key] = now
+    try:
+        if not send_telegram(text, target):
+            return send_telegram(text, operator_target())
+        return True
+    except Exception as err:
+        log(f"notify_once failed to send: {err}")
+        return False
+
+
+def reset_once_for_test():
+    with _ONCE_LOCK:
+        _ONCE_SENT.clear()
 
 
 # --- chat linking ---------------------------------------------------------

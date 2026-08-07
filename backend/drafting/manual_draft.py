@@ -138,8 +138,7 @@ def build_references(thread_info):
 
 
 def reply_subject(subj):
-    s = (subj or "").strip()
-    s = re.sub(r'^(re:|fwd:|fw:)\s*', '', s, flags=re.IGNORECASE)
+    s = gmail_api.strip_reply_prefixes(subj)
     return f"Re: {s}" if s else "Re:"
 
 

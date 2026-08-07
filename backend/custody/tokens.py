@@ -25,14 +25,17 @@ in the proof is the request that actually succeeds.
 from __future__ import annotations
 
 import datetime
+import html
 import sys
 import threading
 
 import requests
 
+from backend import site
 from backend.accounts import account as account_store
 from backend.custody import client as cosigner
 from backend.custody import wrapping
+from backend.integrations import telegram
 from backend.integrations.gmail_gcal import oauth_app
 
 TOKEN_FILE = "token.bin"
@@ -49,6 +52,12 @@ EXPIRY_MARGIN = datetime.timedelta(seconds=120)
 _lock = threading.Lock()
 _access_cache = {}
 _dpop_nonce = None
+
+
+# A mailbox with no grant is a standing condition, not an event: the daemon
+# wakes on every Gmail push and every 300s besides, and each wake asks again.
+# Once a day is enough to be a reminder without becoming noise.
+REAUTH_NOTICE_COOLDOWN = 24 * 3600
 
 
 class BadRecord(wrapping.CustodyError):
@@ -169,6 +178,32 @@ def has_custody(uid):
     return token_path(uid).exists()
 
 
+def notify_reauth_required(account, log=None):
+    """Tell this account, in words, that Letterlock cannot reach their mailbox
+    and what to do about it -- at most once a day.
+
+    Not a traceback. `ReauthRequired` is the ordinary state of an account that
+    has not finished signing in, in the same way `ProviderUnavailable` is the
+    ordinary state of a drained balance: nothing is broken, a person has to do
+    something. Sending a stack trace on every wake says "this software is
+    failing" when the true message is "we are waiting for you", and it teaches
+    the reader to ignore the channel."""
+    target = getattr(account, "telegram", None)
+    sent = telegram.notify_once(
+        f"reauth:{account.id}",
+        "🔐 <b>Letterlock is not connected to your Gmail</b>\n"
+        f"Nothing is wrong, and nothing is being read: {html.escape(account.id)} "
+        "has no active Google grant, so drafting is paused.\n\n"
+        f"Sign in to reconnect: {site.app_url('/auth/login')}",
+        REAUTH_NOTICE_COOLDOWN,
+        target,
+    )
+    if log is not None:
+        log(f"{account.id}: not signed in to Gmail; drafting paused"
+            f"{' (notified)' if sent else ''}")
+    return sent
+
+
 def discard(uid):
     """Drop an account's token record. Used when a provision is refused after
     the exchange, so a token we cannot use does not stay on disk."""
@@ -187,12 +222,32 @@ def _post_token(form, proof):
 
 
 def _needs_nonce(resp):
+    """Is this the token endpoint asking for a nonce rather than refusing?
+
+    RFC 9449 says `use_dpop_nonce`, and that is what is required here. A server
+    that answers some other error while attaching a `DPoP-Nonce` is not asking
+    politely for a retry -- it is refusing, and retrying the same request with a
+    nonce would hide the refusal behind a second identical failure. The header
+    is still captured for the next request either way."""
     if resp.status_code not in (400, 401):
         return False
     try:
         return resp.json().get("error") == "use_dpop_nonce"
     except ValueError:
         return False
+
+
+def _refusal_detail(resp):
+    """What the token endpoint said, including the headers that carry half the
+    answer. Google's body for a refused exchange is often `invalid_request` and
+    the word "Bad Request", which names nothing; `WWW-Authenticate` and
+    `DPoP-Nonce` are what distinguish a rejected proof from a rejected grant,
+    and without them a failure like this is diagnosed by guesswork."""
+    hints = {name: resp.headers.get(name) for name in
+             ("WWW-Authenticate", "DPoP-Nonce", "X-Debug-Tracking-Id")
+             if resp.headers.get(name)}
+    detail = resp.text[:300]
+    return f"{detail} {hints}" if hints else detail
 
 
 def exchange_with_dpop(form, uid=None, proof=None, sign=None):
@@ -220,11 +275,12 @@ def exchange_with_dpop(form, uid=None, proof=None, sign=None):
         if resp.headers.get("DPoP-Nonce"):
             _dpop_nonce = resp.headers["DPoP-Nonce"]
     if resp.status_code != 200:
-        detail = resp.text[:300]
+        detail = _refusal_detail(resp)
         if "invalid_grant" in detail:
             raise ReauthRequired(uid or form.get("client_id", ""), detail)
         raise wrapping.CustodyError(
-            f"token endpoint returned HTTP {resp.status_code}: {detail}"
+            f"token endpoint returned HTTP {resp.status_code} for "
+            f"{form.get('grant_type')} with fields {sorted(form)}: {detail}"
         )
     return resp.json()
 

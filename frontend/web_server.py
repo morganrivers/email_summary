@@ -71,8 +71,6 @@ app_secrets.load()
 HOST = os.environ.get("WEB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("WEB_PORT", str(site.WEB_PORT)))
 REDIRECT_URI = os.environ.get("WEB_OAUTH_REDIRECT_URI", site.oauth_callback_url())
-STATE_COOKIE = "letterlock_oauth_state"
-STATE_TTL = 600
 
 # Rendered form of billing.PLAN_PRICE_EUR, for every page that quotes a price.
 PRICE = f"&euro;{billing.PLAN_PRICE_EUR}"
@@ -1446,18 +1444,6 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return acct
 
-    def _oauth_state(self):
-        raw = self.headers.get("Cookie", "")
-        if not raw:
-            return None
-        jar = http.cookies.SimpleCookie()
-        try:
-            jar.load(raw)
-        except http.cookies.CookieError:
-            return None
-        m = jar.get(STATE_COOKIE)
-        return m.value if m else None
-
     def _read_body(self):
         """Form fields from the request body, or None when the request is
         malformed. A garbage Content-Length used to raise out of the handler,
@@ -1500,23 +1486,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, _page_contact())
 
         if path == "/auth/login":
-            state = secrets.token_urlsafe(24)
+            state = sess.new_state()
             try:
                 url = provisioning.build_auth_url(state, REDIRECT_URI)
             except provisioning.ProvisionError as e:
                 log(f"auth/login failed: {e.msg}")
                 return self._send(e.code, _page_error(e.code, "Sign-in unavailable. Please try again later."))
-            cookie = (
-                f"{STATE_COOKIE}={state}; HttpOnly; Path=/; "
-                f"Max-Age={STATE_TTL}; SameSite=Lax; Secure"
-            )
-            return self._redirect(url, extra=[("Set-Cookie", cookie)])
+            # The existing cookie is carried in, so opening a second sign-in tab
+            # adds a pending consent rather than invalidating the first one.
+            return self._redirect(url, extra=[
+                ("Set-Cookie", sess.state_cookie(state, self.headers))])
 
         if path == "/auth/callback":
             query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
             try:
                 acct, location = provisioning.handle_callback(
-                    query, self._oauth_state(), REDIRECT_URI
+                    query, lambda s: sess.state_is_ours(s, self.headers), REDIRECT_URI
                 )
             except provisioning.ProvisionError as e:
                 log(f"auth/callback rejected: {e.msg}")
@@ -1525,10 +1510,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 log(f"auth/callback error: {e}")
                 return self._send(500, _page_error(500, "Sign-in failed. Please try again."))
-            clear_state = f"{STATE_COOKIE}=; Path=/; Max-Age=0"
             session_cookie = sess.make_cookie(acct.id)
             return self._redirect(location, extra=[
-                ("Set-Cookie", clear_state),
+                ("Set-Cookie", sess.clear_state_cookie()),
                 ("Set-Cookie", session_cookie),
             ])
 

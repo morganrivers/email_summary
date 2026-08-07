@@ -13,7 +13,7 @@
         },
         {
           "role": "user",
-          "content": "Original email [USER_FIRST] received:\n<<<EXTERNAL_CONTENT\nFrom: [PERSON1_FIRST] [PERSON1_LAST] <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 07:00:00 +0000\nSubject: Budget\n\nHi [USER_FIRST], thoughts on the budget?\nEXTERNAL_CONTENT>>>\n\n[USER_FIRST]'s context for this reply:\nCan you reply to this thread for me?\n\nDraft the reply."
+          "content": "Original email [USER_FIRST] received:\n<<<EXTERNAL_CONTENT\nFrom: Carol Clark <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 07:00:00 +0000\nSubject: Budget\n\nHi [USER_FIRST], thoughts on the budget?\nEXTERNAL_CONTENT>>>\n\n[USER_FIRST]'s context for this reply:\nCan you reply to this thread for me?\n\nDraft the reply."
         }
       ]
     }

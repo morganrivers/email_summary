@@ -15,7 +15,7 @@
         },
         {
           "role": "user",
-          "content": "Today: 2026-07-21 (Tuesday). Timezone: UTC.\n\nSent email:\nTo: [EMAIL_ADDRESS1]\nSubject: Confirming Tuesday\nDate: Tue, 21 Jul 2026 09:00:00 +0000\n\nHi [PERSON1_FIRST], let's meet sometime next week. [USER_FIRST]"
+          "content": "Today: [PHONE_NUMBER1] (Tuesday). Timezone: UTC.\n\nSent email:\nTo: [EMAIL_ADDRESS1]\nSubject: Confirming Tuesday\nDate: Tue, 21 Jul 2026 09:00:00 +0000\n\nHi Dave, let's meet sometime next week. [USER_FIRST]"
         }
       ]
     }

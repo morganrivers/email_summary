@@ -38,6 +38,7 @@ import harness
 def wire(monkeypatch, tmp_path):
     import requests
     from backend.integrations import llm_client
+    from backend.masking import pseudonymizer
     from backend.accounts import state
     from backend.accounts import account
     from backend.drafting import draft_replies
@@ -46,6 +47,12 @@ def wire(monkeypatch, tmp_path):
     from backend.drafting import voice_dna
 
     rec = harness.Recorder()
+
+    # Pin the masking mode before the account is built, so what the goldens
+    # record does not depend on whether Presidio and spaCy happen to be
+    # installed on the machine running pytest. See harness.without_analyzer.
+    monkeypatch.setattr(pseudonymizer, "DEFAULT_IDENTITY",
+                        harness.without_analyzer(pseudonymizer.DEFAULT_IDENTITY))
 
     # The voice profile is per account now; the fixture stands in for the
     # neutral default that any account without its own profile gets.
@@ -74,6 +81,11 @@ def wire(monkeypatch, tmp_path):
         "plan_status": "active",
         "timezone": "Europe/Berlin",
         "auto_schedule": True,
+        # Same pin as the identity above: an account reloaded from this manifest
+        # must mask the way the goldens were recorded, not the way the box is
+        # provisioned. Without it _account_from_entry defaults to True and the
+        # two disagree.
+        "pii_analyzer": False,
     }]}))
     monkeypatch.setattr(account, "ACCOUNTS_DIR", manifest.parent)
     monkeypatch.setattr(account, "MANIFEST", manifest)

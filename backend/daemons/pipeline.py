@@ -10,6 +10,7 @@ behavior.
 
 import traceback
 
+from backend.custody import tokens
 from backend.drafting import draft_replies
 from backend.drafting import manual_draft
 from backend.drafting import schedule_from_sent
@@ -25,7 +26,16 @@ def process_account(account, *, log, notify_err):
     if not last:
         log("No lastHistoryId in state; run `python -m backend.onboarding.watch_renew` first.")
         return
-    payload = mailbox.fetch_since_history(account, last)
+    try:
+        payload = mailbox.fetch_since_history(account, last)
+    except tokens.ReauthRequired:
+        # Not a failure of this run. There is no grant to fetch with, and every
+        # wake between now and the next sign-in raises the same thing, so it is
+        # said once in words rather than as a traceback per wake. The cursor
+        # stays where it is: mail that arrives meanwhile is drafted after the
+        # user signs back in, not skipped.
+        tokens.notify_reauth_required(account, log=log)
+        return
     emails = payload.get("emails", [])
     sent = payload.get("sent", [])
     new_history_id = payload.get("historyId")

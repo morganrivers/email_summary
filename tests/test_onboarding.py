@@ -151,21 +151,15 @@ def test_renew_does_not_rewind_existing_cursor(tmp_path, monkeypatch):
     assert s["watchExpiration"] == "1700000000000"      # expiry refreshed
 
 
-def test_callback_rejects_state_mismatch(monkeypatch):
+def test_callback_rejects_a_state_this_browser_is_not_waiting_on(monkeypatch):
     with pytest.raises(ob.ProvisionError) as ei:
-        ob.handle_callback({"code": "c", "state": "abc"}, "different", REDIRECT)
-    assert ei.value.code == 403
-
-
-def test_callback_rejects_missing_cookie(monkeypatch):
-    with pytest.raises(ob.ProvisionError) as ei:
-        ob.handle_callback({"code": "c", "state": "abc"}, None, REDIRECT)
+        ob.handle_callback({"code": "c", "state": "abc"}, lambda s: False, REDIRECT)
     assert ei.value.code == 403
 
 
 def test_callback_surfaces_consent_denial(monkeypatch):
     with pytest.raises(ob.ProvisionError) as ei:
-        ob.handle_callback({"error": "access_denied"}, "x", REDIRECT)
+        ob.handle_callback({"error": "access_denied"}, lambda s: True, REDIRECT)
     assert ei.value.code == 400
 
 
@@ -184,7 +178,8 @@ def test_callback_happy_path_provisions_and_lands_in_the_app(monkeypatch):
     monkeypatch.setattr(ob, "provision", fake_provision)
     monkeypatch.delenv("POLAR_SANDBOX", raising=False)
     monkeypatch.setenv("POLAR_CHECKOUT_URL", "https://polar.sh/checkout/abc")
-    acct, loc = ob.handle_callback({"code": "the-code", "state": "s"}, "s", REDIRECT)
+    acct, loc = ob.handle_callback(
+        {"code": "the-code", "state": "s"}, lambda s: s == "s", REDIRECT)
     assert acct.id == "e@x.com"
     assert seen["code"] == "the-code" and seen["redirect"] == REDIRECT
     assert loc == "/dashboard", "signing in must not push the user into checkout"

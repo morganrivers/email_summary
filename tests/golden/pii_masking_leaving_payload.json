@@ -15,7 +15,7 @@
         },
         {
           "role": "user",
-          "content": "[0] Thread: no earlier message from the recipient in this thread\n<<<EXTERNAL_CONTENT\nFrom: [PERSON2_FIRST] [PERSON2_LAST] <[EMAIL_ADDRESS1]>\nSubject: Access details\nBody: Hi [USER_FIRST], my number is [PHONE_NUMBER1] and the key is [API_KEY1]. [PERSON1_FIRST] [PERSON1_MID1] [PERSON1_LAST] too. Thanks, [PERSON2_FIRST] [PERSON2_LAST]\nEXTERNAL_CONTENT>>>"
+          "content": "[0] Thread: no earlier message from the recipient in this thread\n<<<EXTERNAL_CONTENT\nFrom: Nadia Fowler <[EMAIL_ADDRESS1]>\nSubject: Access details\nBody: Hi [USER_FIRST], my number is [PHONE_NUMBER1] and the key is [API_KEY1]. Reach Priya Sharma too. Thanks, Nadia Fowler\nEXTERNAL_CONTENT>>>"
         }
       ]
     },
@@ -32,7 +32,7 @@
         },
         {
           "role": "user",
-          "content": "Original email:\n<<<EXTERNAL_CONTENT\nFrom: [PERSON2_FIRST] [PERSON2_LAST] <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 09:00:00 +0000\nSubject: Access details\n\nHi [USER_FIRST], my number is [PHONE_NUMBER1] and the key is [API_KEY1]. [PERSON1_FIRST] [PERSON1_MID1] [PERSON1_LAST] too. Thanks, [PERSON2_FIRST] [PERSON2_LAST]\nEXTERNAL_CONTENT>>>\n\nDraft a reply."
+          "content": "Original email:\n<<<EXTERNAL_CONTENT\nFrom: Nadia Fowler <[EMAIL_ADDRESS1]>\nDate: Mon, 20 Jul 2026 09:00:00 +0000\nSubject: Access details\n\nHi [USER_FIRST], my number is [PHONE_NUMBER1] and the key is [API_KEY1]. Reach Priya Sharma too. Thanks, Nadia Fowler\nEXTERNAL_CONTENT>>>\n\nDraft a reply."
         }
       ]
     }

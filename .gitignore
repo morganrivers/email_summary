@@ -1,6 +1,11 @@
 .env
 .env.*
 *.env
+*.png
+*.svg
+docs/graphviz/*.png
+docs/graphviz/*.svg
+docs/graphviz/*.drawio
 credentials.json
 *credentials*.json
 *.telegraph-account.json

@@ -36,6 +36,14 @@ ENTITLED_SUB_STATUSES = frozenset({"active", "trialing"})
 # there means changing this line too.
 PLAN_PRICE_EUR = 25
 
+# The metadata key every checkout we mint is stamped with, naming the account it
+# was created for. It is the exact binding the rest of the billing surface lacked:
+# customer_email is a form field the buyer edits at Polar, and the checkout id
+# travels back in a query string the buyer controls, so neither says whose
+# checkout it is. Polar copies checkout metadata onto the resulting order and
+# subscription, so the webhook resolves through the same key as the return trip.
+CHECKOUT_ACCOUNT_KEY = "account_id"
+
 
 def log(msg):
     sys.stderr.write(f"billing {msg}\n")
@@ -84,7 +92,12 @@ def checkout_url(email, fallback="/dashboard"):
     remembers to fill in a success-URL field, which is exactly how a paid buyer
     got stranded there. Falls back to the static link when no product id is
     configured or the API call fails: a checkout the user can complete beats no
-    checkout at all, even without the return trip."""
+    checkout at all, even without the return trip.
+
+    The session is stamped with CHECKOUT_ACCOUNT_KEY, which is what makes the
+    return trip verifiable: PolarBilling.confirm_checkout resolves the checkout
+    back to an account and refuses one that is not the buyer's."""
+    assert email, "checkout_url needs the account the checkout is minted for"
     pid = product_id()
     if not pid:
         return _static_checkout_url(email, fallback)
@@ -92,6 +105,7 @@ def checkout_url(email, fallback="/dashboard"):
         token = select_env("POLAR_API_TOKEN", sandbox_enabled())
         status, body = polar_api.create_checkout(
             pid, site.checkout_success_url(), email, token,
+            metadata={CHECKOUT_ACCOUNT_KEY: email},
         )
     except AssertionError as err:
         log(f"checkout session unavailable ({err}); using the static link")
@@ -162,10 +176,28 @@ class PolarBilling:
             return None
         return body.get("email")
 
+    @staticmethod
+    def _stamped_account(data):
+        """The account named in the object's CHECKOUT_ACCOUNT_KEY metadata, or
+        None. Exact by construction: we wrote it when we minted the checkout."""
+        stamped = (data.get("metadata") or {}).get(CHECKOUT_ACCOUNT_KEY)
+        if not stamped:
+            return None
+        return account.account_for_email(str(stamped), include_inactive=True)
+
     def resolve_account(self, data):
-        """Map a Polar event's customer to a local account (including inactive):
-        by stored polar_customer_id first (exact link set at checkout), else by
-        email carried in the event, else by an email fetched from Polar."""
+        """Map a Polar object (webhook event data, or a checkout read back) to a
+        local account, including inactive ones.
+
+        Ordered most exact first: the account id we stamped into the checkout's
+        metadata, then the stored polar_customer_id link, then an email carried
+        in the object, then an email fetched from Polar. Every step resolves
+        *from* Polar's copy *to* an account and never the reverse, which is what
+        lets confirm_checkout use the answer as an ownership test rather than
+        trusting the id the browser handed it."""
+        stamped = self._stamped_account(data)
+        if stamped is not None:
+            return stamped
         cid = self._customer_id(data)
         if cid:
             acct = account.account_for_customer_id(cid)
@@ -226,6 +258,15 @@ class PolarBilling:
         of us, so asking Polar directly whether that checkout was paid is both
         faster and immune to a webhook that is misrouted, unregistered, or
         retrying. Returns (paid, detail).
+
+        `checkout_id` arrives in a query string the browser controls, so the
+        first thing done with it is an ownership test: Polar's copy of that
+        checkout must resolve back to the signed-in account. Without it any
+        signed-in user who learned a paid checkout id took its subscription for
+        free, and the customer link below then pointed portal_url() at someone
+        else's Polar customer. A checkout that resolves to nobody is refused
+        too: the webhook settles that case, and the return page already tells a
+        buyer whose flip is still in flight to wait rather than that they failed.
         """
         assert acct is not None, "confirm_checkout needs the signed-in account"
         if not checkout_id:
@@ -234,6 +275,11 @@ class PolarBilling:
         if status != 200 or not isinstance(body, dict):
             log(f"get_checkout {checkout_id} failed: {status}")
             return False, f"could not read checkout {checkout_id}"
+        owner = self.resolve_account(body)
+        if owner is None or owner.id != acct.id:
+            log(f"checkout {checkout_id} resolves to "
+                f"{owner.id if owner else 'no account'}, not {acct.id}; refusing")
+            return False, "that checkout does not belong to this account"
         state = body.get("status")
         customer_id = self._customer_id(body)
         if customer_id and acct.polar_customer_id != customer_id:

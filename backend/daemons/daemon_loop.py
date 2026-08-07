@@ -54,11 +54,18 @@ def ensure_fifo():
 
 
 def _run_account(acct):
-    pipeline.process_account(
-        acct,
-        log=log,
-        notify_err=lambda ctx, err, a=acct: notify_error(ctx, err, a.telegram),
-    )
+    """One account's pass, and one account's failure. Whatever goes wrong for
+    this mailbox must not end the sweep: on a multi-tenant box that would let
+    one lapsed grant or one Gmail outage stop drafting for everybody else."""
+    try:
+        pipeline.process_account(
+            acct,
+            log=log,
+            notify_err=lambda ctx, err, a=acct: notify_error(ctx, err, a.telegram),
+        )
+    except Exception as err:
+        log(f"{acct.id}: {err}\n{traceback.format_exc()}")
+        notify_error(f"processing failed for {acct.id}", err, acct.telegram)
 
 
 def process_all():

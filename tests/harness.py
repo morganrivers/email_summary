@@ -23,6 +23,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
+from backend.masking import pseudonymizer
+
 GOLDEN_DIR = Path(__file__).parent / "golden"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 VOICE_FIXTURE = FIXTURES_DIR / "voice.md"
@@ -213,6 +215,34 @@ class FrozenDate(_dt.date):
 
 def frozen_datetime_namespace():
     return SimpleNamespace(date=FrozenDate, datetime=_dt.datetime, timedelta=_dt.timedelta)
+
+
+# --- masking mode ---------------------------------------------------------
+
+def without_analyzer(identity):
+    """The same identity with the Presidio/spaCy path switched off.
+
+    The goldens pin one masking mode, and it is this one, because it is the
+    mode that ships: the analyzer pins are commented out of requirements.txt
+    and the enclave image inherits that default. Left to `analyzer_available()`
+    the recorded prompts would depend on which packages happen to be installed
+    on the machine running pytest -- a developer with the model downloaded got
+    [PERSON1_FIRST], a clean checkout got the name in the clear, and the same
+    commit failed ten characterization tests on one box and passed on another.
+
+    What the two modes each catch is asserted in test_masking_recall.py, which
+    evaluates both paths against the corpus. That is the single place the
+    question belongs; here it would only make the goldens unstable."""
+    return pseudonymizer.UserIdentity(
+        identity.first,
+        identity.last,
+        first_aliases=identity.first_aliases,
+        emails=identity.emails,
+        phones=identity.phones,
+        contacts=identity.contacts,
+        account_id=identity.account_id,
+        analyzer=False,
+    )
 
 
 # --- golden compare -------------------------------------------------------

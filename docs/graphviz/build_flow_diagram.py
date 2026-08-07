@@ -23,7 +23,7 @@ Requires Graphviz 'dot' on PATH.
 """
 import json, subprocess, sys, os
 from drawio_common import (run_dot, transforms, decl, emit_node, emit_edges,
-                           wrap_mxfile, esc)
+                           wrap_mxfile, esc, node_rect)
 
 SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), 'letterlock_flow_diagram.json')
 OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), 'letterlock_flow_diagram.drawio')
@@ -112,7 +112,7 @@ STLAB = {
     'G': 'INGEST · push → wake → per-account run',
     'F': 'GOOGLE · one seam for mail + calendar',
     'R': 'DRAFT · what to say, in this account\'s voice',
-    'M': 'INFERENCE · masked text, verified enclave',
+    'M': 'INFERENCE · pseudonymized text, verified enclave',
     'O': 'NOTIFY · Telegram + daily summary',
 }
 STCOL = {'B': '#6b7f96', 'W': '#4f9b95', 'C': '#5a9367', 'K': '#c17a3a',
@@ -151,14 +151,21 @@ for e in edges:
     dot.append(f'"{e["from"]}"->"{e["to"]}"{attr};')
 # Force clean stage bands via one invisible funnel node per gap (same trick as
 # build_drawio): every node of band k ranks above every node of band k+1.
+#
+# weight=0 on those edges. Rank assignment still obeys them, but the x-coordinate
+# pass ignores them, and that pass is where the damage was: every band had ~10
+# unit-weight edges converging on one invisible point, so dot stacked each band
+# into a column under that point and the real edges had to travel sideways to
+# reach it. Zero weight leaves the horizontal placement to the edges that are
+# actually drawn, which is what makes a caller sit above what it calls.
 band_ids = {g: [n['id'] for n in G['nodes'] if n['grp'] == g] for g in BANDS}
 for i in range(len(BANDS) - 1):
     z = f'__z{i}'
     dot.append(f'"{z}"[style=invis,width=0.01,height=0.01,label=""];')
     for nid in band_ids[BANDS[i]]:
-        dot.append(f'"{nid}"->"{z}"[style=invis];')
+        dot.append(f'"{nid}"->"{z}"[style=invis,weight=0];')
     for nid in band_ids[BANDS[i + 1]]:
-        dot.append(f'"{z}"->"{nid}"[style=invis];')
+        dot.append(f'"{z}"->"{nid}"[style=invis,weight=0];')
 dot.append('}')
 pos, H, edgepts = run_dot(dot)
 X, Y = transforms(H)
@@ -167,18 +174,28 @@ bg = []   # stage tags (behind)
 mid = []  # edges
 fg = []   # nodes (front)
 
-# stage tags centred above each band's nodes
+# Stage bands as full-width swimlanes behind everything, named at the left
+# margin. A pill centred over the band sat in the middle of that band's edge
+# traffic and read as one more box; a tinted lane says the same thing without
+# competing for the space the arrows need. The tint is the fill only -- the
+# renderer applies `opacity` to the shape and not to its text -- so the label
+# stays legible at 8%.
+laid = [n for n in G['nodes'] if n['id'] in pos]
+rects = {n['id']: node_rect(n, pos, X, Y) for n in laid}
+xlo = min(r[0] for r in rects.values()) - 40
+xhi = max(r[2] for r in rects.values()) + 40
 for g in BANDS:
-    ns = [n for n in G['nodes'] if n['grp'] == g and n['id'] in pos]
+    ns = [n for n in laid if n['grp'] == g]
     if not ns:
         continue
-    xs = [X(pos[n['id']][0]) for n in ns]
-    ytop = min(Y(pos[n['id']][1]) - n['h'] / 2 for n in ns)
-    cx = (min(xs) + max(xs)) / 2
-    w = max(150, 9 * len(STLAB[g]))
-    st = f'rounded=1;whiteSpace=wrap;html=1;fillColor={STCOL[g]};strokeColor=none;fontColor=#ffffff;fontSize=12;fontStyle=1;opacity=90;'
-    bg.append(f'<mxCell id="lab_{g}" value="{esc(STLAB[g])}" style="{st}" vertex="1" parent="1">'
-              f'<mxGeometry x="{cx-w/2:.0f}" y="{ytop-40:.0f}" width="{w:.0f}" height="24" as="geometry"/></mxCell>')
+    y0 = min(rects[n['id']][1] for n in ns) - 34
+    y1 = max(rects[n['id']][3] for n in ns) + 16
+    st = (f'rounded=0;html=1;whiteSpace=wrap;fillColor={STCOL[g]};strokeColor=none;opacity=8;'
+          f'verticalAlign=top;align=left;spacingLeft=12;spacingTop=4;'
+          f'fontSize=13;fontStyle=1;fontColor={STCOL[g]};')
+    bg.append(f'<mxCell id="lane_{g}" value="{esc(STLAB[g])}" style="{st}" vertex="1" parent="1">'
+              f'<mxGeometry x="{xlo:.0f}" y="{y0:.0f}" width="{xhi-xlo:.0f}" '
+              f'height="{y1-y0:.0f}" as="geometry"/></mxCell>')
 
 # nodes + edges
 for n in G['nodes']:

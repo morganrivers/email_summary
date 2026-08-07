@@ -255,12 +255,45 @@ copy.
   exchange for removing a confidentiality risk.
 - `backend/integrations/gmail_gcal/` — the only code that talks to Google's
   mail and calendar APIs. `oauth_app.py` (client keys, scopes, endpoints),
-  `gmail_api.py` (credentials + messages/threads/history/watch),
-  `calendar_api.py`, `mailbox.py` (the two fetch shapes), `drafts.py` (RFC822
-  assembly + create/update). Credentials are constructed with no refresh token
-  at all, so every acquisition goes through `tokens.refresh_handler_for()`;
-  putting one in that object would defeat split custody for as long as the
-  object lives.
+  `google_client.py` (credentials + the per-thread service cache),
+  `gmail_api.py` (messages/threads/history/watch), `calendar_api.py`,
+  `mailbox.py` (the two fetch shapes), `drafts.py` (RFC822 assembly +
+  create/update). Credentials are constructed with no refresh token at all, so
+  every acquisition goes through `tokens.refresh_handler_for()`; putting one in
+  that object would defeat split custody for as long as the object lives.
+  One consent covers both APIs, so the credentials and the service cache belong
+  to `google_client` rather than to either API module: `calendar_api` used to
+  import the calendar service from `gmail_api`, which made the mail module a
+  dependency of every calendar call and said, in the diagram and in the import
+  graph, that calendar goes through Gmail. The two are siblings over the client
+  layer, and `forget_services()` lives there too, since one cache is what a
+  re-consent has to invalidate.
+
+  Calendar reads take a `calendar_id`, because the daily summary reads a
+  community calendar as well as the account's own. `create_event()` does not:
+  the calendar is `calendar_api.WRITE_CALENDAR`, there is no attendee list, and
+  `sendUpdates="none"`. What gets written is decided by a model reading mail an
+  outside sender wrote, so a `calendar_id` parameter is one a future caller
+  could fill from that model, and the calendar it named could be a public one.
+  The text fields are capped by `MAX_SUMMARY` / `MAX_LOCATION` /
+  `MAX_DESCRIPTION`, asserted at that boundary and truncated to the same
+  constants at the model boundary in `schedule_from_sent._normalize()`, so a
+  long draft is an ugly event rather than an operator alert.
+
+  Gmail's search takes one opaque string, has no parameterized form and no
+  escape character, and its quoting rules are documented nowhere you could rely
+  on. So `find_thread_by_from_subject()` puts exactly one header value in a
+  query, the sender, and only after `ADDRESS_QUERY_RE` has checked it into the
+  shape of a bare address; a sender that is not one is refused, and the caller
+  drafts on a new thread the same way it does when nothing is found. The
+  subject never enters the query. Candidates come back as metadata and
+  `comparable_subject()` matches them here, where a string cannot become a
+  second operator, which is also a tighter match than `subject:"…"` (a phrase
+  search that took any thread mentioning the word) and the reason
+  `strip_reply_prefixes()` strips repeatedly: a forwarded reply carries more
+  than one prefix and both sides of the comparison have to lose all of them.
+  `manual_draft.reply_subject()` uses that same helper rather than its own
+  regex.
 - `llm_client.py` — the inference client + `complete()`. The provider catalog
   (`PROVIDERS`), model, thinking mode, reasoning effort, and the masking
   boundary all live here. Three providers ship: `deepseek` (direct, the
@@ -413,6 +446,17 @@ copy.
   button and billing table each held their own literal and drifted from the
   Polar product, quoting €20 for a €25 subscription. Polar is what actually
   charges, so changing the product there means changing this constant too.
+- `PolarBilling.resolve_account()` — which local account a Polar object belongs
+  to, for the webhook, the reconcile poller and the checkout return alike. It
+  resolves in one direction only, from Polar's copy to an account, which is what
+  lets the checkout return use it as an ownership test on an id the browser
+  handed it: `confirm_checkout()` refuses a checkout that does not resolve back
+  to the signed-in account, before it links a customer or flips a plan. Without
+  that test any signed-in user who learned a paid checkout id took the
+  subscription and got `portal_url()` pointed at that buyer's Polar customer.
+  `checkout_url()` stamps `billing.CHECKOUT_ACCOUNT_KEY` into the session's
+  metadata to make the binding exact; `customer_email` is a field the buyer edits
+  on Polar's form, so it is the fallback, not the test.
 - `draft_replies.build_draft_payload()` — canonical draft payload shape. All
   draft callers route through this.
 - `draft_replies.submit_draft(account, payload, draft_id=None)` — sole boundary

@@ -26,7 +26,6 @@ import base64
 import hashlib
 import json
 import sys
-from hmac import compare_digest
 from urllib.parse import urlencode
 
 import requests
@@ -37,7 +36,7 @@ from backend.billing import billing
 from backend.custody import client as cosigner
 from backend.custody import tokens
 from backend.custody import wrapping
-from backend.integrations.gmail_gcal import gmail_api, oauth_app
+from backend.integrations.gmail_gcal import gmail_api, google_client, oauth_app
 from backend.onboarding import watch_renew
 
 HTTP_TIMEOUT = 30
@@ -210,7 +209,7 @@ def provision(code, redirect_uri, state):
     # A re-consent replaces the custody this account's credentials derive from,
     # so anything cached against the old one has to go with it.
     tokens.forget(email)
-    gmail_api.forget_services(email)
+    google_client.forget_services(email)
     watch_renew.renew_account(acct, log=log)
     log(f"provisioned account {acct.id}")
     return acct
@@ -225,9 +224,16 @@ def checkout_redirect(email, fallback="/dashboard"):
     return billing.checkout_url(email, fallback=fallback)
 
 
-def handle_callback(query, cookie_state, redirect_uri, fallback="/dashboard"):
+def handle_callback(query, state_is_ours, redirect_uri, fallback="/dashboard"):
     """Pure decision path for an OAuth callback, shared by the server and the
-    tests. Returns (account, redirect location). Raises ProvisionError."""
+    tests. Returns (account, redirect location). Raises ProvisionError.
+
+    `state_is_ours(state)` answers whether this browser is actually waiting on
+    this consent. It is a predicate rather than the one expected value because a
+    browser can have more than one sign-in pending at once, and comparing
+    against only the newest turns a second tab into a CSRF alarm. Where the
+    answer comes from is frontend.session's business; that it must be true
+    before a code is exchanged is this module's."""
     err = query.get("error")
     if err:
         raise ProvisionError(400, f"consent denied: {err}")
@@ -235,7 +241,8 @@ def handle_callback(query, cookie_state, redirect_uri, fallback="/dashboard"):
     state = query.get("state")
     if not code or not state:
         raise ProvisionError(400, "missing code or state")
-    if not cookie_state or not compare_digest(state, cookie_state):
-        raise ProvisionError(403, "state mismatch (possible CSRF)")
+    if not state_is_ours(state):
+        raise ProvisionError(
+            403, "this sign-in did not start in this browser, or took too long")
     acct = provision(code, redirect_uri, state)
     return acct, fallback

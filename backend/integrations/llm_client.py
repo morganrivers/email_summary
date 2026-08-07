@@ -121,11 +121,10 @@ PROVISIONING_STATUSES = (401, 402, 403)
 
 # One operator alert per provider per window, not one per email. A drained
 # balance fails every draft in the queue, and a hundred identical Telegram
-# messages is how an operator learns to mute the channel.
+# messages is how an operator learns to mute the channel. The window itself is
+# kept by telegram.notify_once, which every repeating condition on this box
+# shares.
 ALERT_COOLDOWN_SECONDS = 6 * 3600
-
-_ALERT_LOCK = threading.Lock()
-_ALERTED = {}
 
 
 class ProviderUnavailable(RuntimeError):
@@ -255,29 +254,20 @@ def _create(client, provider, **kwargs):
 
 
 def _alert_once(provider, status, detail):
-    """Tell the operator, at most once per provider per window. Never raises:
-    an undelivered alert must not replace the error the caller is about to
-    see."""
-    key = (provider.name, status)
-    now = time.monotonic()
-    with _ALERT_LOCK:
-        last = _ALERTED.get(key)
-        if last is not None and now - last < ALERT_COOLDOWN_SECONDS:
-            return
-        _ALERTED[key] = now
+    """Tell the operator, at most once per provider per window. The window is
+    kept by `telegram.notify_once`, which is the one implementation of "say this
+    but not on every cycle"; this function owns only the wording."""
     sys.stderr.write(f"{provider.name}: {detail} (HTTP {status})\n")
-    try:
-        telegram.notify_error(
-            f"Inference paused: {provider.label} — {detail}. "
-            f"Drafts for accounts on this provider will keep failing until it is fixed."
-        )
-    except Exception as alert_err:
-        sys.stderr.write(f"{provider.name}: operator alert not delivered ({alert_err})\n")
+    telegram.notify_once(
+        f"provider:{provider.name}:{status}",
+        f"⚠️ <b>Inference paused</b>\n{provider.label} — {detail}. "
+        f"Drafts for accounts on this provider will keep failing until it is fixed.",
+        ALERT_COOLDOWN_SECONDS,
+    )
 
 
 def reset_alerts_for_test():
-    with _ALERT_LOCK:
-        _ALERTED.clear()
+    telegram.reset_once_for_test()
 
 
 def _mask_messages(messages, state):

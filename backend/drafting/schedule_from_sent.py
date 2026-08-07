@@ -76,8 +76,15 @@ def extract_events(client, email, identity=None, timezone="UTC"):
 
 
 def _normalize(event):
-    """Validate + fill defaults. Returns a dict or None if not schedulable."""
-    summary = (event.get("summary") or "").strip()
+    """Validate + fill defaults. Returns a dict or None if not schedulable.
+
+    This is the model boundary, so it truncates where calendar_api asserts. The
+    limits are that module's, imported rather than restated: a model that quotes
+    half an email into a description is a long description, not an incident, and
+    an event nobody can read the whole of is still better than an alert per
+    chatty draft. calendar_api keeps the assert for the caller that has no such
+    excuse."""
+    summary = (event.get("summary") or "").strip()[:calendar_api.MAX_SUMMARY]
     start = (event.get("start") or "").strip()
     if not summary or not start:
         return None
@@ -89,8 +96,12 @@ def _normalize(event):
     end = (event.get("end") or "").strip()
     if end:
         try:
-            datetime.datetime.fromisoformat(end)
-        except ValueError:
+            if datetime.datetime.fromisoformat(end) <= start_dt:
+                _log(f"end {end!r} is not after start {start!r}; using default duration")
+                end = ""
+        except (ValueError, TypeError):
+            # TypeError is the model offering one of the pair with a timezone
+            # offset and the other without, which compares as naive vs aware.
             end = ""
     if not end:
         end = (start_dt + DEFAULT_DURATION).isoformat(timespec="seconds")
@@ -98,8 +109,8 @@ def _normalize(event):
         "summary": summary,
         "start": start,
         "end": end,
-        "location": (event.get("location") or "").strip(),
-        "description": (event.get("description") or "").strip(),
+        "location": (event.get("location") or "").strip()[:calendar_api.MAX_LOCATION],
+        "description": (event.get("description") or "").strip()[:calendar_api.MAX_DESCRIPTION],
     }
 
 

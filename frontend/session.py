@@ -1,21 +1,38 @@
-"""HMAC-signed session cookie helpers (Track U3).
+"""HMAC-signed cookies: the session, and the OAuth state (Track U3).
 
-Cookie format: {email}:{iat}:{signature}
-where signature = HMAC-SHA256(SESSION_SECRET, "{email}:{iat}").
+Both are `{value}:{iat}:{signature}`, where the signature is
+HMAC-SHA256(SESSION_SECRET, "{purpose}:{value}:{iat}"). The purpose is inside
+the signed string, so a value minted for one cookie cannot be presented as the
+other even though one key signs both.
 
 The session stores the account email. Everything else is looked up via
 account.py on each request.
+
+The state is here rather than in web_server because it is the same question --
+did this box mint this, and how long ago -- and the answer should not be
+written twice. Unlike the session, the cookie holds several at once: a browser
+with two sign-in tabs open has two pending consents, and a single slot meant
+the second tab silently invalidated the first.
 """
 
 import hashlib
 import hmac
 import http.cookies
+import secrets as secrets_mod
 import time
 
 from backend import secrets
 
 SESSION_COOKIE = "letterlock_session"
 SESSION_TTL = 86400 * 30
+
+SESSION_PURPOSE = "session"
+STATE_PURPOSE = "oauth-state"
+
+# A consent round trip: account chooser, scope screen, possibly a password and
+# a second factor. Ten minutes was short enough that a slow sign-in came back
+# to "state mismatch (possible CSRF)", which reads as an attack and is not one.
+STATE_TTL = 1800
 
 _secret = None
 
@@ -31,9 +48,45 @@ def _get_secret():
     return _secret
 
 
+def _mac(purpose, payload):
+    """HMAC over one value, for one purpose.
+
+    The purpose is inside the signed string rather than beside it, so a value
+    minted as one kind of token cannot be presented as the other: the same key
+    signs both a session and an OAuth state, and both are `<value>:<iat>:<sig>`
+    on the wire. Without domain separation an emailless session cookie and a
+    state would be interchangeable to the verifier."""
+    return hmac.new(_get_secret(), f"{purpose}:{payload}".encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def _signed(purpose, value, iat):
+    return f"{value}:{iat}:{_mac(purpose, f'{value}:{iat}')}"
+
+
+def _open_signed(purpose, raw, ttl):
+    """The value out of a `<value>:<iat>:<sig>` string, or None if it is not one
+    we signed or is older than `ttl`."""
+    if not raw:
+        return None
+    try:
+        parts = raw.split(":")
+        if len(parts) < 3:
+            return None
+        value = ":".join(parts[:-2])
+        iat = int(parts[-2])
+        sig = parts[-1]
+    except (ValueError, IndexError):
+        return None
+    if int(time.time()) - iat > ttl:
+        return None
+    if not hmac.compare_digest(sig, _mac(purpose, f"{value}:{iat}")):
+        return None
+    return value
+
+
 def _sign(email, iat):
-    payload = f"{email}:{iat}"
-    return hmac.new(_get_secret(), payload.encode(), hashlib.sha256).hexdigest()
+    return _mac(SESSION_PURPOSE, f"{email}:{iat}")
 
 
 def make_cookie(email):
@@ -49,7 +102,7 @@ def clear_cookie():
     return f"{SESSION_COOKIE}=; Path=/; Max-Age=0"
 
 
-def get_email(headers):
+def _cookie_value(headers, name):
     raw = headers.get("Cookie", "")
     if not raw:
         return None
@@ -58,21 +111,73 @@ def get_email(headers):
         jar.load(raw)
     except http.cookies.CookieError:
         return None
-    morsel = jar.get(SESSION_COOKIE)
-    if not morsel:
-        return None
-    try:
-        parts = morsel.value.split(":")
-        if len(parts) < 3:
-            return None
-        email = ":".join(parts[:-2])
-        iat = int(parts[-2])
-        sig = parts[-1]
-    except (ValueError, IndexError):
-        return None
-    if int(time.time()) - iat > SESSION_TTL:
-        return None
-    expected = _sign(email, iat)
-    if not hmac.compare_digest(sig, expected):
-        return None
-    return email
+    morsel = jar.get(name)
+    return morsel.value if morsel else None
+
+
+def get_email(headers):
+    return _open_signed(SESSION_PURPOSE, _cookie_value(headers, SESSION_COOKIE),
+                        SESSION_TTL)
+
+
+# --- the OAuth state ------------------------------------------------------
+#
+# The state is signed the way the session is, with the same key and the same
+# `<value>:<iat>:<sig>` shape, because it answers the same question: did this
+# box mint this, and how long ago. What it adds is room for more than one at a
+# time. A single-slot cookie meant a second sign-in tab overwrote the first
+# tab's state, so finishing the older consent failed as "state mismatch
+# (possible CSRF)" -- an alarming way to say the user opened two tabs.
+#
+# Each state is still verified individually, so accepting several does not
+# weaken the check: an attacker who cannot sign one cannot sign any of the
+# three.
+
+STATE_COOKIE = "letterlock_oauth_state"
+STATE_SEPARATOR = "|"
+# Enough for a couple of stray tabs, few enough that the cookie stays small and
+# an old state ages out rather than lingering behind a wall of newer ones.
+MAX_PENDING_STATES = 3
+
+
+def new_state():
+    """A fresh state value, signed and ready for both the URL and the cookie."""
+    return _signed(STATE_PURPOSE, secrets_mod.token_urlsafe(24), int(time.time()))
+
+
+def state_cookie(state, headers=None):
+    """The Set-Cookie carrying `state` plus whatever earlier states are still
+    live, newest first. Pass the request headers so a second tab adds to the
+    list rather than evicting what the first tab is waiting on."""
+    assert state, "state_cookie needs a state"
+    pending = [state] + [s for s in _pending_states(headers) if s != state]
+    value = STATE_SEPARATOR.join(pending[:MAX_PENDING_STATES])
+    return (f"{STATE_COOKIE}={value}; HttpOnly; Path=/; "
+            f"Max-Age={STATE_TTL}; SameSite=Lax; Secure")
+
+
+def clear_state_cookie():
+    return f"{STATE_COOKIE}=; Path=/; Max-Age=0"
+
+
+def _pending_states(headers):
+    """The still-valid states in the cookie. Anything expired or unsigned by us
+    is dropped here rather than compared against, so a stale cookie cannot keep
+    a value alive past its TTL."""
+    if headers is None:
+        return []
+    raw = _cookie_value(headers, STATE_COOKIE) or ""
+    live = []
+    for candidate in raw.split(STATE_SEPARATOR):
+        if candidate and _open_signed(STATE_PURPOSE, candidate, STATE_TTL):
+            live.append(candidate)
+    return live
+
+
+def state_is_ours(state, headers):
+    """Is this callback's state one we minted, still within its TTL, and still
+    pending in this browser? All three, in that order."""
+    if not state or not _open_signed(STATE_PURPOSE, state, STATE_TTL):
+        return False
+    return any(hmac.compare_digest(state, known)
+               for known in _pending_states(headers))

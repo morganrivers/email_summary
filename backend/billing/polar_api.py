@@ -69,18 +69,27 @@ def get_customer(customer_id, token):
     return _request("GET", f"/v1/customers/{customer_id}", token=token)
 
 
-def create_checkout(product_id, success_url, customer_email, token):
+def create_checkout(product_id, success_url, customer_email, token, metadata=None):
     """Mint a hosted checkout session. Preferred over a static dashboard checkout
     link because the success URL then comes from backend/site.py rather than a
     field in the Polar dashboard, so the app and the place Polar returns the buyer
     to cannot drift apart. The response carries `url` (where to send the buyer)
-    and `id`."""
+    and `id`.
+
+    `metadata` is echoed on the checkout when it is read back and copied onto the
+    order and subscription it produces. The buyer never sees it, unlike
+    customer_email, which is an editable field on Polar's own form."""
     assert token, "backend API token required to create a checkout"
     assert product_id, "product_id required to create a checkout"
     assert success_url, "success_url required to create a checkout"
     payload = {"products": [product_id], "success_url": success_url}
     if customer_email:
         payload["customer_email"] = customer_email
+    if metadata:
+        assert all(isinstance(v, str) for v in metadata.values()), (
+            "Polar metadata values must be strings"
+        )
+        payload["metadata"] = metadata
     return _request("POST", "/v1/checkouts/", payload=payload, token=token)
 
 

@@ -71,6 +71,7 @@ def test_deterministic_types_fully_masked(result):
             assert evaluator.recall(bucket) == 1.0, (name, result["misses"])
 
 
+@requires_analyzer
 def test_loose_floors_hold(result):
     for name, floor in LOOSE_FLOORS.items():
         bucket = result["by_type"].get(name)
@@ -78,7 +79,18 @@ def test_loose_floors_hold(result):
             assert evaluator.recall(bucket) >= floor, (name, evaluator.recall(bucket))
 
 
+@requires_analyzer
 def test_overall_recall_floor(result):
     total = sum(b["total"] for b in result["by_type"].values())
     caught = sum(b["caught"] for b in result["by_type"].values())
     assert caught / total >= 0.90, caught / total
+
+
+def test_overall_recall_floor_without_analyzer(result_no_analyzer):
+    """The floor on the path that actually ships. requirements.txt leaves the
+    analyzer commented out, so this is the number a default box runs at; 0.90
+    is unreachable there and asserting it against `result` is what made a clean
+    checkout fail. Measured 0.74, the whole gap being PERSON."""
+    total = sum(b["total"] for b in result_no_analyzer["by_type"].values())
+    caught = sum(b["caught"] for b in result_no_analyzer["by_type"].values())
+    assert caught / total >= 0.70, caught / total
