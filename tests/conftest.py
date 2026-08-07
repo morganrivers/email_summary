@@ -34,6 +34,20 @@ import pytest
 import harness
 
 
+@pytest.fixture(autouse=True)
+def audit_log(tmp_path):
+    """Every account mutator writes an audit row, so every test that touches one
+    would otherwise write into the checkout's own state/audit.db. Autouse rather
+    than opt-in: a test that forgets it pollutes the working tree instead of
+    failing, which is the kind of miss nobody notices."""
+    from backend import audit
+
+    audit.reset_for_test(tmp_path / "audit")
+    yield audit
+    audit.reset_for_test()
+    os.environ.pop("LETTERLOCK_AUDIT_DIR", None)
+
+
 @pytest.fixture
 def wire(monkeypatch, tmp_path):
     import requests

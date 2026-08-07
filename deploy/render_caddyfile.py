@@ -35,7 +35,7 @@ def co_tenant_handles():
             f"\t# Kept because this file is the whole Caddy config, so dropping\n"
             f"\t# the route would take that service offline.\n"
             f"\thandle {path} {{\n"
-            f"\t\treverse_proxy 127.0.0.1:{port}\n"
+            f"\t\treverse_proxy {site.upstream(port)}\n"
             f"\t}}"
         )
     return "".join(b + "\n" for b in blocks)
@@ -47,14 +47,14 @@ def api_block():
     return f"""\
 {site.API_HOST} {{
 \thandle {site.POLAR_WEBHOOK_PATH} {{
-\t\treverse_proxy 127.0.0.1:{site.BILLING_WEBHOOK_PORT}
+\t\treverse_proxy {site.upstream(site.BILLING_WEBHOOK_PORT)}
 \t}}
 {co_tenant_handles()}\
 \t# The catch-all keeps the Gmail Pub/Sub push (POST /) on the webhook. Serving
 \t# a landing page from this site root would require repointing the push
 \t# subscription off "/" first.
 \thandle {{
-\t\treverse_proxy 127.0.0.1:{site.GMAIL_PUSH_PORT}
+\t\treverse_proxy {site.upstream(site.GMAIL_PUSH_PORT)}
 \t}}
 }}"""
 
@@ -65,11 +65,11 @@ def app_block():
     return f"""\
 {site.APP_HOST} {{
 \thandle {site.POLAR_WEBHOOK_PATH} {{
-\t\treverse_proxy 127.0.0.1:{site.BILLING_WEBHOOK_PORT}
+\t\treverse_proxy {site.upstream(site.BILLING_WEBHOOK_PORT)}
 \t}}
 {co_tenant_handles()}\
 \thandle {{
-\t\treverse_proxy 127.0.0.1:{site.WEB_PORT}
+\t\treverse_proxy {site.upstream(site.WEB_PORT)}
 \t}}
 }}"""
 
@@ -99,7 +99,7 @@ def cosigner_block():
 \t\t}}
 \t}}
 \thandle {{
-\t\treverse_proxy 127.0.0.1:{site.COSIGNER_PORT} {{
+\t\treverse_proxy {site.upstream(site.COSIGNER_PORT)} {{
 \t\t\theader_up {cosigner_protocol.CLIENT_CERT_HEADER} {{http.request.tls.client.certificate_der_base64}}
 \t\t}}
 \t}}

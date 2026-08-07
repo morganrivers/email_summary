@@ -63,6 +63,29 @@ WEB_PORT = 8790
 # co-signer can be deployed without backend/ present.
 COSIGNER_PORT = cosigner_protocol.PORT
 
+# The address Caddy proxies from, and so the only peer whose X-Forwarded-For an
+# app server may believe. One fact, two readers: render_caddyfile.py renders the
+# reverse_proxy upstreams from upstream() below, and frontend/web_server.py both
+# binds this address and checks incoming peers against TRUSTED_PROXIES before
+# reading the header. Kept together because they are the two halves of one
+# claim -- Caddy is in front of us, over loopback, and nothing else is.
+LOOPBACK = "127.0.0.1"
+TRUSTED_PROXIES = frozenset({LOOPBACK, "::1"})
+
+
+def upstream(port):
+    """The `reverse_proxy` target for a service on `port`.
+
+    The assert is the coupling: a peer Caddy proxies from that the app does not
+    trust means every audit row records the proxy's own address instead of the
+    browser's, silently and forever. Trusting the header is a decision about who
+    sent it, so the two lists cannot be allowed to drift apart."""
+    assert LOOPBACK in TRUSTED_PROXIES, (
+        f"Caddy proxies from {LOOPBACK}, which is not in TRUSTED_PROXIES "
+        f"({sorted(TRUSTED_PROXIES)}); the app would discard its X-Forwarded-For"
+    )
+    return f"{LOOPBACK}:{port}"
+
 OAUTH_CALLBACK_PATH = "/auth/callback"
 
 # Namespaced for the same reason as the port. The other product's signer serves

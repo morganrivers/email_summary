@@ -33,6 +33,12 @@ set_telegram (notification target), set_settings (user preferences), set_voice
 (voice profile pointer), delete_account (remove). Nothing outside this module
 edits the manifest, so the sealed-store swap has one seam.
 
+Each of those writers records what it did to backend.audit, after the write
+rather than before it, so the log never claims a change the manifest did not
+take. The call belongs here rather than in the route handlers for the same
+reason the manifest write does: a second caller cannot forget what the sole
+writer already does.
+
 Relative token_file/state_file paths resolve against the repo root. The manifest
 holds per-user PII, so it is git-ignored, written 0600 inside a 0700 directory,
 and lives only on the host (a sealed store subclasses this later for the TEE
@@ -46,6 +52,7 @@ import os
 import shutil
 from pathlib import Path
 
+from backend import audit
 from backend import paths
 from backend.integrations import llm_client
 from backend.integrations.telegram import TelegramTarget, bot_token, operator_target
@@ -379,6 +386,7 @@ def register_account(email, first, last, *, token_file=None, first_aliases=(),
             if existing.get("state_file") and "state_file" not in entry:
                 entry["state_file"] = existing["state_file"]
             accounts[i] = entry
+            outcome = "updated"
             break
     else:
         if len(accounts) >= MAX_ACCOUNTS:
@@ -386,7 +394,9 @@ def register_account(email, first, last, *, token_file=None, first_aliases=(),
                 f"account store is at its {MAX_ACCOUNTS}-account limit"
             )
         accounts.append(entry)
+        outcome = "created"
     _write_manifest(data)
+    audit.record(email, audit.ACCOUNT, outcome)
     return _account_from_entry(entry)
 
 
@@ -403,6 +413,7 @@ def set_plan_status(account_id, status):
             prior = entry.get("plan_status", "active")
             entry["plan_status"] = status
             _write_manifest(data)
+            audit.record(entry["id"], audit.PLAN, status, (f"from:{prior}",))
             return prior
     raise KeyError(f"no account with id {account_id!r}")
 
@@ -427,13 +438,18 @@ def set_telegram(account_id, chat_id=None, token=None, clear=False):
     entry = _entry_for(data, account_id)
     if clear:
         entry["telegram"] = {}
+        changed = ()
     else:
         tg = entry.setdefault("telegram", {})
         if chat_id:
             tg["chat_id"] = str(chat_id)
         if token:
             tg["token"] = token
+        changed = tuple(name for name, given in (("chat_id", chat_id), ("token", token))
+                        if given)
     _write_manifest(data)
+    audit.record(entry["id"], audit.TELEGRAM,
+                 "unlinked" if clear else "linked", changed)
     return _account_from_entry(entry)
 
 
@@ -451,6 +467,7 @@ def set_polar_customer_id(account_id, customer_id):
     entry = _entry_for(data, account_id)
     entry["polar_customer_id"] = str(customer_id)
     _write_manifest(data)
+    audit.record(entry["id"], audit.BILLING_CUSTOMER, "linked")
     return _account_from_entry(entry)
 
 
@@ -459,7 +476,11 @@ def set_voice(account_id, voice_file=None, clear=False):
     Account. Sole writer of voice_file, for the same reason as set_telegram:
     backend.drafting.voice_dna owns the document, this owns the pointer to it.
     clear=True drops the pointer, which puts the account back on the default
-    profile."""
+    profile.
+
+    This is also where an edit to the voice document is audited, rather than in
+    voice_dna: save() and clear() each call this exactly once, so logging here
+    is one row per edit, and logging in both places would be two."""
     assert clear or voice_file, "set_voice needs a voice_file or clear"
     data = _read_manifest()
     assert data is not None, "cannot set a voice profile without an accounts manifest"
@@ -469,6 +490,7 @@ def set_voice(account_id, voice_file=None, clear=False):
     else:
         entry["voice_file"] = str(voice_file)
     _write_manifest(data)
+    audit.record(entry["id"], audit.VOICE, "cleared" if clear else "saved")
     return _account_from_entry(entry)
 
 
@@ -479,7 +501,12 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
 
     pii_analyzer is stored as asked even on a box that cannot run the analyzer:
     availability is a property of the box, the preference is the user's, and
-    pseudonymizer.new_state() decides what actually runs."""
+    pseudonymizer.new_state() decides what actually runs.
+
+    The audit row names the fields that actually changed, not the fields the
+    form submitted: the settings form posts every field on every save, so
+    logging what arrived would say a user changed five things every time they
+    changed one."""
     assert (timezone is not None or auto_schedule is not None
             or inference_provider is not None
             or pii_analyzer is not None
@@ -487,10 +514,6 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
     data = _read_manifest()
     assert data is not None, "cannot set settings without an accounts manifest"
     entry = _entry_for(data, account_id)
-    if timezone is not None:
-        entry["timezone"] = timezone
-    if auto_schedule is not None:
-        entry["auto_schedule"] = bool(auto_schedule)
     if inference_provider is not None:
         provider = llm_client.PROVIDERS.get(inference_provider)
         assert provider is not None, (
@@ -501,12 +524,22 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
             f"provider {provider.name!r} cannot be selected: {provider.key_env} "
             f"is not set on this box"
         )
-        entry["inference_provider"] = provider.name
-    if pii_analyzer is not None:
-        entry["pii_analyzer"] = bool(pii_analyzer)
-    if ban_dashes is not None:
-        entry["ban_dashes"] = bool(ban_dashes)
+        inference_provider = provider.name
+    asked = (
+        ("timezone", timezone, DEFAULT_TIMEZONE),
+        ("auto_schedule", None if auto_schedule is None else bool(auto_schedule), False),
+        ("inference_provider", inference_provider, None),
+        ("pii_analyzer", None if pii_analyzer is None else bool(pii_analyzer), True),
+        ("ban_dashes", None if ban_dashes is None else bool(ban_dashes), True),
+    )
+    changed = tuple(field for field, value, default in asked
+                    if value is not None and entry.get(field, default) != value)
+    for field, value, _ in asked:
+        if value is not None:
+            entry[field] = value
     _write_manifest(data)
+    audit.record(entry["id"], audit.SETTINGS,
+                 "saved" if changed else "unchanged", changed)
     return _account_from_entry(entry)
 
 
@@ -543,7 +576,12 @@ def delete_account(account_id):
     True when an entry was removed.
 
     Not revocation: the token stops being ours but stays valid at Google until
-    the user revokes access in their account settings."""
+    the user revokes access in their account settings.
+
+    The account's audit rows are the one thing that does not go with it. The row
+    saying an account was deleted is worth more than any other row in the table,
+    and a log a user can empty by asking is not a log; backend.audit.RETENTION_DAYS
+    is what bounds how long their address stays there."""
     data = _read_manifest()
     assert data is not None, "cannot delete an account without an accounts manifest"
     aid = (account_id or "").strip().lower()
@@ -553,6 +591,7 @@ def delete_account(account_id):
         return False
     data["accounts"] = remaining
     _write_manifest(data)
+    audit.record(removed[0]["id"], audit.ACCOUNT, "deleted")
     for path in _owned_paths(removed[0]):
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)

@@ -220,7 +220,13 @@ copy.
   Pub/Sub `aud`). Overridable from `.env` via `LETTERLOCK_HOST`,
   `LETTERLOCK_API_HOST`, `LETTERLOCK_ALIAS_HOSTS`.
   `deploy/render_caddyfile.py` renders the Caddy site blocks from it, so the
-  proxy and the app cannot disagree about a host or a port. `COSIGNER_PORT` is
+  proxy and the app cannot disagree about a host or a port. `LOOPBACK` /
+  `TRUSTED_PROXIES` / `upstream()` are the same fact for the peer rather than
+  the port: the address Caddy proxies from, and therefore the only peer whose
+  `X-Forwarded-For` `web_server._source_ip()` will read. Drift between the two
+  means every audit row silently records the proxy's own address instead of a
+  browser's, so `upstream()` asserts the address it renders is one the app
+  trusts. `COSIGNER_PORT` is
   the exception it re-exports rather than defines: it belongs to
   `cosigner/protocol.py`, next to the server that binds it.
 - `cosigner/` — the co-signer, which imports nothing from `backend/` except the
@@ -390,6 +396,29 @@ copy.
   (`cosign verify-attestation`). Until that is checked, the pins say which bytes
   ran, not what was in them, and NEAR is both the image publisher and the
   machine operator.
+- `backend/audit.py` — the web tier's record of what a person changed: one
+  SQLite row per sign-in, setting, document edit, plan flip and deletion, under
+  `state/` at 0600. Deliberately not the co-signer's log and sharing no code
+  with it, because `cosigner/` must not learn who its users are and imports
+  nothing from `backend/` but the Telegram seam; the duplicated connection
+  boilerplate is the price of that boundary, not an oversight. The rows are
+  written by the account mutators in `backend/accounts/account.py` rather than
+  by the route handlers, so a second caller of a manifest writer cannot forget
+  to log — the same reasoning that makes those functions the sole manifest
+  writers. Where the request came from is ambient: `frontend/web_server.py`
+  wraps each request in `audit.request_context()`, so nine mutators do not grow
+  a parameter for a browser they never see, and anything running outside a
+  request (a background voice generation, the billing webhook, the seed) writes
+  a row with no origin, which is the correct answer rather than a gap. Nothing
+  in a row can carry content: `detail` takes a tuple of short name tokens
+  checked against `TOKEN` (`timezone`, `chars:2048`, `provider:deepseek`), so a
+  document body, an address or a chat id does not fit through the parameter at
+  all. `RETENTION_DAYS` is the only bound on how long a departed user's address
+  stays — deleting an account deliberately does not delete its rows, since the
+  row saying the account was deleted is the one most worth keeping — and the
+  prune rides on `record()` behind `PRUNE_INTERVAL` rather than a timer, with
+  `secure_delete` on so a pruned row does not stay readable in the file's free
+  list.
 - `backend/integrations/telegram.py` — `TelegramTarget`, sends, and chat
   linking. `send_telegram(msg, target)` always takes an explicit target;
   `operator_target()` (env) is only for box-level failures, never for a user's

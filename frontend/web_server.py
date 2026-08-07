@@ -53,6 +53,7 @@ import urllib.parse
 import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from backend import audit
 from backend import paths
 from backend import secrets as app_secrets
 from backend import site
@@ -68,7 +69,7 @@ from frontend import session as sess
 
 app_secrets.load()
 
-HOST = os.environ.get("WEB_HOST", "127.0.0.1")
+HOST = os.environ.get("WEB_HOST", site.LOOPBACK)
 PORT = int(os.environ.get("WEB_PORT", str(site.WEB_PORT)))
 REDIRECT_URI = os.environ.get("WEB_OAUTH_REDIRECT_URI", site.oauth_callback_url())
 
@@ -1431,6 +1432,31 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
 
+    def _source_ip(self):
+        """The browser's address, as the proxy in front of us reports it.
+
+        The socket peer is Caddy, not the browser, so the client address is
+        useless on its own. Caddy appends the peer it connected to
+        X-Forwarded-For, which makes the rightmost entry the one it observed and
+        every entry left of it a header the client wrote; only the last is read.
+
+        And only from a peer in site.TRUSTED_PROXIES. An X-Forwarded-For that
+        arrives from anywhere else was written by whoever connected, so
+        believing it would let a client choose what the audit log says about
+        them -- including naming somebody else's address. The header is trusted
+        because of who sent it, never because of how this process happens to be
+        bound: a WEB_HOST that reaches past loopback then costs a wrong log
+        entry rather than a forgeable one."""
+        peer = self.client_address[0] if self.client_address else None
+        if peer not in site.TRUSTED_PROXIES:
+            return peer
+        forwarded = self.headers.get("X-Forwarded-For", "")
+        return forwarded.split(",")[-1].strip() or peer
+
+    def _audit_context(self):
+        return audit.request_context(self._source_ip(),
+                                     self.headers.get("User-Agent"))
+
     def _get_account(self):
         email = sess.get_email(self.headers)
         if not email:
@@ -1460,6 +1486,17 @@ class Handler(BaseHTTPRequestHandler):
         return {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
 
     def do_GET(self):
+        """Every request is served inside an audit request context, so the
+        account mutators that write the rows can name the browser that asked
+        without any of them growing a parameter for it."""
+        with self._audit_context():
+            return self._handle_get()
+
+    def do_POST(self):
+        with self._audit_context():
+            return self._handle_post()
+
+    def _handle_get(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
 
@@ -1510,6 +1547,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 log(f"auth/callback error: {e}")
                 return self._send(500, _page_error(500, "Sign-in failed. Please try again."))
+            audit.record(acct.id, audit.SIGN_IN, "ok")
             session_cookie = sess.make_cookie(acct.id)
             return self._redirect(location, extra=[
                 ("Set-Cookie", sess.clear_state_cookie()),
@@ -1597,13 +1635,15 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._send(404, _page_error(404, "Page not found."))
 
-    def do_POST(self):
+    def _handle_post(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
 
         if path == "/auth/logout":
-            clear = sess.clear_cookie()
-            return self._redirect("/", extra=[("Set-Cookie", clear)])
+            email = sess.get_email(self.headers)
+            if email:
+                audit.record(email, audit.SIGN_OUT, "ok")
+            return self._redirect("/", extra=[("Set-Cookie", sess.clear_cookie())])
 
         if path == "/contact":
             form = self._read_body()
@@ -1744,6 +1784,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, _page_error(400, "Malformed request."))
             confirm = form.get("confirm_email", "").strip().lower()
             if confirm != acct.id.lower():
+                # The one refusal worth a row of its own: deletion is the
+                # destructive path, so a run of failed attempts is a signal
+                # rather than a typo.
+                audit.record(acct.id, audit.ACCOUNT, "refused", ("confirm-mismatch",))
                 return self._send(200, _page_account(acct, error="Email address did not match. Account not deleted."))
             account.delete_account(acct.id)
             _LINK_CODES.pop(acct.id, None)

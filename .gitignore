@@ -15,6 +15,9 @@ token*.json
 *.key
 
 state.json
+# Runtime scratch, server-only, and the web-tier audit log lives here holding
+# addresses and a per-user activity timeline.
+state/
 database/
 wake_queue.jsonl
 *.log
