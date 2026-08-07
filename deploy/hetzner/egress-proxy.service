@@ -1,0 +1,32 @@
+[Unit]
+# Egress allowlist proxy: the one process on this box with unrestricted network
+# access. Every other unit runs under IPAddressDeny=any and reaches the internet
+# only by asking this one for a CONNECT tunnel to a host in
+# backend/egress.py's allowlist.
+#
+# It runs as its own account, not letterlock. The point of the unit is that the
+# process holding unrestricted network access is not the process holding the
+# API keys and the account store, which is the same reason the co-signer has
+# its own account. See egress-proxy.service.d/20-egress-proxy.conf.
+#
+# There is no bypass and there should not be one. If this unit is down the
+# other units cannot reach Google, the inference providers, Telegram or Polar,
+# which is an outage; an automatic fallback to direct connections would be an
+# outage that silently turns the control off instead.
+Description=Letterlock egress allowlist proxy (127.0.0.1:8792)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/letterlock
+ExecStart=/opt/letterlock/venv/bin/python -m backend.daemons.egress_proxy
+Restart=always
+RestartSec=3
+Environment=PATH=/opt/letterlock/venv/bin:/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=egress-proxy
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

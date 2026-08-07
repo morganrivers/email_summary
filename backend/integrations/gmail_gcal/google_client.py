@@ -29,6 +29,17 @@ from backend.integrations.gmail_gcal import oauth_app
 # thread per account costs a discovery parse and removes the whole question.
 _local = threading.local()
 
+# The Google APIs this module ever builds a client for, named here rather than
+# only at the two call sites, because something else now has to enumerate them:
+# googleapiclient takes each API's root URL out of the discovery document
+# bundled in the library, so those two hostnames are the only entries in
+# backend/egress.py that no constant of ours produces. tests/test_egress.py
+# reads the documents for these pairs and fails if a root the client would dial
+# is absent from the allowlist.
+GMAIL = ("gmail", "v1")
+CALENDAR = ("calendar", "v3")
+APIS = (GMAIL, CALENDAR)
+
 
 def credentials_for(account):
     """Credentials that hold no refresh token, only a way to ask for a token.

@@ -8,7 +8,7 @@ nothing about mail.
 
 from __future__ import annotations
 
-from backend.integrations.gmail_gcal.google_client import service
+from backend.integrations.gmail_gcal.google_client import CALENDAR, service
 
 
 MAX_SUMMARY = 200
@@ -26,7 +26,7 @@ WRITE_CALENDAR = "primary"
 
 
 def calendar(account):
-    return service(account, "calendar", "v3")
+    return service(account, *CALENDAR)
 
 
 def list_events(account, start_iso, end_iso, max_results=50, calendar_id="primary"):

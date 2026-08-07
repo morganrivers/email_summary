@@ -62,6 +62,13 @@ WEB_PORT = 8790
 # module. The import runs backend -> cosigner and never the other way, so the
 # co-signer can be deployed without backend/ present.
 COSIGNER_PORT = cosigner_protocol.PORT
+# The egress allowlist proxy (backend/daemons/egress_proxy.py). Caddy is not in
+# front of this one and never will be: it is the only loopback port the units
+# dial *outward*, not one Caddy dials inward. It is listed here anyway, because
+# what this block is really for is being the one place a free port can be
+# picked from -- see the 8788 collision above, which cost an entitlement path
+# before anyone noticed.
+EGRESS_PROXY_PORT = 8792
 
 # The address Caddy proxies from, and so the only peer whose X-Forwarded-For an
 # app server may believe. One fact, two readers: render_caddyfile.py renders the

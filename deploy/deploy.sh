@@ -243,4 +243,17 @@ if grep -vE ' (active|activating)$' <<< "$ACTIVE"; then
     exit 1
 fi
 
+# The egress allowlist is the one control on this box whose absence looks
+# exactly like its presence: IPAddressDeny needs cgroup v2 with BPF, and on a
+# kernel without it systemd logs a line and starts the unit anyway, so every
+# service comes up healthy with the whole internet reachable. A green restart
+# is not evidence, so the deploy asks the running box directly. Failing here
+# does not roll anything back -- the units are up and working -- but it is the
+# difference between a control and a config file that describes one.
+echo "==> Verifying egress enforcement"
+if ! remote "cd $REMOTE_DIR && venv/bin/python -m deploy.check_egress"; then
+    echo "==> Egress allowlist is NOT being enforced; see above" >&2
+    exit 1
+fi
+
 echo "==> Done"

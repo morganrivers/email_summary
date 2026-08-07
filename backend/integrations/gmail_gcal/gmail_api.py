@@ -19,7 +19,7 @@ import sys
 import requests
 from googleapiclient.errors import HttpError
 
-from backend.integrations.gmail_gcal.google_client import service
+from backend.integrations.gmail_gcal.google_client import GMAIL, service
 
 
 PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
@@ -54,7 +54,7 @@ def log(msg):
 
 
 def gmail(account):
-    return service(account, "gmail", "v1")
+    return service(account, *GMAIL)
 
 
 def profile_address(access_token):
