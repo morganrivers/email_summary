@@ -57,6 +57,16 @@ GOOGLE_CLIENT_SECRET_ENV = "GOOGLE_OAUTH_CLIENT_SECRET"
 # job, and HMAC-ing a cookie with one is that module's.
 SESSION_SECRET_ENV = "SESSION_SECRET"
 
+# The key that signed the cookies minted before the last rotation. Accepted at
+# verification, never used to sign. A single-valued signing key cannot be
+# rotated without signing every user out in the same second, which is how a key
+# ends up never rotated at all; naming the outgoing value here lets it keep
+# opening what it already signed while the new one takes over minting. Optional
+# by design, so ``session_configured()`` asks only for the current key: a box
+# that has never rotated has no previous one, and dropping the variable is what
+# finally retires the sessions that key signed.
+SESSION_SECRET_PREVIOUS_ENV = "SESSION_SECRET_PREVIOUS"
+
 _loaded = False
 _from_file = set()
 

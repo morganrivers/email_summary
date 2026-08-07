@@ -1759,7 +1759,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    log(f"listening on {HOST}:{PORT}, redirect_uri={REDIRECT_URI}")
+    log(f"listening on {HOST}:{PORT}, redirect_uri={REDIRECT_URI} "
+        f"{sess.describe_keys()}")
     server.serve_forever()
 
 

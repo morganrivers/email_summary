@@ -1,9 +1,16 @@
 """HMAC-signed cookies: the session, and the OAuth state (Track U3).
 
-Both are `{value}:{iat}:{signature}`, where the signature is
-HMAC-SHA256(SESSION_SECRET, "{purpose}:{value}:{iat}"). The purpose is inside
-the signed string, so a value minted for one cookie cannot be presented as the
+Both are `{kid}:{value}:{iat}:{signature}`, where the signature is
+HMAC-SHA256(key, "{purpose}:{kid}:{value}:{iat}"). The purpose is inside the
+signed string, so a value minted for one cookie cannot be presented as the
 other even though one key signs both.
+
+The `kid` names which key signed it, so more than one key can be live at once
+and verification still has exactly one key to try. That is what makes
+SESSION_SECRET rotatable: the outgoing value moves to
+SESSION_SECRET_PREVIOUS, the new one mints from then on, and nobody is signed
+out at the moment of the restart. Without it, rotation logs every user out
+simultaneously, which is why it would never be done.
 
 The session stores the account email. Everything else is looked up via
 account.py on each request.
@@ -18,6 +25,7 @@ the second tab silently invalidated the first.
 import hashlib
 import hmac
 import http.cookies
+import itertools
 import secrets as secrets_mod
 import time
 
@@ -34,65 +42,133 @@ STATE_PURPOSE = "oauth-state"
 # to "state mismatch (possible CSRF)", which reads as an attack and is not one.
 STATE_TTL = 1800
 
-_secret = None
+# The current key first, then the outgoing one. Verification accepts both;
+# only the first ever signs. Both names are owned by backend/secrets.py, so
+# this module still has no opinion about where a secret comes from: whether it
+# was injected into an attested CVM or read from .env is one question, answered
+# in one place, and the boot gate and the deploy preflight ask it about the
+# current key too.
+KEY_ENVS = (secrets.SESSION_SECRET_ENV, secrets.SESSION_SECRET_PREVIOUS_ENV)
+
+_keys = None
 
 
-def _get_secret():
-    """The signing key, read through backend.secrets so this module never has an
-    opinion about where a secret comes from: whether it was injected into an
-    attested CVM or read from .env is one question, answered in one place, and
-    the boot gate and the deploy preflight ask it about this value too."""
-    global _secret
-    if _secret is None:
-        _secret = secrets.require(secrets.SESSION_SECRET_ENV).encode()
-    return _secret
+def _kid(key):
+    """A key's short label, cut from `secrets.fingerprint` so the kid in a
+    cookie and the fingerprint in the startup line name the same key: read one
+    off a browser and the other out of the journal and you can say which key
+    signed a session without either place holding the key.
+
+    The algorithm prefix is dropped because `:` separates the cookie's fields.
+    Publishing a digest of the key is not a new exposure: every cookie already
+    carries an HMAC over plaintext the holder can see, so an offline guess at a
+    weak key was already checkable."""
+    algo, _, digest = secrets.fingerprint(key).partition(":")
+    assert digest and ":" not in digest, f"{algo} label is unusable as a kid"
+    return digest
 
 
-def _mac(purpose, payload):
-    """HMAC over one value, for one purpose.
+def _keyring():
+    """Every key a cookie may be signed under, current first, each with its kid.
+
+    Read once per process, like every other secret here. A previous key is
+    accepted only if it is actually a different value, so a copy-paste that
+    leaves both variables equal is one key rather than two."""
+    global _keys
+    if _keys is None:
+        current = secrets.require(secrets.SESSION_SECRET_ENV).encode()
+        previous = (secrets.get(secrets.SESSION_SECRET_PREVIOUS_ENV) or "").encode()
+        live = [current] + ([previous] if previous and previous != current else [])
+        _keys = tuple((_kid(key), key) for key in live)
+        assert len({kid for kid, _ in _keys}) == len(_keys), \
+            "two signing keys share a key id"
+    return _keys
+
+
+def _key_for(kid):
+    """The key a cookie names, or None if it names one this process does not
+    hold -- an unknown kid is the ordinary shape of a session signed under a
+    key that has since been retired.
+
+    Every key is compared even after a match, so the work does not depend on
+    which key was named or on whether one was."""
+    found = None
+    for known, key in _keyring():
+        if hmac.compare_digest(known, kid):
+            found = key
+    return found
+
+
+def _mac(key, purpose, payload):
+    """HMAC over one value, for one purpose, under one key.
 
     The purpose is inside the signed string rather than beside it, so a value
     minted as one kind of token cannot be presented as the other: the same key
-    signs both a session and an OAuth state, and both are `<value>:<iat>:<sig>`
-    on the wire. Without domain separation an emailless session cookie and a
-    state would be interchangeable to the verifier."""
-    return hmac.new(_get_secret(), f"{purpose}:{payload}".encode(),
+    signs both a session and an OAuth state, and both are
+    `<kid>:<value>:<iat>:<sig>` on the wire. Without domain separation an
+    emailless session cookie and a state would be interchangeable to the
+    verifier. The kid is signed too, so which key was meant is not something a
+    holder can edit."""
+    assert key, "_mac needs a key"
+    return hmac.new(key, f"{purpose}:{payload}".encode(),
                     hashlib.sha256).hexdigest()
 
 
 def _signed(purpose, value, iat):
-    return f"{value}:{iat}:{_mac(purpose, f'{value}:{iat}')}"
+    """`value` signed under the current key. Nothing mints under a previous
+    one: it exists to finish out the sessions it already signed."""
+    kid, key = _keyring()[0]
+    payload = f"{kid}:{value}:{iat}"
+    return f"{payload}:{_mac(key, purpose, payload)}"
 
 
 def _open_signed(purpose, raw, ttl):
-    """The value out of a `<value>:<iat>:<sig>` string, or None if it is not one
-    we signed or is older than `ttl`."""
+    """The value out of a `<kid>:<value>:<iat>:<sig>` string, or None if it is
+    not one we signed or is older than `ttl`.
+
+    An unknown kid is refused by the same comparison a bad signature is, not by
+    an early return, so a probe cannot learn which key ids this process holds by
+    timing the answer."""
     if not raw:
         return None
     try:
         parts = raw.split(":")
-        if len(parts) < 3:
+        if len(parts) < 4:
             return None
-        value = ":".join(parts[:-2])
+        kid = parts[0]
+        value = ":".join(parts[1:-2])
         iat = int(parts[-2])
         sig = parts[-1]
     except (ValueError, IndexError):
         return None
     if int(time.time()) - iat > ttl:
         return None
-    if not hmac.compare_digest(sig, _mac(purpose, f"{value}:{iat}")):
+    key = _key_for(kid)
+    signed = hmac.compare_digest(
+        sig, _mac(key or _keyring()[0][1], purpose, f"{kid}:{value}:{iat}"))
+    if key is None or not signed:
         return None
     return value
 
 
-def _sign(email, iat):
-    return _mac(SESSION_PURPOSE, f"{email}:{iat}")
+def describe_keys():
+    """Which signing keys this process captured, for the startup line.
+
+    A service reads its secrets once and never rereads them, so a `.env` edited
+    under a running web server is invisible until something downstream breaks --
+    here, that break is every user being signed out. Printing the pair says
+    which keys are live, and the kid in any cookie is the digest half of one of
+    these, so an unexpected sign-out is diagnosable from a log line and a
+    browser."""
+    captured = [key for _, key in _keyring()]
+    assert len(captured) <= len(KEY_ENVS), "more keys than names for them"
+    return " ".join(
+        f"{name}={secrets.fingerprint(key)}"
+        for name, key in itertools.zip_longest(KEY_ENVS, captured))
 
 
 def make_cookie(email):
-    iat = int(time.time())
-    sig = _sign(email, iat)
-    value = f"{email}:{iat}:{sig}"
+    value = _signed(SESSION_PURPOSE, email, int(time.time()))
     return (
         f"{SESSION_COOKIE}={value}; HttpOnly; Path=/; Max-Age={SESSION_TTL}; SameSite=Lax; Secure"
     )
@@ -122,12 +198,16 @@ def get_email(headers):
 
 # --- the OAuth state ------------------------------------------------------
 #
-# The state is signed the way the session is, with the same key and the same
-# `<value>:<iat>:<sig>` shape, because it answers the same question: did this
-# box mint this, and how long ago. What it adds is room for more than one at a
-# time. A single-slot cookie meant a second sign-in tab overwrote the first
-# tab's state, so finishing the older consent failed as "state mismatch
+# The state is signed the way the session is, with the same keyring and the
+# same `<kid>:<value>:<iat>:<sig>` shape, because it answers the same question:
+# did this box mint this, and how long ago. What it adds is room for more than
+# one at a time. A single-slot cookie meant a second sign-in tab overwrote the
+# first tab's state, so finishing the older consent failed as "state mismatch
 # (possible CSRF)" -- an alarming way to say the user opened two tabs.
+#
+# It inherits rotation from that shape, and needs to: a restart lands in the
+# middle of somebody's consent round trip, and a state minted seconds before it
+# must still come back as ours rather than as the same CSRF alarm.
 #
 # Each state is still verified individually, so accepting several does not
 # weaken the check: an attacker who cannot sign one cannot sign any of the
