@@ -192,6 +192,7 @@ def resolve(account=None):
 
 
 def _traced(client):
+    # TODO: will be removed when move to production... or switch to langfuse and eat the cost?
     if not LANGSMITH_ENABLED:
         return client
     ls_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")

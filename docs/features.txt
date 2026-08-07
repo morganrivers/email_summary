@@ -1,0 +1,3 @@
+I want to add a feature for drafting auto-fix on a special #fixmyemail string. that string will be detected and trigger loading of the draft, and an agentic feature will commence which keeps the meaning but rewrites sentences to be grammatically correct. Users can specify their own hash tags and relevant instructions
+
+Another feature: images. All the way through the pipeline.

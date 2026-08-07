@@ -48,7 +48,7 @@ def fetch_todays_emails_and_events(account) -> dict:
     return mailbox.fetch_daily(account)
 
 
-# ── DeepSeek ─────────────────────────────────────────────────────────────────
+# ── Inference Provider (Deepseek or Near AI) ─────────────────────────────────────────────────────────────────
 
 def _prompt_text():
     """The operator's summary prompt when the box has one, else a built-in.

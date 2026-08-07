@@ -31,3 +31,5 @@ venv/
 .venv/
 dist/
 .DS_Store
+
+*.dtmp

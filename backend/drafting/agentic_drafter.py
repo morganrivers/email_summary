@@ -102,9 +102,8 @@ def _strip_preamble(body):
     return body.strip()
 
 
+# TODO: this will be removed once we head to production; we're not there yet though.
 _LS_CLIENT = None
-
-
 def _get_ls_client():
     global _LS_CLIENT
     if not LANGSMITH_ENABLED:
