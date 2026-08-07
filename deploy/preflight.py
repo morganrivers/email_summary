@@ -102,6 +102,21 @@ def _definitely_absent(path):
         return False
 
 
+def _egress_allowlist_derivable():
+    """The proxy computes its allowlist at startup from the modules that name
+    the hosts, so an import that broke one of them is an empty or short list and
+    an empty list is every unit offline. Checked here rather than left to the
+    assert in main() because the sandbox this deploy installs points every other
+    unit at this proxy: it starting is the precondition for the rest of the box
+    having a network at all."""
+    from backend import egress
+
+    allowed = egress.hosts()
+    if not allowed:
+        return "the egress allowlist came back empty; no unit could reach anything"
+    return None
+
+
 def _cosigner_configured():
     """The co-signer needs its two sealed credentials on disk and an
     attestation allowlist it can decide with.
@@ -129,6 +144,7 @@ def _cosigner_configured():
 # fail closed in the enclave, for the same stated reason.
 CONFIG_CHECKS = {
     "cosigner.server": _cosigner_configured,
+    "backend.daemons.egress_proxy": _egress_allowlist_derivable,
     "backend.billing.billing_webhook": secrets.polar_configured,
     "backend.billing.billing_poller": secrets.polar_api_configured,
     "frontend.web_server": _web_configured,

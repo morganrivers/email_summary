@@ -82,6 +82,29 @@ def volume_secrets():
     return tuple(p for p in (paths.ENV_FILE, oauth_app.keys_path()) if p.exists())
 
 
+def _file_values():
+    """``.env`` as a dict, empty when this process is not allowed to read it.
+
+    Not every unit on this box is meant to. The egress proxy runs as its own
+    account precisely so that the process with unrestricted network access is
+    not the process holding the API keys, and it reaches the source through a
+    supplementary group that stops at the 0600 files. It still imports modules
+    that call ``load()`` on the way to a constant, and a ``PermissionError``
+    raised out of one of those imports would take the unit down for succeeding
+    at what it was configured to do.
+
+    Absent and forbidden are the same answer here, and deliberately so: both
+    mean this process gets its configuration from the environment or not at
+    all. They are not the same everywhere -- ``preflight._definitely_absent``
+    refuses to read a permission error as "missing" for exactly the opposite
+    reason -- because that one is judging another unit's provisioning, and this
+    one is describing its own."""
+    try:
+        return dotenv_values(paths.ENV_FILE)
+    except PermissionError:
+        return {}
+
+
 def load():
     """Populate the environment from ``.env`` once, outside a TEE.
 
@@ -94,7 +117,7 @@ def load():
     _loaded = True
     if tee_required():
         return
-    for name, value in dotenv_values(paths.ENV_FILE).items():
+    for name, value in _file_values().items():
         assert name, f"unnamed entry in {paths.ENV_FILE}"
         if value is None or name in os.environ:
             continue

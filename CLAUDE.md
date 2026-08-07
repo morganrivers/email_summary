@@ -181,6 +181,20 @@ is what protects it from `--delete-after`.
   `LoadCredentialEncrypted=` (sealed to the host TPM) and must be provisioned by
   hand once — see the header of `deploy/hetzner/cosigner.service`. Design and
   sequencing: `docs/plan_token_custody.md`.
+- `backend/daemons/egress_proxy.py` — the egress allowlist proxy run by the
+  `egress-proxy` service (`127.0.0.1:8792`, not behind Caddy: it is the one
+  loopback port the units dial outward). An HTTP CONNECT proxy, and the only
+  process on the box with unrestricted network access. Every other unit runs
+  under `IPAddressDeny=any` / `IPAddressAllow=localhost` with its HTTP clients
+  pointed here, so the machine's reachable destination set is exactly
+  `backend/egress.py`. Runs as `egress`, its own account, for the reason the
+  co-signer runs as `cosigner`: the process holding the network must not be the
+  process holding the API keys. Like the co-signer it is a hard dependency with
+  no bypass — a fallback to direct connections would be an outage that silently
+  turns the control off. Written in-repo rather than installed (tinyproxy,
+  squid) because it faces an attacker who already has code execution and is the
+  one process whose compromise returns the whole privilege, so a memory-unsafe
+  C parser is the wrong thing to put there.
 
 Code changes take effect when the systemd services restart, which `deploy/deploy.sh`
 does via `systemctl restart`. The daemon also honors `restart.flag` (it exits
@@ -223,6 +237,27 @@ copy.
   proxy and the app cannot disagree about a host or a port. `COSIGNER_PORT` is
   the exception it re-exports rather than defines: it belongs to
   `cosigner/protocol.py`, next to the server that binds it.
+- `backend/egress.py` — every hostname anything on this box may connect to, and
+  the check that decides one connection. Derived, not typed: each entry comes
+  from the module that already names the host for its own reasons
+  (`llm_client.PROVIDERS`, `oauth_app`, `telegram.API_ROOT`, `polar_api`'s two
+  bases, both TDX allowlists' `pccs_url`, `site.COSIGNER_HOST`), so adding a
+  provider cannot leave the allowlist behind and there is nothing here to forget
+  to edit. Exact matches only — no wildcards, no suffix rules — because a suffix
+  rule for `near.ai` is what permits an attacker's `evil.near.ai`. Google's two
+  API roots are the one pair no constant of ours produces (googleapiclient reads
+  them from a discovery document bundled in the library); `GOOGLE_API_HOSTS`
+  holds them and `tests/test_egress.py` reads those documents for
+  `google_client.APIS` and fails if one is missing. The list holds names and no
+  addresses, so no bare IP is reachable through the proxy at all.
+
+  What it does not defend: the drafter's tools (`search_emails`,
+  `get_calendar_events`, `get_email_thread`) fetch no URLs, so prompt injection
+  in an email body could not open a connection before this existed and cannot
+  now. This is for the post-compromise case and for a dependency that ships a
+  release which phones home. `deploy/check_egress.py` is what proves it is on:
+  `IPAddressDeny=` needs cgroup v2 with BPF, and without it systemd logs a line
+  and starts the unit anyway, so a green deploy is not evidence.
 - `cosigner/` — the co-signer, which imports nothing from `backend/` except the
   single Telegram seam in `alerts.py`, so it can be moved to its own box under
   its own operator. The dependency points the other way: `backend/site.py` and
