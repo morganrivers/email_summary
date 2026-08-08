@@ -36,7 +36,10 @@ from cosigner import policy
 from cosigner import protocol
 from cosigner import retention
 
-UID = "alice@example.com"
+# What the co-signer is given to call an account by: an opaque handle the
+# enclave minted, never an address. This service does not parse it -- which is
+# exactly why it was able to be an address for so long without anything failing.
+UID = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
 SEALED = b"\x01" * 12 + b"pretend this is AES-GCM output from the enclave"
 
 
@@ -67,6 +70,14 @@ def cosigner(tmp_path, monkeypatch):
                 return self.post(protocol.UNWRAP_AND_SIGN_PATH, uid=uid,
                                  outer=protocol.b64(outer), htm=htm, htu=htu, nonce=nonce)
 
+            def unwrap_data(self, uid=UID, outer=None):
+                return self.post(protocol.UNWRAP_PATH, uid=uid,
+                                 outer=protocol.b64(outer))
+
+            def rewrap(self, uid=UID, outer=None):
+                return self.post(protocol.REWRAP_PATH, uid=uid,
+                                 outer=protocol.b64(outer))
+
             def sign(self, htm="POST", htu=protocol.TOKEN_ENDPOINT, nonce=None, uid=None):
                 return self.post(protocol.SIGN_DPOP_PATH, htm=htm, htu=htu, nonce=nonce,
                                  uid=uid)
@@ -95,7 +106,7 @@ def test_outer_is_bound_to_the_uid(cosigner):
     """The uid is the AAD, so one user's record cannot be replayed under
     another's id to spend their budget or muddy their audit line."""
     outer = _outer(cosigner)
-    resp = cosigner.unwrap(uid="mallory@example.com", outer=outer)
+    resp = cosigner.unwrap(uid="f" * 32, outer=outer)
     assert resp.status_code == 400
     assert "did not open" in resp.json()[protocol.F_ERROR]
 
@@ -238,7 +249,7 @@ def test_a_sweep_across_accounts_is_refused(cosigner, monkeypatch):
     across the whole user base. Nobody exceeds their own ceiling, so breadth is
     the only thing that sees it."""
     monkeypatch.setenv("COSIGNER_RATE_DISTINCT_UIDS", "2")
-    uids = ["a@example.com", "b@example.com", "c@example.com"]
+    uids = ["a" * 32, "b" * 32, "c" * 32]
     outers = {uid: _outer(cosigner, uid=uid) for uid in uids}
     assert cosigner.unwrap(uid=uids[0], outer=outers[uids[0]]).status_code == 200
     assert cosigner.unwrap(uid=uids[1], outer=outers[uids[1]]).status_code == 200
@@ -253,11 +264,11 @@ def test_the_sweep_limit_does_not_refuse_an_account_already_counted(cosigner, mo
     """An account already inside the window has contributed its uid to the count
     already, so refusing it narrows no breach and only stops that user's mail."""
     monkeypatch.setenv("COSIGNER_RATE_DISTINCT_UIDS", "1")
-    mine = _outer(cosigner, uid="a@example.com")
-    theirs = _outer(cosigner, uid="b@example.com")
-    assert cosigner.unwrap(uid="a@example.com", outer=mine).status_code == 200
-    assert cosigner.unwrap(uid="b@example.com", outer=theirs).status_code == 429
-    assert cosigner.unwrap(uid="a@example.com", outer=mine).status_code == 200
+    mine = _outer(cosigner, uid="a" * 32)
+    theirs = _outer(cosigner, uid="b" * 32)
+    assert cosigner.unwrap(uid="a" * 32, outer=mine).status_code == 200
+    assert cosigner.unwrap(uid="b" * 32, outer=theirs).status_code == 429
+    assert cosigner.unwrap(uid="a" * 32, outer=mine).status_code == 200
 
 
 def test_a_sweep_alerts_once_rather_than_once_per_account(cosigner, monkeypatch):
@@ -265,7 +276,7 @@ def test_a_sweep_alerts_once_rather_than_once_per_account(cosigner, monkeypatch)
     and a sweep produces one refusal per account it reaches for."""
     monkeypatch.setenv("COSIGNER_RATE_DISTINCT_UIDS", "1")
     outers = {uid: _outer(cosigner, uid=uid)
-              for uid in ("a@example.com", "b@example.com", "c@example.com")}
+              for uid in ("a" * 32, "b" * 32, "c" * 32)}
     for uid, outer in outers.items():
         cosigner.unwrap(uid=uid, outer=outer)
 
@@ -277,12 +288,12 @@ def test_aggregate_ceiling_bounds_a_live_breach(cosigner, monkeypatch):
     """The number that decides how long draining the user base takes."""
     monkeypatch.setenv("COSIGNER_RATE_PER_USER_HOUR", "100")
     monkeypatch.setenv("COSIGNER_RATE_TOTAL_HOUR", "2")
-    first = _outer(cosigner, uid="a@example.com")
-    second = _outer(cosigner, uid="b@example.com")
-    third = _outer(cosigner, uid="c@example.com")
-    assert cosigner.unwrap(uid="a@example.com", outer=first).status_code == 200
-    assert cosigner.unwrap(uid="b@example.com", outer=second).status_code == 200
-    resp = cosigner.unwrap(uid="c@example.com", outer=third)
+    first = _outer(cosigner, uid="a" * 32)
+    second = _outer(cosigner, uid="b" * 32)
+    third = _outer(cosigner, uid="c" * 32)
+    assert cosigner.unwrap(uid="a" * 32, outer=first).status_code == 200
+    assert cosigner.unwrap(uid="b" * 32, outer=second).status_code == 200
+    resp = cosigner.unwrap(uid="c" * 32, outer=third)
     assert resp.status_code == 429
     assert "aggregate ceiling" in resp.json()[protocol.F_ERROR]
 
@@ -398,6 +409,134 @@ def test_unknown_endpoint_and_oversized_body(cosigner):
     assert cosigner.wrap(inner=b"x" * protocol.MAX_BODY).status_code == 413
 
 
+# --- the second unwrap, and the sweep rule that spans both ----------------
+
+def test_reading_documents_releases_the_key_without_a_proof(cosigner):
+    """`/unwrap` exists so rendering a settings page does not mint a DPoP proof
+    nobody asked for. Same ciphertext out, no capability attached."""
+    outer = _outer(cosigner)
+    resp = cosigner.unwrap_data(outer=outer)
+    assert resp.status_code == 200, resp.text
+    assert protocol.unb64(resp.json()[protocol.F_INNER]) == SEALED
+    assert protocol.F_PROOF not in resp.json(), (
+        "a proof was minted for a request that did not need one"
+    )
+    assert audit.recent(1)[0]["action"] == policy.ACTION_UNWRAP_DATA, (
+        "a document read was logged as a mail refresh"
+    )
+
+
+def test_a_sweep_cannot_be_halved_across_the_two_unwrap_paths(cosigner, monkeypatch):
+    """Two ways to obtain an account's key, so the breadth rule counts them as
+    one. Metered separately, an attacker takes half their accounts down each
+    path and stays under both ceilings while touching twice as many people."""
+    monkeypatch.setenv("COSIGNER_RATE_DISTINCT_UIDS", "2")
+    uids = ["a" * 32, "b" * 32, "c" * 32]
+    outers = {uid: _outer(cosigner, uid=uid) for uid in uids}
+
+    assert cosigner.unwrap(uid=uids[0], outer=outers[uids[0]]).status_code == 200
+    assert cosigner.unwrap_data(uid=uids[1], outer=outers[uids[1]]).status_code == 200
+
+    for third in (cosigner.unwrap(uid=uids[2], outer=outers[uids[2]]),
+                  cosigner.unwrap_data(uid=uids[2], outer=outers[uids[2]])):
+        assert third.status_code == 429
+        assert policy.SWEEP_REASON in third.json()[protocol.F_ERROR]
+
+
+# --- rotating the outer key -----------------------------------------------
+
+def test_rewrap_moves_a_record_and_keeps_what_it_holds(cosigner):
+    """The rotation primitive. What goes in opens to the enclave's sealed blob
+    and what comes back still does; the record itself is a different value,
+    because it is under a different key."""
+    outer = _outer(cosigner)
+    resp = cosigner.rewrap(outer=outer)
+    assert resp.status_code == 200, resp.text
+    fresh = protocol.unb64(resp.json()[protocol.F_OUTER])
+    assert fresh != outer
+    assert SEALED not in fresh
+
+    reread = cosigner.unwrap(outer=fresh)
+    assert reread.status_code == 200, reread.text
+    assert protocol.unb64(reread.json()[protocol.F_INNER]) == SEALED
+
+
+def test_rewrap_cannot_introduce_a_record_for_an_account_that_had_none(cosigner):
+    """Why `/rewrap` needs no wrap-once rule of its own: it takes an `outer`
+    rather than an `inner`, and the only way to hold one that opens is to have
+    been given it. An attacker who can call this endpoint can move ciphertext
+    they already had onto a new key, and nothing else."""
+    resp = cosigner.rewrap(uid="e" * 32, outer=SEALED)
+    assert resp.status_code == 400
+    assert "did not open" in resp.json()[protocol.F_ERROR]
+
+
+def test_rewrap_is_metered_and_logged_like_everything_else(cosigner, monkeypatch):
+    monkeypatch.setenv("COSIGNER_RATE_REWRAP_HOUR", "1")
+    outer = _outer(cosigner)
+    assert cosigner.rewrap(outer=outer).status_code == 200
+    refused = cosigner.rewrap(outer=outer)
+    assert refused.status_code == 429
+    assert "rewrap ceiling" in refused.json()[protocol.F_ERROR]
+    assert audit.recent(1)[0]["action"] == policy.ACTION_REWRAP
+
+
+def test_rewrap_spends_no_unwrap_budget(cosigner, monkeypatch):
+    """A rotation touches every account by design, which is the exact shape the
+    sweep rule calls an incident. It must not trip that rule, and it must not
+    eat the budget mail processing needs."""
+    monkeypatch.setenv("COSIGNER_RATE_PER_USER_HOUR", "1")
+    monkeypatch.setenv("COSIGNER_RATE_DISTINCT_UIDS", "1")
+    outer = _outer(cosigner)
+    for _ in range(5):
+        outer = protocol.unb64(
+            cosigner.rewrap(outer=outer).json()[protocol.F_OUTER])
+    assert cosigner.unwrap(outer=outer).status_code == 200
+
+
+def test_a_record_survives_the_key_version_it_was_written_under(cosigner, monkeypatch):
+    """The asymmetry that made the rotation comment a lie: the inner layer could
+    read an old version and the outer could not, so bumping `KEY_VERSION` made
+    every stored record unopenable and no re-wrap routine existed to move them.
+    Now the version travels with the record, an old one still opens, and
+    `/rewrap` is what moves it."""
+    from cosigner import keys
+
+    outer_v1 = _outer(cosigner)
+    assert outer_v1[0] == 1
+
+    keys.write_dev_credentials(keys.credentials_dir(), version=2)
+    monkeypatch.setattr(keys, "KEY_VERSION", 2)
+    keys._CACHE.clear()
+    assert keys.known_versions() == (2, 1)
+
+    reread = cosigner.unwrap(outer=outer_v1)
+    assert reread.status_code == 200, reread.text
+    assert protocol.unb64(reread.json()[protocol.F_INNER]) == SEALED
+
+    outer_v2 = protocol.unb64(
+        cosigner.rewrap(outer=outer_v1).json()[protocol.F_OUTER])
+    assert outer_v2[0] == 2
+    assert protocol.unb64(
+        cosigner.unwrap(outer=outer_v2).json()[protocol.F_INNER]) == SEALED
+
+
+def test_a_retired_key_version_fails_closed(cosigner, monkeypatch):
+    """Deleting the old credential is the last step of a rotation, and it has to
+    be a hard stop for anything still on that version rather than a silent
+    fallback to whichever key happens to be loadable."""
+    from cosigner import keys
+
+    outer_v1 = _outer(cosigner)
+    keys.write_dev_credentials(keys.credentials_dir(), version=2)
+    monkeypatch.setattr(keys, "KEY_VERSION", 2)
+    (keys.credentials_dir() / keys.master_name(1)).unlink()
+    keys._CACHE.clear()
+
+    assert keys.known_versions() == (2,)
+    assert cosigner.unwrap(outer=outer_v1).status_code == 400
+
+
 # --- retention ------------------------------------------------------------
 
 @pytest.fixture
@@ -444,12 +583,12 @@ def test_prune_leaves_no_readable_row_behind(log):
     """A deleted row still sitting in the file's free list is a row that was not
     deleted, which for this table means an activity timeline outliving the
     period it was kept for."""
-    _aged("someone@example.com", policy.ACTION_UNWRAP, audit.DENY, days_ago=400)
-    assert b"someone@example.com" in audit.db_path().read_bytes()
+    _aged("d" * 32, policy.ACTION_UNWRAP, audit.DENY, days_ago=400)
+    assert (b"d" * 32) in audit.db_path().read_bytes()
 
     assert retention.prune() == (0, 1)
     assert audit.connect().execute("PRAGMA freelist_count").fetchone()[0] == 0
-    assert b"someone@example.com" not in audit.db_path().read_bytes()
+    assert (b"d" * 32) not in audit.db_path().read_bytes()
 
 
 def test_prune_never_touches_a_row_a_limiter_still_counts(log, monkeypatch):

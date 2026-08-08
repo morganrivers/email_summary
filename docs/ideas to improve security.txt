@@ -116,11 +116,6 @@ Another question:
   - 
 
 
-
-
-
-========
-
 please confirm these were all fixed or whether things are remaining.
 
 this was the original complaint:
@@ -563,7 +558,17 @@ plaintext.
 
 check it has all been fixed (look at the code, not the plan). let me know about caveats or additional security issues you spot.
 
-====
+=========================
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -592,7 +597,7 @@ in all honesty, I recently completed a thesis which used a codebase to assess th
 
 
 
-=====
+==========================
 
 separate request: chek usernames and passwords, emails, etc can't contain escape chars or code operation. as well as edited voice dna. so ensure the surfaces are not able to get into the system
 
@@ -604,26 +609,26 @@ next request: check the web server. it should have a few entry points, and those
 next request: interfaces. make the attack surface small. modules talk to each other over clearly defined interfaces, increasing the between-module security of the code. interpret this in a way that would most improve security of the system
 
 
-===
+========================
 
 
 make sure public calendar editing is not allowed. that is a risk to everyone: if an attacker gets access to other emails, then they could put it on the public network
 
 
-===
+========================
 
 make sure the AI agent cannot format emails: imagine it writing in 0 font, or hiding an exfiltration message with user data in white text. a user unknowingly sends a reply, containing the data within their own email. it would be worth an extra call to the llm to assess whether such subversion or similar (also with calendars) is occuring within the app. 
 
 I think, alerting a user and refusing to draft or reply if hidden information intended to be hidden from the user is in the message, and if any request to keep information hidden from the user is in the message as well.
 
-===
+========================
 
 i'm interested in AWS KMS. It's simply keys: user data doesn't go to US server. and i understand it's only 1 euro per key per month?
 Then if a user is paying 20 euros a month, it's a 5% tax. I don't have a sense yet if it's worth that in the long run, but i would say, given that it's a per-user cost and that I'm personally willing to have the 1 euro a month cost 
 i don't know if shared tenancy, in that sense, is actually buying significant security compared to my current setup, but i would say if it is a significant security, and my setup doesn't worry about key security and instead is responsible only for worrying about leaking of email data, I'm in a better position overall with regards to data security.
 
 
-====
+=========================
 
 
 regarding the issue of isolation, I think the code is in a rather sad state. can we do partitions? i mean, the web server is literally on the same place as the user keys. the interface should be extremely limited between the access the web server has to anything else in the system.
@@ -638,13 +643,13 @@ i would note: telegram messages can't currently communicate with the bot. that's
 calendar is also one-way
 
 
-====
+=========================
 
 can email drafts contain macros or any form of executable code? let's imagine html drafting: i imagine, it might. I don't know the scope, but potentially the user's browser, so that's a bit concerning. so what do you think? disable html browsing?
 
 
 
-====
+=========================
 
 okay, another issue: is spacy vulnerability free and frequently updated?
 I met someone working there... and I recallthe company was shut down or potentially purchased? what happened?
@@ -654,7 +659,7 @@ if we enable the masking, spacy and presidio import matters more right?
 
 do any inparticular packages importa ton of dependencies that might not be woeth there weight or be already performed by another package?
 
-====
+=========================
 
 This is a bug: this code is specifically formulated with my own PII. the production system needs to use the users pii (which to state the obvious, must not be present in the code itself which will be open source!)
 
@@ -1134,18 +1139,8 @@ def restore(text, state):
 
 
 
-=====
+==========================
 
-I'm interested in dependency trees and AST. In particular: any code loaded into the enclave is a liability. not only that, if there is an updated package that changes a line of code which is never even potentially used, then that was a useless update.
-I am just curious: how much trimming of code can we do? One aspecto f security is simply removing all the usefless stuff so it can't be called nefariously, and also it might expose functions we don't like.
-
-for that to be the case, we need to make sure the tests actually execute all the python code. is it possible to make sure we have end-to-end coverage for all relevant scenarios we programmed for? but we should consider all the scenarios and ensure they're valid, fixing up bad code as we go. manual inspectio of the functions before removal would be helpfl, before you remove let me know what they are (or summarize if too many to go one-by-one)
-
-one example: we are not loading presidio, so that one would maybe not be exersized, but i don't want to get rid of those functions yet.
-i would be interested in you telling me whether vulture, or this code, or amodified verson of this code () or both, or another option, would be appropriate?
-/home/dmrivers/Code/forecasting_thesis_code_backup_latest/remove_uncovered.py
-
-====
 
 def _strip_preamble(body):
     """Strip any leading reasoning/commentary before the first greeting line.
@@ -1304,12 +1299,12 @@ tests/test_routing.py:    assert account.get_account("danielmorganrivers@gmail.c
 all issues that need to be altered.
 
 
-=====
+==========================
 
 I noticed there is a tendency to include single-source of truth by having imports across thehezner-phala boundary. that may not be quite right: there will be a deploy that copies over duplicates so the single source of truth still lives here in the codebase. so deploy is the one responsible converting the single source (here) across the two repos. but code shouldn't be duplicated here at all. and of course, when we deploy (even when it's just my hezner) the deployed code will be duplicating and copying directories between hezner and phala. so things under hetzner might e.g. get hezner/utils/telegram.py, and phala might get phala/utils/telegram.py, while here it's just utils/telegram.py. But it's just an illustrative example, keep telegram where it is, if it'ssensible.
 
 
-=== 
+======================== 
 
 
 
@@ -1320,3 +1315,1103 @@ def gmail_thread_link(thread_id):
 
 
 hmm. this seems odd. what if it's a user's mail #2, or mail #3?
+
+
+
+=========================
+
+
+==========================
+Make a plan for each of these: how would you group this into 
+
+❯ without looking at the repo: what are the main ways security failues happen, and how does one prioritize and triage security issues in general, and for this kind of app in particular       
+
+● How security failures actually happen
+
+  Most incidents come from a small number of classes, roughly in order of how often they cause serious loss:
+
+  Authorization, not authentication. Login usually works. What fails is the per object ownership check: an id arrives from the browser, the handler acts on it without asking whether the
+  signed-in user owns it. This is the single most common cause of cross-tenant data loss in web apps.
+
+  Credential handling. Long lived, broad scope, silently usable credentials that leak into logs, backups, error reports, subprocess environments, or a component that had no business holding
+  them. Compounded by no rotation story, so a suspected leak has no cheap response.
+
+  Trust boundary drawn in the wrong place. Not a bug in any one line. A component holds more privilege than its inputs justify, so it becomes a confused deputy: it faithfully executes what an
+  untrusted party asked for, with authority that party lacks.
+
+  Injection at a parser boundary. Any place where structured meaning is built by string concatenation: SQL, shell, HTML, search query languages, template engines, and now natural language
+  prompts. The tell is that data and control share a channel with no escaping contract you can rely on.
+
+  Multi-step flows. OAuth callbacks, checkout confirmation, account linking, password reset. Each step has to be bound to the session and to the previous step. Missing bindings give you
+  replay, code substitution, and "link the attacker's object to my account" bugs. Races belong here too.
+
+  Failing open. Exception handlers that swallow a verification error and continue. Fallbacks that substitute a less safe path when the safe one is unavailable. Positive verdicts cached on a
+  key that is too coarse. This class is dangerous because the system looks healthy while enforcing nothing.
+
+  Operational and supply chain. File modes, service accounts, exposed ports, stale hosts, dependencies pulled by tag, secrets in a unit file. Boring and constant.
+
+  Deletion and retention. Data that survives account deletion, or lives in a place nobody enumerated. Rarely exploited, frequently a legal and reputational problem.
+
+  How to prioritize in general
+
+  Do not rank by CVSS or scanner counts. Rank by three questions asked in order.
+
+  1. Who can trigger it. Anonymous internet, any registered user, a user who already has some relationship to the victim, or the operator. Each step down that list is roughly an order of
+  magnitude less urgent.
+  2. What it yields. Cross-tenant read or write, persistent credential, code execution, one user's own data, denial of service, information disclosure with no direct use.
+  3. What must already be true. Preconditions that the attacker controls are not mitigations. Preconditions that require luck or insider access are.
+
+  That gives a working order: pre-auth remote execution or cross-tenant access, then authenticated cross-tenant access, then persistent credential exposure, then privilege escalation inside a
+  tenant, then self-inflicted or operator-only issues, then availability.
+
+  Two modifiers worth applying on top:
+
+  Detectability. A bug that leaves no trace is worse than an equally severe one that writes an audit row, because it changes what you can say after the fact and whether you can bound the
+  damage.
+
+  Fix durability. Prefer fixes that remove the class over fixes that patch a call site: a single chokepoint that all callers must pass through, a type that makes the unsafe state
+  unrepresentable, or a test that fails in CI when the invariant breaks. A finding whose fix is "remember to check this in every new handler" has not really been fixed.
+
+  Also useful: separate severity from confidence. A confirmed medium beats a speculative critical for scheduling purposes, and speculative findings should be verified before they consume
+  anyone's time.
+
+  For this class of app specifically
+
+  A multi-tenant agent holding Gmail refresh tokens, driven by content strangers write, calling out to inference providers. The threat ranking is not the generic web one.
+
+  1. Cross-account access. Highest, because the asset is other people's mailboxes. Every route and every account mutator must derive the account identity from the session, never from a path
+  segment, form field, or webhook payload. The dangerous shape is any function that takes an account id as a parameter and is also reachable from a request. Related: background jobs that
+  sweep all accounts and could deliver one account's result to another's Telegram target or draft.
+
+  2. Refresh token custody. A Gmail refresh token is persistent, broad, silent, and survives your redeploys. It ranks above nearly every conventional web bug because compromise is unbounded
+  in time and invisible to the victim. Things worth watching: any code path that materializes a plaintext refresh token into a long lived object, any log or exception that could carry one,
+  and whether a compromise of a single component yields readable tokens. Split custody only pays off if the layer order holds and there is no bypass; a bypass added for availability reasons
+  converts the whole design back into one box that can read everything.
+
+  3. OAuth and linking flow integrity. State binding, PKCE, redirect allowlist, and the ownership test on anything the browser hands back: a checkout id, a link token, a chat id. The generic
+  bug here is "user submits an identifier for an object they do not own, system links it to their account". It applies to billing, to Telegram linking, and to any future integration.
+
+  4. Prompt injection and tool capability. Email bodies are attacker controlled by definition: anyone who knows the address gets to put text in front of your model. Assume the fence around
+  untrusted content will eventually fail. So the question to prioritize is not "can the model be misled" but "what is the worst the available tools permit when it is". Rank findings by the
+  capability they reach:
+
+  - Ability to send mail to an attacker chosen recipient is the top one, because it is a direct exfiltration channel for everything the model can read.
+  - Ability to search or read the rest of the mailbox and place that content anywhere an outsider can see it, including a reply on a thread the attacker started.
+  - Ability to write to a shared or public calendar, or to any object outside a fixed, non addressable target.
+  - Ability to spend money or trigger unbounded loops.
+
+  Drafts only, fixed write targets, no attacker chosen recipients, and caps on field lengths are what make injection an annoyance rather than a breach. Treat any change that widens a tool's
+  reach as a security change even when it looks like a feature.
+
+  5. Data egress. Which third party sees plaintext mail, under what agreement, and whether that is what the user selected. Silent provider fallback is a security bug, not a resilience
+  feature. Tracing, metrics, and error reporting are egress channels people forget. Masking failures are real but partial mitigations, so weight them below "sent to the wrong provider
+  entirely".
+
+  6. Verification that fails open. Attestation, signature checks, and policy decisions where the error path returns something other than refusal. Also caches keyed on a value that does not
+  change when the verified thing changes, which turns one good verdict into a permanent pass for a pool of unverified peers.
+
+  7. Web tier fundamentals. Session cookie signing and rotation, CSRF on state-changing routes, path traversal in static serving, and HTML injection wherever email content or user written
+  documents get rendered back into a page. Ordinary severity, ordinary fixes.
+
+  8. Deployment and process boundaries. File modes on token and database directories, which unix account each service runs as, secrets in journals, and whether a deploy can leave a stale file
+  behind that still runs. Lower likelihood, but these are the findings that turn a medium into a critical by giving a foothold more reach than it should have.
+
+  9. Retention and deletion. Whether deleting an account actually removes the derived paths, and whether logs that intentionally outlive an account carry more than they need to.
+
+  Triage questions to ask of any finding here
+
+  - Does it cross an account boundary?
+  - Does it touch a refresh token, or the keys protecting one?
+  - Is it reachable by someone who only knows a user's email address?
+  - Is it reachable before sign in?
+  - If the model is fully adversarial at this point, what does the surrounding code let it do?
+  - Does the fix live at a chokepoint, or does it rely on future code remembering?
+
+  Anything answering yes to the first four gets worked immediately. The last two decide whether the fix is finished.
+
+✻ Sautéed for 1m 18s
+
+specifically for these (others will be investigated separately in parallel):
+
+Authorization, not authentication. Login usually works. What fails is the per object ownership check: an id arrives from the browser, the handler acts on it without asking whether the
+signed-in user owns it. This is the single most common cause of cross-tenant data loss in web apps.
+
+Credential handling. Long lived, broad scope, silently usable credentials that leak into logs, backups, error reports, subprocess environments, or a component that had no business holding
+them. Compounded by no rotation story, so a suspected leak has no cheap response.
+
+Trust boundary drawn in the wrong place. Not a bug in any one line. A component holds more privilege than its inputs justify, so it becomes a confused deputy: it faithfully executes what an
+untrusted party asked for, with authority that party lacks.
+
+Injection at a parser boundary. Any place where structured meaning is built by string concatenation: SQL, shell, HTML, search query languages, template engines, and now natural language
+prompts. The tell is that data and control share a channel with no escaping contract you can rely on.
+
+make a list of discovered bugs and suggested fixes in bug_fixes_firstbatch.md
+
+==========================
+Make a plan for each of these: how would you group this into 
+
+❯ without looking at the repo: what are the main ways security failues happen, and how does one prioritize and triage security issues in general, and for this kind of app in particular       
+
+● How security failures actually happen
+
+  Most incidents come from a small number of classes, roughly in order of how often they cause serious loss:
+
+  Authorization, not authentication. Login usually works. What fails is the per object ownership check: an id arrives from the browser, the handler acts on it without asking whether the
+  signed-in user owns it. This is the single most common cause of cross-tenant data loss in web apps.
+
+  Credential handling. Long lived, broad scope, silently usable credentials that leak into logs, backups, error reports, subprocess environments, or a component that had no business holding
+  them. Compounded by no rotation story, so a suspected leak has no cheap response.
+
+  Trust boundary drawn in the wrong place. Not a bug in any one line. A component holds more privilege than its inputs justify, so it becomes a confused deputy: it faithfully executes what an
+  untrusted party asked for, with authority that party lacks.
+
+  Injection at a parser boundary. Any place where structured meaning is built by string concatenation: SQL, shell, HTML, search query languages, template engines, and now natural language
+  prompts. The tell is that data and control share a channel with no escaping contract you can rely on.
+
+  Multi-step flows. OAuth callbacks, checkout confirmation, account linking, password reset. Each step has to be bound to the session and to the previous step. Missing bindings give you
+  replay, code substitution, and "link the attacker's object to my account" bugs. Races belong here too.
+
+  Failing open. Exception handlers that swallow a verification error and continue. Fallbacks that substitute a less safe path when the safe one is unavailable. Positive verdicts cached on a
+  key that is too coarse. This class is dangerous because the system looks healthy while enforcing nothing.
+
+  Operational and supply chain. File modes, service accounts, exposed ports, stale hosts, dependencies pulled by tag, secrets in a unit file. Boring and constant.
+
+  Deletion and retention. Data that survives account deletion, or lives in a place nobody enumerated. Rarely exploited, frequently a legal and reputational problem.
+
+  How to prioritize in general
+
+  Do not rank by CVSS or scanner counts. Rank by three questions asked in order.
+
+  1. Who can trigger it. Anonymous internet, any registered user, a user who already has some relationship to the victim, or the operator. Each step down that list is roughly an order of
+  magnitude less urgent.
+  2. What it yields. Cross-tenant read or write, persistent credential, code execution, one user's own data, denial of service, information disclosure with no direct use.
+  3. What must already be true. Preconditions that the attacker controls are not mitigations. Preconditions that require luck or insider access are.
+
+  That gives a working order: pre-auth remote execution or cross-tenant access, then authenticated cross-tenant access, then persistent credential exposure, then privilege escalation inside a
+  tenant, then self-inflicted or operator-only issues, then availability.
+
+  Two modifiers worth applying on top:
+
+  Detectability. A bug that leaves no trace is worse than an equally severe one that writes an audit row, because it changes what you can say after the fact and whether you can bound the
+  damage.
+
+  Fix durability. Prefer fixes that remove the class over fixes that patch a call site: a single chokepoint that all callers must pass through, a type that makes the unsafe state
+  unrepresentable, or a test that fails in CI when the invariant breaks. A finding whose fix is "remember to check this in every new handler" has not really been fixed.
+
+  Also useful: separate severity from confidence. A confirmed medium beats a speculative critical for scheduling purposes, and speculative findings should be verified before they consume
+  anyone's time.
+
+  For this class of app specifically
+
+  A multi-tenant agent holding Gmail refresh tokens, driven by content strangers write, calling out to inference providers. The threat ranking is not the generic web one.
+
+  1. Cross-account access. Highest, because the asset is other people's mailboxes. Every route and every account mutator must derive the account identity from the session, never from a path
+  segment, form field, or webhook payload. The dangerous shape is any function that takes an account id as a parameter and is also reachable from a request. Related: background jobs that
+  sweep all accounts and could deliver one account's result to another's Telegram target or draft.
+
+  2. Refresh token custody. A Gmail refresh token is persistent, broad, silent, and survives your redeploys. It ranks above nearly every conventional web bug because compromise is unbounded
+  in time and invisible to the victim. Things worth watching: any code path that materializes a plaintext refresh token into a long lived object, any log or exception that could carry one,
+  and whether a compromise of a single component yields readable tokens. Split custody only pays off if the layer order holds and there is no bypass; a bypass added for availability reasons
+  converts the whole design back into one box that can read everything.
+
+  3. OAuth and linking flow integrity. State binding, PKCE, redirect allowlist, and the ownership test on anything the browser hands back: a checkout id, a link token, a chat id. The generic
+  bug here is "user submits an identifier for an object they do not own, system links it to their account". It applies to billing, to Telegram linking, and to any future integration.
+
+  4. Prompt injection and tool capability. Email bodies are attacker controlled by definition: anyone who knows the address gets to put text in front of your model. Assume the fence around
+  untrusted content will eventually fail. So the question to prioritize is not "can the model be misled" but "what is the worst the available tools permit when it is". Rank findings by the
+  capability they reach:
+
+  - Ability to send mail to an attacker chosen recipient is the top one, because it is a direct exfiltration channel for everything the model can read.
+  - Ability to search or read the rest of the mailbox and place that content anywhere an outsider can see it, including a reply on a thread the attacker started.
+  - Ability to write to a shared or public calendar, or to any object outside a fixed, non addressable target.
+  - Ability to spend money or trigger unbounded loops.
+
+  Drafts only, fixed write targets, no attacker chosen recipients, and caps on field lengths are what make injection an annoyance rather than a breach. Treat any change that widens a tool's
+  reach as a security change even when it looks like a feature.
+
+  5. Data egress. Which third party sees plaintext mail, under what agreement, and whether that is what the user selected. Silent provider fallback is a security bug, not a resilience
+  feature. Tracing, metrics, and error reporting are egress channels people forget. Masking failures are real but partial mitigations, so weight them below "sent to the wrong provider
+  entirely".
+
+  6. Verification that fails open. Attestation, signature checks, and policy decisions where the error path returns something other than refusal. Also caches keyed on a value that does not
+  change when the verified thing changes, which turns one good verdict into a permanent pass for a pool of unverified peers.
+
+  7. Web tier fundamentals. Session cookie signing and rotation, CSRF on state-changing routes, path traversal in static serving, and HTML injection wherever email content or user written
+  documents get rendered back into a page. Ordinary severity, ordinary fixes.
+
+  8. Deployment and process boundaries. File modes on token and database directories, which unix account each service runs as, secrets in journals, and whether a deploy can leave a stale file
+  behind that still runs. Lower likelihood, but these are the findings that turn a medium into a critical by giving a foothold more reach than it should have.
+
+  9. Retention and deletion. Whether deleting an account actually removes the derived paths, and whether logs that intentionally outlive an account carry more than they need to.
+
+  Triage questions to ask of any finding here
+
+  - Does it cross an account boundary?
+  - Does it touch a refresh token, or the keys protecting one?
+  - Is it reachable by someone who only knows a user's email address?
+  - Is it reachable before sign in?
+  - If the model is fully adversarial at this point, what does the surrounding code let it do?
+  - Does the fix live at a chokepoint, or does it rely on future code remembering?
+
+  Anything answering yes to the first four gets worked immediately. The last two decide whether the fix is finished.
+
+✻ Sautéed for 1m 18s
+
+
+specifically for these (others will be investigated separately in parallel)
+
+Multi-step flows. OAuth callbacks, checkout confirmation, account linking, password reset. Each step has to be bound to the session and to the previous step. Missing bindings give you
+replay, code substitution, and "link the attacker's object to my account" bugs. Races belong here too.
+
+Failing open. Exception handlers that swallow a verification error and continue. Fallbacks that substitute a less safe path when the safe one is unavailable. Positive verdicts cached on a
+key that is too coarse. This class is dangerous because the system looks healthy while enforcing nothing.
+
+Operational and supply chain. File modes, service accounts, exposed ports, stale hosts, dependencies pulled by tag, secrets in a unit file. Boring and constant.
+
+Deletion and retention. Data that survives account deletion, or lives in a place nobody enumerated. Rarely exploited, frequently a legal and reputational problem.
+
+make a list of discovered bugs and suggested fixes in bug_fixes_secondbatch.md
+
+
+==========================
+
+
+❯ without looking at the repo: what are the main ways security failues happen, and how does one prioritize and triage security issues in general, and for this kind of app in particular       
+
+● How security failures actually happen
+
+  Most incidents come from a small number of classes, roughly in order of how often they cause serious loss:
+
+  Authorization, not authentication. Login usually works. What fails is the per object ownership check: an id arrives from the browser, the handler acts on it without asking whether the
+  signed-in user owns it. This is the single most common cause of cross-tenant data loss in web apps.
+
+  Credential handling. Long lived, broad scope, silently usable credentials that leak into logs, backups, error reports, subprocess environments, or a component that had no business holding
+  them. Compounded by no rotation story, so a suspected leak has no cheap response.
+
+  Trust boundary drawn in the wrong place. Not a bug in any one line. A component holds more privilege than its inputs justify, so it becomes a confused deputy: it faithfully executes what an
+  untrusted party asked for, with authority that party lacks.
+
+  Injection at a parser boundary. Any place where structured meaning is built by string concatenation: SQL, shell, HTML, search query languages, template engines, and now natural language
+  prompts. The tell is that data and control share a channel with no escaping contract you can rely on.
+
+  Multi-step flows. OAuth callbacks, checkout confirmation, account linking, password reset. Each step has to be bound to the session and to the previous step. Missing bindings give you
+  replay, code substitution, and "link the attacker's object to my account" bugs. Races belong here too.
+
+  Failing open. Exception handlers that swallow a verification error and continue. Fallbacks that substitute a less safe path when the safe one is unavailable. Positive verdicts cached on a
+  key that is too coarse. This class is dangerous because the system looks healthy while enforcing nothing.
+
+  Operational and supply chain. File modes, service accounts, exposed ports, stale hosts, dependencies pulled by tag, secrets in a unit file. Boring and constant.
+
+  Deletion and retention. Data that survives account deletion, or lives in a place nobody enumerated. Rarely exploited, frequently a legal and reputational problem.
+
+  How to prioritize in general
+
+  Do not rank by CVSS or scanner counts. Rank by three questions asked in order.
+
+  1. Who can trigger it. Anonymous internet, any registered user, a user who already has some relationship to the victim, or the operator. Each step down that list is roughly an order of
+  magnitude less urgent.
+  2. What it yields. Cross-tenant read or write, persistent credential, code execution, one user's own data, denial of service, information disclosure with no direct use.
+  3. What must already be true. Preconditions that the attacker controls are not mitigations. Preconditions that require luck or insider access are.
+
+  That gives a working order: pre-auth remote execution or cross-tenant access, then authenticated cross-tenant access, then persistent credential exposure, then privilege escalation inside a
+  tenant, then self-inflicted or operator-only issues, then availability.
+
+  Two modifiers worth applying on top:
+
+  Detectability. A bug that leaves no trace is worse than an equally severe one that writes an audit row, because it changes what you can say after the fact and whether you can bound the
+  damage.
+
+  Fix durability. Prefer fixes that remove the class over fixes that patch a call site: a single chokepoint that all callers must pass through, a type that makes the unsafe state
+  unrepresentable, or a test that fails in CI when the invariant breaks. A finding whose fix is "remember to check this in every new handler" has not really been fixed.
+
+  Also useful: separate severity from confidence. A confirmed medium beats a speculative critical for scheduling purposes, and speculative findings should be verified before they consume
+  anyone's time.
+
+  For this class of app specifically
+
+  A multi-tenant agent holding Gmail refresh tokens, driven by content strangers write, calling out to inference providers. The threat ranking is not the generic web one.
+
+  1. Cross-account access. Highest, because the asset is other people's mailboxes. Every route and every account mutator must derive the account identity from the session, never from a path
+  segment, form field, or webhook payload. The dangerous shape is any function that takes an account id as a parameter and is also reachable from a request. Related: background jobs that
+  sweep all accounts and could deliver one account's result to another's Telegram target or draft.
+
+  2. Refresh token custody. A Gmail refresh token is persistent, broad, silent, and survives your redeploys. It ranks above nearly every conventional web bug because compromise is unbounded
+  in time and invisible to the victim. Things worth watching: any code path that materializes a plaintext refresh token into a long lived object, any log or exception that could carry one,
+  and whether a compromise of a single component yields readable tokens. Split custody only pays off if the layer order holds and there is no bypass; a bypass added for availability reasons
+  converts the whole design back into one box that can read everything.
+
+  3. OAuth and linking flow integrity. State binding, PKCE, redirect allowlist, and the ownership test on anything the browser hands back: a checkout id, a link token, a chat id. The generic
+  bug here is "user submits an identifier for an object they do not own, system links it to their account". It applies to billing, to Telegram linking, and to any future integration.
+
+  4. Prompt injection and tool capability. Email bodies are attacker controlled by definition: anyone who knows the address gets to put text in front of your model. Assume the fence around
+  untrusted content will eventually fail. So the question to prioritize is not "can the model be misled" but "what is the worst the available tools permit when it is". Rank findings by the
+  capability they reach:
+
+  - Ability to send mail to an attacker chosen recipient is the top one, because it is a direct exfiltration channel for everything the model can read.
+  - Ability to search or read the rest of the mailbox and place that content anywhere an outsider can see it, including a reply on a thread the attacker started.
+  - Ability to write to a shared or public calendar, or to any object outside a fixed, non addressable target.
+  - Ability to spend money or trigger unbounded loops.
+
+  Drafts only, fixed write targets, no attacker chosen recipients, and caps on field lengths are what make injection an annoyance rather than a breach. Treat any change that widens a tool's
+  reach as a security change even when it looks like a feature.
+
+  5. Data egress. Which third party sees plaintext mail, under what agreement, and whether that is what the user selected. Silent provider fallback is a security bug, not a resilience
+  feature. Tracing, metrics, and error reporting are egress channels people forget. Masking failures are real but partial mitigations, so weight them below "sent to the wrong provider
+  entirely".
+
+  6. Verification that fails open. Attestation, signature checks, and policy decisions where the error path returns something other than refusal. Also caches keyed on a value that does not
+  change when the verified thing changes, which turns one good verdict into a permanent pass for a pool of unverified peers.
+
+  7. Web tier fundamentals. Session cookie signing and rotation, CSRF on state-changing routes, path traversal in static serving, and HTML injection wherever email content or user written
+  documents get rendered back into a page. Ordinary severity, ordinary fixes.
+
+  8. Deployment and process boundaries. File modes on token and database directories, which unix account each service runs as, secrets in journals, and whether a deploy can leave a stale file
+  behind that still runs. Lower likelihood, but these are the findings that turn a medium into a critical by giving a foothold more reach than it should have.
+
+  9. Retention and deletion. Whether deleting an account actually removes the derived paths, and whether logs that intentionally outlive an account carry more than they need to.
+
+  Triage questions to ask of any finding here
+
+  - Does it cross an account boundary?
+  - Does it touch a refresh token, or the keys protecting one?
+  - Is it reachable by someone who only knows a user's email address?
+  - Is it reachable before sign in?
+  - If the model is fully adversarial at this point, what does the surrounding code let it do?
+  - Does the fix live at a chokepoint, or does it rely on future code remembering?
+
+  Anything answering yes to the first four gets worked immediately. The last two decide whether the fix is finished.
+
+✻ Sautéed for 1m 18s
+
+
+specifically for these (others will be investigated separately in parallel)
+
+1. Cross-account access. Highest, because the asset is other people's mailboxes. Every route and every account mutator must derive the account identity from the session, never from a path
+segment, form field, or webhook payload. The dangerous shape is any function that takes an account id as a parameter and is also reachable from a request. Related: background jobs that
+sweep all accounts and could deliver one account's result to another's Telegram target or draft.
+
+2. Refresh token custody. A Gmail refresh token is persistent, broad, silent, and survives your redeploys. It ranks above nearly every conventional web bug because compromise is unbounded
+in time and invisible to the victim. Things worth watching: any code path that materializes a plaintext refresh token into a long lived object, any log or exception that could carry one,
+and whether a compromise of a single component yields readable tokens. Split custody only pays off if the layer order holds and there is no bypass; a bypass added for availability reasons
+converts the whole design back into one box that can read everything.
+
+3. OAuth and linking flow integrity. State binding, PKCE, redirect allowlist, and the ownership test on anything the browser hands back: a checkout id, a link token, a chat id. The generic
+bug here is "user submits an identifier for an object they do not own, system links it to their account". It applies to billing, to Telegram linking, and to any future integration.
+
+4. Prompt injection and tool capability. Email bodies are attacker controlled by definition: anyone who knows the address gets to put text in front of your model. Assume the fence around
+untrusted content will eventually fail. So the question to prioritize is not "can the model be misled" but "what is the worst the available tools permit when it is". Rank findings by the
+capability they reach:
+
+- Ability to send mail to an attacker chosen recipient is the top one, because it is a direct exfiltration channel for everything the model can read.
+- Ability to search or read the rest of the mailbox and place that content anywhere an outsider can see it, including a reply on a thread the attacker started.
+- Ability to write to a shared or public calendar, or to any object outside a fixed, non addressable target.
+- Ability to spend money or trigger unbounded loops.
+
+
+make a list of discovered bugs and suggested fixes in bug_fixes_thirdbatch.md
+
+
+==========================
+
+
+● How security failures actually happen
+
+  Most incidents come from a small number of classes, roughly in order of how often they cause serious loss:
+
+  Authorization, not authentication. Login usually works. What fails is the per object ownership check: an id arrives from the browser, the handler acts on it without asking whether the
+  signed-in user owns it. This is the single most common cause of cross-tenant data loss in web apps.
+
+  Credential handling. Long lived, broad scope, silently usable credentials that leak into logs, backups, error reports, subprocess environments, or a component that had no business holding
+  them. Compounded by no rotation story, so a suspected leak has no cheap response.
+
+  Trust boundary drawn in the wrong place. Not a bug in any one line. A component holds more privilege than its inputs justify, so it becomes a confused deputy: it faithfully executes what an
+  untrusted party asked for, with authority that party lacks.
+
+  Injection at a parser boundary. Any place where structured meaning is built by string concatenation: SQL, shell, HTML, search query languages, template engines, and now natural language
+  prompts. The tell is that data and control share a channel with no escaping contract you can rely on.
+
+  Multi-step flows. OAuth callbacks, checkout confirmation, account linking, password reset. Each step has to be bound to the session and to the previous step. Missing bindings give you
+  replay, code substitution, and "link the attacker's object to my account" bugs. Races belong here too.
+
+  Failing open. Exception handlers that swallow a verification error and continue. Fallbacks that substitute a less safe path when the safe one is unavailable. Positive verdicts cached on a
+  key that is too coarse. This class is dangerous because the system looks healthy while enforcing nothing.
+
+  Operational and supply chain. File modes, service accounts, exposed ports, stale hosts, dependencies pulled by tag, secrets in a unit file. Boring and constant.
+
+  Deletion and retention. Data that survives account deletion, or lives in a place nobody enumerated. Rarely exploited, frequently a legal and reputational problem.
+
+  How to prioritize in general
+
+  Do not rank by CVSS or scanner counts. Rank by three questions asked in order.
+
+  1. Who can trigger it. Anonymous internet, any registered user, a user who already has some relationship to the victim, or the operator. Each step down that list is roughly an order of
+  magnitude less urgent.
+  2. What it yields. Cross-tenant read or write, persistent credential, code execution, one user's own data, denial of service, information disclosure with no direct use.
+  3. What must already be true. Preconditions that the attacker controls are not mitigations. Preconditions that require luck or insider access are.
+
+  That gives a working order: pre-auth remote execution or cross-tenant access, then authenticated cross-tenant access, then persistent credential exposure, then privilege escalation inside a
+  tenant, then self-inflicted or operator-only issues, then availability.
+
+  Two modifiers worth applying on top:
+
+  Detectability. A bug that leaves no trace is worse than an equally severe one that writes an audit row, because it changes what you can say after the fact and whether you can bound the
+  damage.
+
+  Fix durability. Prefer fixes that remove the class over fixes that patch a call site: a single chokepoint that all callers must pass through, a type that makes the unsafe state
+  unrepresentable, or a test that fails in CI when the invariant breaks. A finding whose fix is "remember to check this in every new handler" has not really been fixed.
+
+  Also useful: separate severity from confidence. A confirmed medium beats a speculative critical for scheduling purposes, and speculative findings should be verified before they consume
+  anyone's time.
+
+  For this class of app specifically
+
+  A multi-tenant agent holding Gmail refresh tokens, driven by content strangers write, calling out to inference providers. The threat ranking is not the generic web one.
+
+  1. Cross-account access. Highest, because the asset is other people's mailboxes. Every route and every account mutator must derive the account identity from the session, never from a path
+  segment, form field, or webhook payload. The dangerous shape is any function that takes an account id as a parameter and is also reachable from a request. Related: background jobs that
+  sweep all accounts and could deliver one account's result to another's Telegram target or draft.
+
+  2. Refresh token custody. A Gmail refresh token is persistent, broad, silent, and survives your redeploys. It ranks above nearly every conventional web bug because compromise is unbounded
+  in time and invisible to the victim. Things worth watching: any code path that materializes a plaintext refresh token into a long lived object, any log or exception that could carry one,
+  and whether a compromise of a single component yields readable tokens. Split custody only pays off if the layer order holds and there is no bypass; a bypass added for availability reasons
+  converts the whole design back into one box that can read everything.
+
+  3. OAuth and linking flow integrity. State binding, PKCE, redirect allowlist, and the ownership test on anything the browser hands back: a checkout id, a link token, a chat id. The generic
+  bug here is "user submits an identifier for an object they do not own, system links it to their account". It applies to billing, to Telegram linking, and to any future integration.
+
+  4. Prompt injection and tool capability. Email bodies are attacker controlled by definition: anyone who knows the address gets to put text in front of your model. Assume the fence around
+  untrusted content will eventually fail. So the question to prioritize is not "can the model be misled" but "what is the worst the available tools permit when it is". Rank findings by the
+  capability they reach:
+
+  - Ability to send mail to an attacker chosen recipient is the top one, because it is a direct exfiltration channel for everything the model can read.
+  - Ability to search or read the rest of the mailbox and place that content anywhere an outsider can see it, including a reply on a thread the attacker started.
+  - Ability to write to a shared or public calendar, or to any object outside a fixed, non addressable target.
+  - Ability to spend money or trigger unbounded loops.
+
+  Drafts only, fixed write targets, no attacker chosen recipients, and caps on field lengths are what make injection an annoyance rather than a breach. Treat any change that widens a tool's
+  reach as a security change even when it looks like a feature.
+
+  5. Data egress. Which third party sees plaintext mail, under what agreement, and whether that is what the user selected. Silent provider fallback is a security bug, not a resilience
+  feature. Tracing, metrics, and error reporting are egress channels people forget. Masking failures are real but partial mitigations, so weight them below "sent to the wrong provider
+  entirely".
+
+  6. Verification that fails open. Attestation, signature checks, and policy decisions where the error path returns something other than refusal. Also caches keyed on a value that does not
+  change when the verified thing changes, which turns one good verdict into a permanent pass for a pool of unverified peers.
+
+  7. Web tier fundamentals. Session cookie signing and rotation, CSRF on state-changing routes, path traversal in static serving, and HTML injection wherever email content or user written
+  documents get rendered back into a page. Ordinary severity, ordinary fixes.
+
+  8. Deployment and process boundaries. File modes on token and database directories, which unix account each service runs as, secrets in journals, and whether a deploy can leave a stale file
+  behind that still runs. Lower likelihood, but these are the findings that turn a medium into a critical by giving a foothold more reach than it should have.
+
+  9. Retention and deletion. Whether deleting an account actually removes the derived paths, and whether logs that intentionally outlive an account carry more than they need to.
+
+  Triage questions to ask of any finding here
+
+  - Does it cross an account boundary?
+  - Does it touch a refresh token, or the keys protecting one?
+  - Is it reachable by someone who only knows a user's email address?
+  - Is it reachable before sign in?
+  - If the model is fully adversarial at this point, what does the surrounding code let it do?
+  - Does the fix live at a chokepoint, or does it rely on future code remembering?
+
+  Anything answering yes to the first four gets worked immediately. The last two decide whether the fix is finished.
+
+✻ Sautéed for 1m 18s
+
+
+specifically for these (others will be investigated separately in parallel):
+
+
+
+  5. Data egress. Which third party sees plaintext mail, under what agreement, and whether that is what the user selected. Silent provider fallback is a security bug, not a resilience
+  feature. Tracing, metrics, and error reporting are egress channels people forget. Masking failures are real but partial mitigations, so weight them below "sent to the wrong provider
+  entirely".
+
+  6. Verification that fails open. Attestation, signature checks, and policy decisions where the error path returns something other than refusal. Also caches keyed on a value that does not
+  change when the verified thing changes, which turns one good verdict into a permanent pass for a pool of unverified peers.
+
+  7. Web tier fundamentals. Session cookie signing and rotation, CSRF on state-changing routes, path traversal in static serving, and HTML injection wherever email content or user written
+  documents get rendered back into a page. Ordinary severity, ordinary fixes.
+
+  8. Deployment and process boundaries. File modes on token and database directories, which unix account each service runs as, secrets in journals, and whether a deploy can leave a stale file
+  behind that still runs. Lower likelihood, but these are the findings that turn a medium into a critical by giving a foothold more reach than it should have.
+
+  9. Retention and deletion. Whether deleting an account actually removes the derived paths, and whether logs that intentionally outlive an account carry more than they need to.
+
+  Triage questions to ask of any finding here
+
+  - Does it cross an account boundary?
+  - Does it touch a refresh token, or the keys protecting one?
+  - Is it reachable by someone who only knows a user's email address?
+  - Is it reachable before sign in?
+  - If the model is fully adversarial at this point, what does the surrounding code let it do?
+  - Does the fix live at a chokepoint, or does it rely on future code remembering?
+
+  Anything answering yes to the first four gets worked immediately. The last two decide whether the fix is finished.
+
+✻ Sautéed for 1m 18s
+
+
+
+make a list of discovered bugs and suggested fixes in bug_fixes_fourthbatch.md
+
+
+=========================
+
+dmrivers@lenny:~/Code/letterlock$ grep -ri "markdown fence" | grep .py
+grep: tests/__pycache__/test_agentic.cpython-311-pytest-9.0.2.pyc: binary file matches
+grep: backend/drafting/__pycache__/manual_draft.cpython-311.pyc: binary file matches
+backend/drafting/draft_replies.py:    "No subject line. No commentary. No markdown fences. Plain text only."
+grep: backend/drafting/__pycache__/draft_replies.cpython-311.pyc: binary file matches
+grep: __pycache__/manual_draft.cpython-311.pyc: binary file matches
+backend/drafting/manual_draft.py:    "No subject line. No commentary. No markdown fences. Plain text only."
+grep: __pycache__/test_agentic.cpython-311-pytest-9.0.2.pyc: binary file matches
+grep: __pycache__/draft_replies.cpython-311.pyc: binary file matches
+grep: tools/manual/__pycache__/smoke_agentic.cpython-311.pyc: binary file matches
+tools/manual/smoke_agentic.py:    "No subject line. No commentary. No markdown fences. Plain text only."
+dmrivers@lenny:~/Code/letterlock$ 
+
+
+
+single source of truth please. if we are going to have a repeated prompts, it's probably better to centralize and standardize into a single "prompts" utility or other locaiton as appropraite
+
+
+
+=========================
+
+
+The default account keeps the
+historical `state.json` path so the deployed box's existing cursor is reused.
+
+
+in state.py.
+
+this is a bug: the "default account" should never exist. that's cruft. don't reuse: assume we're starting fresh with a multi-tenant design, ensure any instance of de
+
+simialr issue in pseudonominizer.py: remove default accounts. there's no preference for some arbitrary default account.
+
+
+class UserIdentity:
+    """Per-user masking identity: the account owner's own name/email, which
+    are deterministically tagged before Presidio so the owner never varies by
+    person-numbering. Compiled once per identity; passed into new_state so a
+    shared process can hold one identity per user without global coupling."""
+
+    def __init__(self, first, last, first_aliases=(), emails=(), phones=(), contacts=(), account_id="default",
+                 analyzer=True):
+
+========================
+"This is the multi-tenant successor to the old
+            single-account watch registration cron"
+
+            -> remove stuff like that. don't reference old versions of the code in the comments. comments also say why decisions were made. remove instances of second person ("you") referencing claude or the user or metaphorical language, any mention of "seams" or "load-bearing", overly lengthy doc strings or headers, 
+========================
+
+dmrivers@lenny:~/Code/letterlock$ grep -ri "coastal-m"
+backend/onboarding/watch_renew.py:    "GMAIL_PUBSUB_TOPIC", "projects/coastal-mender-462719-q3/topics/gmail-events")
+grep: backend/onboarding/__pycache__/watch_renew.cpython-311.pyc: binary file matches
+backend/daemons/gmail_hook_server.py:    "pubsub-pusher-coastal-mender-4@coastal-mender-462719-q3.iam.gserviceaccount.com",
+grep: backend/daemons/__pycache__/gmail_hook_server.cpython-311.pyc: binary file matches
+grep: __pycache__/gmail_hook_server.cpython-311.pyc: binary file matches
+
+
+this is a serious bug. this is definitely not what should be stored - multiple times- in separate files! single source of truth! also, if this is truly necessary (is it? does auser have to supply that?) i think it should be non-public data. perhaps a .env value? suggest proper fix
+
+=========================
+
+honest question:
+dmrivers@lenny:~/Code/letterlock$ grep -ri -n4 "def log"
+tests/test_cosigner.py-400-
+tests/test_cosigner.py-401-# --- retention ------------------------------------------------------------
+tests/test_cosigner.py-402-
+tests/test_cosigner.py-403-@pytest.fixture
+tests/test_cosigner.py:404:def log(tmp_path, monkeypatch):
+tests/test_cosigner.py-405-    """The audit log alone, no server: retention is about what the rows mean,
+tests/test_cosigner.py-406-    not about the wire."""
+tests/test_cosigner.py-407-    monkeypatch.setenv("COSIGNER_STATE_DIR", str(tmp_path))
+tests/test_cosigner.py-408-    audit.reset_for_test()
+--
+cosigner/alerts.py-19-
+cosigner/alerts.py-20-import sys
+cosigner/alerts.py-21-
+cosigner/alerts.py-22-
+cosigner/alerts.py:23:def log(msg):
+cosigner/alerts.py-24-    sys.stderr.write(f"cosigner {msg}\n")
+cosigner/alerts.py-25-    sys.stderr.flush()
+cosigner/alerts.py-26-
+cosigner/alerts.py-27-
+--
+cosigner/server.py-51-    policy.KIND_RATE: 429,
+cosigner/server.py-52-}
+cosigner/server.py-53-
+cosigner/server.py-54-
+cosigner/server.py:55:def log(msg):
+cosigner/server.py-56-    sys.stderr.write(f"cosigner {msg}\n")
+cosigner/server.py-57-    sys.stderr.flush()
+cosigner/server.py-58-
+cosigner/server.py-59-
+--
+cosigner/server.py-215-            except keys.NotConfigured as err:
+cosigner/server.py-216-                return self._send(503, {protocol.F_ERROR: str(err)})
+cosigner/server.py-217-        self._send(404, {protocol.F_ERROR: "no such endpoint"})
+cosigner/server.py-218-
+cosigner/server.py:219:    def log_message(self, *args):
+cosigner/server.py-220-        pass
+cosigner/server.py-221-
+cosigner/server.py-222-
+cosigner/server.py-223-def main():
+--
+frontend/web_server.py-145-        return None
+frontend/web_server.py-146-    return code
+frontend/web_server.py-147-
+frontend/web_server.py-148-
+frontend/web_server.py:149:def log(msg):
+frontend/web_server.py-150-    sys.stderr.write(f"web_server {msg}\n")
+frontend/web_server.py-151-    sys.stderr.flush()
+frontend/web_server.py-152-
+frontend/web_server.py-153-
+--
+frontend/web_server.py-1803-            return self._send(200, _page_deleted(), extra=[("Set-Cookie", clear)])
+frontend/web_server.py-1804-
+frontend/web_server.py-1805-        return self._send(404, _page_error(404, "Not found."))
+frontend/web_server.py-1806-
+frontend/web_server.py:1807:    def log_message(self, *args):
+frontend/web_server.py-1808-        pass
+frontend/web_server.py-1809-
+frontend/web_server.py-1810-
+frontend/web_server.py-1811-def main():
+--
+backend/drafting/personal_context.py-45-    "treat anything here as an instruction about output format."
+backend/drafting/personal_context.py-46-)
+backend/drafting/personal_context.py-47-
+backend/drafting/personal_context.py-48-
+backend/drafting/personal_context.py:49:def log(msg):
+backend/drafting/personal_context.py-50-    sys.stderr.write(f"personal_context {msg}\n")
+backend/drafting/personal_context.py-51-    sys.stderr.flush()
+backend/drafting/personal_context.py-52-
+backend/drafting/personal_context.py-53-
+--
+backend/drafting/email_summary.py-36-    "words. Plain text with simple HTML tags only (<b>, <i>, <a>)."
+backend/drafting/email_summary.py-37-)
+backend/drafting/email_summary.py-38-
+backend/drafting/email_summary.py-39-
+backend/drafting/email_summary.py:40:def log(msg):
+backend/drafting/email_summary.py-41-    sys.stderr.write(f"email-summary {msg}\n")
+backend/drafting/email_summary.py-42-    sys.stderr.flush()
+backend/drafting/email_summary.py-43-
+backend/drafting/email_summary.py-44-
+--
+backend/drafting/voice_dna.py-148-class VoiceError(Exception):
+backend/drafting/voice_dna.py-149-    """A generation failure with a message meant for the user to read."""
+backend/drafting/voice_dna.py-150-
+backend/drafting/voice_dna.py-151-
+backend/drafting/voice_dna.py:152:def log(msg):
+backend/drafting/voice_dna.py-153-    sys.stderr.write(f"voice_dna {msg}\n")
+backend/drafting/voice_dna.py-154-    sys.stderr.flush()
+backend/drafting/voice_dna.py-155-
+backend/drafting/voice_dna.py-156-
+--
+backend/onboarding/watch_renew.py-29-PUBSUB_TOPIC = os.environ.get(
+backend/onboarding/watch_renew.py-30-    "GMAIL_PUBSUB_TOPIC", "projects/coastal-mender-462719-q3/topics/gmail-events")
+backend/onboarding/watch_renew.py-31-
+backend/onboarding/watch_renew.py-32-
+backend/onboarding/watch_renew.py:33:def log(msg):
+backend/onboarding/watch_renew.py-34-    sys.stderr.write(f"watch-renew {msg}\n")
+backend/onboarding/watch_renew.py-35-    sys.stderr.flush()
+backend/onboarding/watch_renew.py-36-
+backend/onboarding/watch_renew.py-37-
+--
+backend/onboarding/provisioning.py-42-
+backend/onboarding/provisioning.py-43-HTTP_TIMEOUT = 30
+backend/onboarding/provisioning.py-44-
+backend/onboarding/provisioning.py-45-
+backend/onboarding/provisioning.py:46:def log(msg):
+backend/onboarding/provisioning.py-47-    sys.stderr.write(f"provisioning {msg}\n")
+backend/onboarding/provisioning.py-48-    sys.stderr.flush()
+backend/onboarding/provisioning.py-49-
+backend/onboarding/provisioning.py-50-
+--
+backend/daemons/egress_proxy.py-57-IDLE_TIMEOUT = 300
+backend/daemons/egress_proxy.py-58-CHUNK = 65536
+backend/daemons/egress_proxy.py-59-
+backend/daemons/egress_proxy.py-60-
+backend/daemons/egress_proxy.py:61:def log(msg):
+backend/daemons/egress_proxy.py-62-    sys.stderr.write(f"egress-proxy {msg}\n")
+backend/daemons/egress_proxy.py-63-    sys.stderr.flush()
+backend/daemons/egress_proxy.py-64-
+backend/daemons/egress_proxy.py-65-
+--
+backend/daemons/gmail_hook_server.py-57-# Content-Length unbounded is a free way to make us allocate.
+backend/daemons/gmail_hook_server.py-58-MAX_BODY = 256 * 1024
+backend/daemons/gmail_hook_server.py-59-
+backend/daemons/gmail_hook_server.py-60-
+backend/daemons/gmail_hook_server.py:61:def log(msg):
+backend/daemons/gmail_hook_server.py-62-    sys.stderr.write(f"gmail-hook {msg}\n")
+backend/daemons/gmail_hook_server.py-63-    sys.stderr.flush()
+backend/daemons/gmail_hook_server.py-64-
+backend/daemons/gmail_hook_server.py-65-
+--
+backend/daemons/gmail_hook_server.py-220-
+backend/daemons/gmail_hook_server.py-221-    def do_GET(self):
+backend/daemons/gmail_hook_server.py-222-        self._reject(405, "POST only")
+backend/daemons/gmail_hook_server.py-223-
+backend/daemons/gmail_hook_server.py:224:    def log_message(self, *args):
+backend/daemons/gmail_hook_server.py-225-        pass
+backend/daemons/gmail_hook_server.py-226-
+backend/daemons/gmail_hook_server.py-227-
+backend/daemons/gmail_hook_server.py-228-def main():
+--
+backend/daemons/daemon_loop.py-37-
+backend/daemons/daemon_loop.py-38-WAKE_POLL_SECONDS = 300
+backend/daemons/daemon_loop.py-39-
+backend/daemons/daemon_loop.py-40-
+backend/daemons/daemon_loop.py:41:def log(msg):
+backend/daemons/daemon_loop.py-42-    sys.stdout.write(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {msg}\n")
+backend/daemons/daemon_loop.py-43-    sys.stdout.flush()
+backend/daemons/daemon_loop.py-44-
+backend/daemons/daemon_loop.py-45-
+--
+backend/billing/billing.py-44-# subscription, so the webhook resolves through the same key as the return trip.
+backend/billing/billing.py-45-CHECKOUT_ACCOUNT_KEY = "account_id"
+backend/billing/billing.py-46-
+backend/billing/billing.py-47-
+backend/billing/billing.py:48:def log(msg):
+backend/billing/billing.py-49-    sys.stderr.write(f"billing {msg}\n")
+backend/billing/billing.py-50-    sys.stderr.flush()
+backend/billing/billing.py-51-
+backend/billing/billing.py-52-
+--
+backend/billing/billing.py-146-            f"missing POLAR_API_TOKEN / POLAR_ORGANIZATION_ID for "
+backend/billing/billing.py-147-            f"{'SANDBOX' if self.sandbox else 'PROD'}"
+backend/billing/billing.py-148-        )
+backend/billing/billing.py-149-
+backend/billing/billing.py:150:    def log_startup(self, who):
+backend/billing/billing.py-151-        """The one line that says which Polar this process is talking to and
+backend/billing/billing.py-152-        which secrets it captured. Both values are fingerprinted rather than
+backend/billing/billing.py-153-        masked: a prefix and four trailing characters identify a token no
+backend/billing/billing.py-154-        better than a digest does, and the digest also covers the webhook
+--
+backend/billing/billing_webhook.py-70-        self.send_header("Content-Length", str(len(body)))
+backend/billing/billing_webhook.py-71-        self.end_headers()
+backend/billing/billing_webhook.py-72-        self.wfile.write(body)
+backend/billing/billing_webhook.py-73-
+backend/billing/billing_webhook.py:74:    def log_message(self, *args):
+backend/billing/billing_webhook.py-75-        pass  # silence default stderr access logging; we log deliberately
+backend/billing/billing_webhook.py-76-
+backend/billing/billing_webhook.py-77-    def do_POST(self):
+backend/billing/billing_webhook.py-78-        if self.path.rstrip("/") != WEBHOOK_PATH:
+--
+backend/custody/tokens.py-77-        )
+backend/custody/tokens.py-78-        self.uid = uid
+backend/custody/tokens.py-79-
+backend/custody/tokens.py-80-
+backend/custody/tokens.py:81:def log(msg):
+backend/custody/tokens.py-82-    sys.stderr.write(f"tokens {msg}\n")
+backend/custody/tokens.py-83-    sys.stderr.flush()
+backend/custody/tokens.py-84-
+backend/custody/tokens.py-85-
+--
+backend/integrations/telegram.py-40-        self.token = token
+backend/integrations/telegram.py-41-        self.chat_id = str(chat_id)
+backend/integrations/telegram.py-42-
+backend/integrations/telegram.py-43-
+backend/integrations/telegram.py:44:def log(msg):
+backend/integrations/telegram.py-45-    sys.stderr.write(f"telegram {msg}\n")
+backend/integrations/telegram.py-46-    sys.stderr.flush()
+backend/integrations/telegram.py-47-
+backend/integrations/telegram.py-48-
+--
+backend/integrations/gmail_gcal/gmail_api.py-47-# identify a thread rather than every thread.
+backend/integrations/gmail_gcal/gmail_api.py-48-MIN_SUBJECT_PREFIX = 12
+backend/integrations/gmail_gcal/gmail_api.py-49-
+backend/integrations/gmail_gcal/gmail_api.py-50-
+backend/integrations/gmail_gcal/gmail_api.py:51:def log(msg):
+backend/integrations/gmail_gcal/gmail_api.py-52-    sys.stderr.write(f"gmail {msg}\n")
+backend/integrations/gmail_gcal/gmail_api.py-53-    sys.stderr.flush()
+backend/integrations/gmail_gcal/gmail_api.py-54-
+backend/integrations/gmail_gcal/gmail_api.py-55-
+--
+backend/integrations/gmail_gcal/mailbox.py-27-    "isdrlmn4d5jmagpmta3igf4g0l0pjn9i@import.calendar.google.com",
+backend/integrations/gmail_gcal/mailbox.py-28-)
+backend/integrations/gmail_gcal/mailbox.py-29-
+backend/integrations/gmail_gcal/mailbox.py-30-
+backend/integrations/gmail_gcal/mailbox.py:31:def log(msg):
+backend/integrations/gmail_gcal/mailbox.py-32-    sys.stderr.write(f"mailbox {msg}\n")
+backend/integrations/gmail_gcal/mailbox.py-33-    sys.stderr.flush()
+backend/integrations/gmail_gcal/mailbox.py-34-
+backend/integrations/gmail_gcal/mailbox.py-35-
+
+
+see any issues, or is this kind of fine coding practice?
+
+
+
+==========================
+
+
+"""Operator alerts, and the one place this package touches `backend/`.
+
+A refusal here is either a bug or a breach in progress, and both want a human
+looking within minutes. The box already has a Telegram channel for exactly this
+class of event -- `telegram.operator_target()`, which reads the operator's own
+chat from the environment and is explicitly not the per-account path -- so this
+sends through it rather than growing a second copy of the Bot API.
+
+`backend.integrations.telegram` is imported inside the function, not at module
+scope, for two reasons. The service must import (and therefore start) on a box
+where `backend/` is not deployed at all, which is what this package is shaped
+for. And when the co-signer does move to its own host under its own operator,
+this function is the only thing to rewrite: swap the body for that host's
+notifier and nothing else in the package changes.
+
+Never raises. An alert that fails must not take down the decision path that
+triggered it.
+"""
+
+
+seems like i need a separate .env value with my telegram bot chatid, or no? is it there?
+
+
+==========================
+
+
+"""One SQLite row per co-signer request: what was asked, and what was decided.
+
+The enclave cannot rewrite this. Attestation says the right code booted; this
+says what happened afterwards. Neither prevents anything -- a live enclave
+attacker can still ask for one mailbox at a time -- but together they bound the
+breach to what the rate limit allowed and leave evidence of exactly which users
+were touched.
+
+No row is ever modified: no UPDATE appears anywhere in this package, and a
+decision once written stays as it was written. Rows are deleted only by
+`cosigner/retention.py`, only by age, and never on a request path. Enforcing
+even that in SQLite would need triggers plus a second connection with different
+rights, which buys nothing against an attacker who already owns the box. What
+does buy something is a copy off the box (`sqlite3 audit.db .backup`), which is
+the operator's job, not this module's.
+
+
+should I then add a function that allows me to email users who have a given hidden ID? it seems like a useful function. I just want to maintain the promise that I can't see their email address, but it seems sensible that I could have an email sent off to them right without knowing their email if it happens in an enclave? e.g. if there's a breach.
+
+==========================
+
+
+
+def check_claims(claims):
+    """Every claim rule, in one place, so the local screen and the verified
+    response are judged identically. Returns None or the reason to reject."""
+    if not isinstance(claims, dict) or "error" in claims:
+        return "malformed claims"
+    if claims.get("iss") not in EXPECTED_ISSUERS:
+        return f"bad iss: {claims.get('iss')}"
+    if claims.get("aud") != EXPECTED_AUD:
+        return f"bad aud: {claims.get('aud')}"
+    if claims.get("email") != PUBSUB_SERVICE_ACCOUNT:
+        return f"bad email: {claims.get('email')}"
+    if str(claims.get("email_verified")).lower() != "true":
+        return "email not verified"
+    try:
+        exp = int(claims.get("exp", 0))
+    except (TypeError, ValueError):
+        return "bad exp"
+    if exp < time.time():
+        return "token expired"
+    return None
+
+
+    tome this code looks kind of loose. were you failing to actually check what the strings need to be or something? can you look how to do this proerply?
+
+
+
+=========================
+"""Refuse to run with assertions compiled out.
+
+This codebase states its security controls as asserts, and several of them are
+the control rather than a note about one: the path-traversal check in
+`custody.tokens.token_path`, the `"d" not in jwk` check that stands between a
+library change and the co-signer publishing its signing key, the empty-binding
+check in `tee.quote_policy._binds` that would otherwise accept a quote bound to
+nothing, the length and version checks in `cosigner.keys.unwrap`. Under `-O` or
+`PYTHONOPTIMIZE=1` every one of them disappears and the process keeps running,
+which is the failure mode this exists to make impossible.
+
+Converting those four to explicit raises would protect those four. This
+protects all of them, including the ones written after today, and it is why an
+assert is an acceptable way to spell a control here. Both packages call it at
+import, so no entry point can miss it: `backend/__init__.py` for the
+application, `cosigner/__init__.py` for the co-signer, which imports nothing
+from `backend` and therefore cannot rely on its guard.
+"""
+
+import sys
+
+
+class OptimizedOut(RuntimeError):
+    """Assertions are disabled, so the controls written as asserts are gone."""
+
+
+def asserts_enabled():
+    """True when `assert` still evaluates. Written so the answer comes from the
+    interpreter's own behaviour rather than from reading a flag that a future
+    Python could stop honouring."""
+    enabled = False
+    assert (enabled := True), "unreachable"
+    return enabled
+
+
+def require_asserts():
+    """Raise unless assertions are live. Called at package import."""
+    if asserts_enabled():
+        return
+    raise OptimizedOut(
+        "Letterlock refuses to start with assertions disabled: python was run "
+        f"with -O or PYTHONOPTIMIZE={sys.flags.optimize}, which compiles out "
+        "the checks this codebase states as asserts, several of which are "
+        "security controls rather than notes (see runtime_guard.__doc__)."
+    )
+
+
+    I disagree, I would rather have it so asserts are not required in thta way. so fixing the asserts in that manner is improper. I like asserts, but I don't want them to be required for security. what would be an instruciton I ciukd add in a sweep of all the files to fix that?
+
+
+=========================
+
+
+def check_uid(uid):
+    """Refuse a uid that would name a path outside the account's own directory.
+
+    Exported because onboarding has to make the same judgement before it wraps
+    anything, and the check was written out twice: once here and once in
+    `provisioning.provision`. Two copies of a path-traversal guard is one that
+    can be relaxed on its own."""
+    assert uid and "/" not in uid and "\\" not in uid and ".." not in uid, (
+        f"refusing to build a token path from {uid!r}"
+    )
+    return uid
+
+huh. is that really the best most secure way? looks wierd. (tokens.py)
+
+
+def _refusal_detail(resp):
+    """What the token endpoint said, including the headers that carry half the
+    answer. Google's body for a refused exchange is often `invalid_request` and
+    the word "Bad Request", which names nothing; `WWW-Authenticate` and
+    `DPoP-Nonce` are what distinguish a rejected proof from a rejected grant,
+    and without them a failure like this is diagnosed by guesswork."""
+    hints = {name: resp.headers.get(name) for name in
+             ("WWW-Authenticate", "DPoP-Nonce", "X-Debug-Tracking-Id")
+             if resp.headers.get(name)}
+    detail = resp.text[:300]
+    return f"{detail} {hints}" if hints else detail
+
+huh, is that guesswork? any way to improve quality of that code?
+canyou check if it's really like that? 
+
+I'm ondering if google oauth has open-source code we can look at, or potentially import, to do this stuff properly? I don't know, this all looks a bit like custom crypytography in "tokens.py" that is concernging to me. 
+
+=====================-=======
+
+
+def select_env(name, sandbox):
+    """Pick NAME_SANDBOX or NAME_PROD by the POLAR_SANDBOX toggle, falling back to
+    the unsuffixed NAME. One switch flips the whole surface between environments
+    while both value sets sit side by side in .env. Same pattern as the source."""
+    suffix = "SANDBOX" if sandbox else "PROD"
+    val = os.environ.get(f"{name}_{suffix}")
+    return val if val is not None else os.environ.get(name)
+
+
+    billing. else os.environ.get(name)
+    looks to mee like a security hole. an attacker could maybe usethat to inject their own values in the .env. safe to remove?
+
+    notice in secrets.py 
+
+    def get(name, default=None):
+        """A secret's value, loading ``.env`` first if that has not happened yet."""
+        assert name, "get() needs a variable name"
+        load()
+        return os.environ.get(name, default)
+
+
+    now we are doing a different way right? what's the deal?
+
+
+==========================
+
+backend/masking/masking_eval/run.py
+
+evaluation of masking should go in tests, or if necessary, an "evals" directory. but not with the code, that's sloppy. 
+
+========================
+briefly: confirm that .env reads also require co-signer intervention? or is the .env stored in plaintext on the enclave TDX? and also, the user's telegram contact info: is it co-sign required to use?
+===========================
+billing.py:
+elif etype and etype.startswith("subscription."):
+why not just == subscription.cancelled? is that the right one can youchekc polatr open sourcecode
+
+
+i guess i just get nervous with wide matching where specific matching would be better
+maybe an audit of cases if "in" uised for strings or startswith to see it's always as sepcific as would be ideal for a secure application?
+
+==========================
+confirm: frontend is https. so encrpyted on way to my post listener right? and in general, all commiunications are encrypted where possible? any unencrypted over-the-interenet transmissions? I guess all use TLS as https right?
+
+
+=========================
+~/C/letterlock (main↑48|✚8) $ grep --include "*.py" -ri "plan_token_custody.md"
+tests/test_custody.py:(docs/plan_token_custody.md §1), because a refactor that breaks one of them
+tests/harness.py:    (docs/plan_token_custody.md §J8)."""
+tests/test_custody_integration.py:faked the other above the wire (docs/plan_token_custody.md §J8).
+tests/test_preflight.py:(docs/plan_token_custody.md §1, invariant 3), and that is a deploy-time fact
+cosigner/keys.py:unseal means no mail moves until someone wakes up (docs/plan_token_custody.md
+cosigner/keys.py:    of one-shot (docs/plan_token_custody.md §1)."""
+cosigner/__init__.py:nothing (docs/plan_token_custody.md §1):
+backend/custody/__init__.py:"""Split-custody OAuth token handling (Track I of docs/plan_token_custody.md).
+backend/site.py:# The split-custody co-signer (docs/plan_token_custody.md Track J). It is the
+~/C/letterlock (main↑48|✚8) $ 
+
+~/C/letterlock (main↑48|✚8) $ grep --include "*.py" -ri "§"
+tests/test_custody.py:(docs/plan_token_custody.md §1), because a refactor that breaks one of them
+tests/harness.py:    (docs/plan_token_custody.md §J8)."""
+tests/test_custody_integration.py:faked the other above the wire (docs/plan_token_custody.md §J8).
+tests/test_custody_integration.py:    """The audit log is the evidence half of the design (§J5). It has to show
+tests/test_preflight.py:(docs/plan_token_custody.md §1, invariant 3), and that is a deploy-time fact
+tests/test_onboarding.py:    """Plan §8: the client secret is the widest-blast-radius value the
+cosigner/keys.py:§3). No third party, no human, one directory readable only by this unit.
+cosigner/keys.py:    of one-shot (docs/plan_token_custody.md §1)."""
+cosigner/policy.py:that draining the user base takes longer than noticing it (plan §0).
+cosigner/attest.py:    the Phala instance is rented (plan §7, phase 1). TEE_REQUIRED set anywhere
+cosigner/__init__.py:nothing (docs/plan_token_custody.md §1):
+backend/secrets.py:§5.3). A ``.env`` file sitting on the volume next to them is exactly the
+
+
+
+remove citation of this documentation. it will go away.
+
+
+=====
+Caveats Claude would flag
+
+The uncommitted web copy states things the code does not do. In frontend/web_server.py working-tree changes:
+- Footer: "Website hosted using a secure enclave". deploy/phala/docker-compose.yml has one service, email (the 8787 webhook). No web service. letterlock-web runs on Hetzner under systemd,
+and no Hetzner unit sets TEE_REQUIRED.
+- "all data are encrypted using a separate signing server ... Even processes within the enclave cannot see enclave data", only the Gmail refresh token is.
+- "The enclave seals user configuration data only after the attestation report passes verification", configuration data is not sealed at all.
+- "Letterlock could not provide the US government a single signed-up email address", database/accounts.json holds them in plaintext, and so does the co-signer's grants table.
+
+The agent-sandbox paragraph does check out: egress allowlist is enforced (backend/egress.py + egress_proxy), no tool executes code, drafts.escape_html means model output cannot emit HTML,
+and calendar writes are pinned to WRITE_CALENDAR = "primary" with sendUpdates="none" and no calendar_id parameter.
+
+Billing webhook has no ownership test on the email fallback. resolve_account (billing.py:206-211) falls back to customer_email, a field the buyer types on Polar's form. confirm_checkout is
+safe because it compares against the session. The webhook cannot compare against anything, so someone minting a checkout outside our app with a victim's address flips that victim to active.
+Impact is a gifted subscription, not a takeover, set_polar_customer_id is only called on the confirm path.
+
+No CSRF token in the web tier. Defence is SameSite=Lax alone, with no Origin check. Adequate against modern browsers; it is the single control.
+
+The contact form logs submissions to the journal (web_server.py:187), name/email/message, unstructured, no retention, the opposite of the discipline in backend/audit.py. The uncommitted
+diff also removed the email input while _contact_notify still renders it, so messages now arrive with no reply address.
+
+Your in-flight edits have the suite red. pseudonymizer.DEFAULT_IDENTITY was removed from the working tree minutes ago; tests/conftest.py:68-69 still monkeypatches it. 9 failed, 15 errors,
+all from that one attribute. Claude left your files alone.

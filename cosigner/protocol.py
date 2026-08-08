@@ -24,6 +24,17 @@ PORT = 8791
 
 WRAP_PATH = "/wrap"
 UNWRAP_AND_SIGN_PATH = "/unwrap-and-sign"
+# Releasing an account's data key without minting a DPoP proof. The documents an
+# account owns are encrypted under the same key as its refresh token, and
+# rendering the voice page needs the key but not the proof. Serving that from
+# `/unwrap-and-sign` would mint a capability nobody asked for and write a row
+# claiming a mail refresh that did not happen, so reading a user's own data is
+# its own action, with its own ceiling and its own rows in the log.
+UNWRAP_PATH = "/unwrap"
+# Moving one record onto the current outer key version. Takes an `outer` and
+# returns an `outer`: no proof, no plaintext on either box, and nothing
+# introduced for an account that had no record.
+REWRAP_PATH = "/rewrap"
 # A proof with no token beside it. The authorization-code exchange needs one
 # before any uid exists -- the mailbox is unknown until Google answers -- so
 # `/unwrap-and-sign` cannot serve that call: there is nothing to unwrap yet.
@@ -50,6 +61,11 @@ TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 # allocation.
 MAX_BODY = 64 * 1024
 
+# An opaque per-account handle the enclave minted, never an address and never
+# anything this service can turn back into a person. The name is historical: it
+# carried `account.id` until Track F, and it stays `uid` because the co-signer
+# does not parse the value and a column rename buys nothing. What changed is
+# what the enclave puts in it -- see backend.accounts.account.new_handle.
 F_UID = "uid"
 F_INNER = "inner"
 F_OUTER = "outer"

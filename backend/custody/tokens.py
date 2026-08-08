@@ -1,14 +1,19 @@
-"""Access tokens, obtained the hard way: one co-signer round trip per refresh.
+"""Access tokens obtained one co-signer round trip per refresh.
 
-This is the replacement for what google-auth-library used to do internally with
-a plaintext refresh token sitting in credentials.json. Nothing on this box can
+Nothing on this box can
 produce an access token by itself. Every refresh is:
 
-    read database/<uid>/token.bin        outer ciphertext, unopenable here
+    read database/<uid>/dek.bin          outer ciphertext, unopenable here
     co-signer unwrap-and-sign            -> inner ciphertext + a DPoP proof
-    wrapping.open_inner                  -> the refresh token, in RAM, briefly
+    wrapping.open_dek                    -> the account's data key, briefly
+    read database/<uid>/token.bin        the refresh token under that key
     POST oauth2.googleapis.com/token     refresh_token grant + the proof
     zeroize                              and cache only the access token
+
+The data key comes from `keyring.release_for_refresh`, which does not use the
+cache the document path uses: a refresh has to cost a round trip, because that
+round trip is what puts mail access inside the co-signer's rate limit and its
+log.
 
 Google binds a refresh token to a DPoP key at the authorization-code exchange,
 and the key is the co-signer's. That is what makes the second barrier permanent
@@ -34,15 +39,12 @@ import requests
 from backend import site
 from backend.accounts import account as account_store
 from backend.custody import client as cosigner
+from backend.custody import keyring
 from backend.custody import wrapping
 from backend.integrations import telegram
 from backend.integrations.gmail_gcal import oauth_app
 
 TOKEN_FILE = "token.bin"
-RECORD_MAGIC = b"LLTK"
-RECORD_VERSION = 1
-# magic | record version | key version, and then the ciphertext.
-HEADER_LEN = len(RECORD_MAGIC) + 2
 
 HTTP_TIMEOUT = 30
 # Refresh a little before Google would stop accepting it, so a long request
@@ -60,15 +62,10 @@ _dpop_nonce = None
 REAUTH_NOTICE_COOLDOWN = 24 * 3600
 
 
-class BadRecord(wrapping.CustodyError):
-    """A stored token record does not decode. Raised by `decode_record` and
-    turned into `ReauthRequired` by `load_record`, which is the only caller that
-    knows whose record it was."""
-
-
 class ReauthRequired(wrapping.CustodyError):
-    """Google refused the refresh grant. The user has to consent again; no
-    amount of retrying on this box changes that."""
+    """Google refused the refresh grant, or there is no readable token record.
+    The user has to consent again; no amount of retrying on this box changes
+    that."""
 
     def __init__(self, uid, detail=""):
         super().__init__(
@@ -85,114 +82,49 @@ def log(msg):
 
 # --- the record on disk ---------------------------------------------------
 
-def check_uid(uid):
-    """Refuse a uid that would name a path outside the account's own directory.
-
-    Exported because onboarding has to make the same judgement before it wraps
-    anything, and the check was written out twice: once here and once in
-    `provisioning.provision`. Two copies of a path-traversal guard is one that
-    can be relaxed on its own."""
-    assert uid and "/" not in uid and "\\" not in uid and ".." not in uid, (
-        f"refusing to build a token path from {uid!r}"
-    )
-    return uid
-
-
-def token_path(uid):
-    """Where one account's wrapped refresh token lives. Inside the account's own
-    directory in the store -- the same root account._owned_paths() reasons
+def token_path(acct):
+    """Where one account's encrypted refresh token lives. Inside the account's
+    own directory in the store -- the same root account._owned_paths() reasons
     about, so account.delete_account() removes the token with the rest of what
     that account owns rather than leaving it behind."""
-    return account_store.ACCOUNTS_DIR / check_uid(uid) / TOKEN_FILE
+    return keyring.path_for(acct, TOKEN_FILE)
 
 
-def encode_record(key_version, outer):
-    """magic | record version | key version | outer ciphertext.
+def take_custody(acct, refresh_token):
+    """Onboarding: encrypt the refresh token under this account's data key and
+    store it. The plaintext token exists only as the argument to this call and is
+    never written anywhere.
 
-    The key version is outside the ciphertext because it is needed to derive the
-    key that opens it. Keeping it here rather than in the manifest means the
-    token and the version it was sealed at cannot drift apart."""
-    assert 0 <= key_version <= 255, f"key_version {key_version} does not fit a byte"
-    assert outer, "encode_record needs an outer ciphertext"
-    return RECORD_MAGIC + bytes([RECORD_VERSION, key_version]) + bytes(outer)
+    The data key is minted on the first consent and reused on every later one.
+    That is what makes a re-consent work at all: the co-signer refuses a second
+    wrap for an account it has already wrapped, so a design that asked it to wrap
+    something new on every sign-in refused every returning user -- and Google
+    issues a fresh refresh token on each one, because the consent URL sends
+    `prompt=consent`.
 
-
-def decode_record(blob):
-    """The header and the ciphertext, or `BadRecord`.
-
-    A record that does not decode is a fact about a file on disk, not a broken
-    invariant: a truncated write, a restored backup, a record from a schema this
-    build predates. It is raised rather than asserted so `load_record` can turn
-    it into the ReauthRequired it actually means, instead of an IndexError
-    surfacing from the middle of a mailbox wake."""
-    if len(blob) <= HEADER_LEN:
-        raise BadRecord(f"token record is {len(blob)} bytes, too short to hold a header")
-    if blob[:4] != RECORD_MAGIC:
-        raise BadRecord("not a Letterlock token record")
-    record_version, key_version = blob[4], blob[5]
-    if record_version != RECORD_VERSION:
-        raise BadRecord(f"token record version {record_version} is not {RECORD_VERSION}")
-    return key_version, blob[HEADER_LEN:]
+    Order matters and is the whole design: ours inside, theirs outside. It is the
+    data key that goes through both layers; the token is encrypted under the key,
+    the same as every other file this account owns. See
+    backend/custody/keyring.py."""
+    assert refresh_token, "take_custody needs a refresh token"
+    uid, handle = keyring.identify(acct)
+    if not keyring.has_key(uid):
+        keyring.create(uid, handle)
+    return keyring.write_encrypted(acct, TOKEN_FILE, refresh_token)
 
 
-def store_record(uid, outer, key_version=wrapping.KEY_VERSION):
-    """Write one account's wrapped token. 0600 inside a 0700 directory, same as
-    everything else in the store -- though what lands here is useless to anyone
-    who reads it without the co-signer."""
-    path = token_path(uid)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.parent.chmod(0o700)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_bytes(encode_record(key_version, outer))
-    tmp.chmod(0o600)
-    tmp.replace(path)
-    return path
-
-
-def load_record(uid):
-    path = token_path(uid)
-    if not path.exists():
-        raise ReauthRequired(uid, f"no token record at {path}")
-    try:
-        return decode_record(path.read_bytes())
-    except BadRecord as err:
-        # Unreadable and unrecoverable are the same thing here: there is no
-        # second copy of a refresh token anywhere, so the only way forward is
-        # for the user to consent again.
-        raise ReauthRequired(uid, f"{path}: {err}") from err
-
-
-def take_custody(uid, refresh_token):
-    """Onboarding: seal under the enclave's key, have the co-signer wrap that,
-    and store the result. The plaintext token exists only as the argument to
-    this call and is never written anywhere.
-
-    Order matters and is the whole design: ours inside, theirs outside."""
-    assert uid and refresh_token, "take_custody needs a uid and a refresh token"
-    inner = wrapping.seal_inner(uid, refresh_token)
-    outer = cosigner.wrap(uid, inner)
-    return store_record(uid, outer)
-
-
-def has_custody(uid):
-    return token_path(uid).exists()
+def has_custody(acct):
+    return token_path(acct).exists()
 
 
 def notify_reauth_required(account, log=None):
     """Tell this account, in words, that Letterlock cannot reach their mailbox
-    and what to do about it -- at most once a day.
-
-    Not a traceback. `ReauthRequired` is the ordinary state of an account that
-    has not finished signing in, in the same way `ProviderUnavailable` is the
-    ordinary state of a drained balance: nothing is broken, a person has to do
-    something. Sending a stack trace on every wake says "this software is
-    failing" when the true message is "we are waiting for you", and it teaches
-    the reader to ignore the channel."""
+    and what to do about it at most once a day."""
     target = getattr(account, "telegram", None)
     sent = telegram.notify_once(
         f"reauth:{account.id}",
         "🔐 <b>Letterlock is not connected to your Gmail</b>\n"
-        f"Nothing is wrong, and nothing is being read: {html.escape(account.id)} "
+        f"{html.escape(account.id)} "
         "has no active Google grant, so drafting is paused.\n\n"
         f"Sign in to reconnect: {site.app_url('/auth/login')}",
         REAUTH_NOTICE_COOLDOWN,
@@ -204,12 +136,14 @@ def notify_reauth_required(account, log=None):
     return sent
 
 
-def discard(uid):
+def discard(acct):
     """Drop an account's token record. Used when a provision is refused after
-    the exchange, so a token we cannot use does not stay on disk."""
-    path = token_path(uid)
-    if path.exists():
-        path.unlink()
+    the exchange, so a token we cannot use does not stay on disk.
+
+    The data key stays. It belongs to the account rather than to the token, and
+    the documents that account wrote are encrypted under it -- destroying it
+    here would make a refused signup take a user's own writing with it."""
+    return keyring.clear_encrypted(acct, TOKEN_FILE)
 
 
 # --- the refresh itself ---------------------------------------------------
@@ -285,12 +219,29 @@ def exchange_with_dpop(form, uid=None, proof=None, sign=None):
     return resp.json()
 
 
-def _refresh(uid):
-    """One full refresh for one account. Returns (access_token, expiry_utc)."""
-    key_version, outer = load_record(uid)
+def _refresh(acct):
+    """One full refresh for one account. Returns (access_token, expiry_utc).
+
+    Always goes to the co-signer, never to the data-key cache, and that is
+    deliberate. The cache exists so rendering a settings page does not cost a
+    round trip; a refresh is the operation the per-account rate limit is
+    calibrated on, and serving one from a warm cache would take the co-signer's
+    view of how often a mailbox is read and quietly make it a view of how often
+    a process restarts."""
+    uid, handle = keyring.identify(acct)
+    path = token_path(acct)
+    if not path.exists():
+        raise ReauthRequired(uid, f"no token record at {path}")
     htu, htm = oauth_app.TOKEN_ENDPOINT, "POST"
-    inner, proof = cosigner.unwrap_and_sign(uid, outer, htm, htu, nonce=_dpop_nonce)
-    refresh_token = wrapping.open_inner(uid, inner, key_version)
+    try:
+        dek, proof = keyring.release_for_refresh(uid, handle, htm, htu, nonce=_dpop_nonce)
+    except keyring.NoDataKey as err:
+        raise ReauthRequired(uid, str(err)) from err
+    try:
+        refresh_token = bytearray(
+            keyring.decrypt(dek, handle, TOKEN_FILE, path.read_bytes()))
+    finally:
+        wrapping.zeroize(dek)
     client_id, client_secret = oauth_app.load_keys()
     try:
         payload = exchange_with_dpop(
@@ -322,14 +273,20 @@ def access_token_for(account):
 
     The lock is held across the refresh, not just around the cache read: two
     threads waking on the same mailbox would otherwise spend two of that
-    account's rate-limit budget to end up with the same token."""
-    uid = account.id if hasattr(account, "id") else account
+    account's rate-limit budget to end up with the same token.
+
+    Takes an Account and not an id. It used to accept either, and once an
+    account is named on this box by its address and off it by an opaque handle,
+    a function that accepts a bare string accepts the wrong one of the two --
+    which would not fail, it would derive a different key and read as a
+    corrupted record."""
+    uid = account.id
     now = datetime.datetime.now(datetime.timezone.utc)
     with _lock:
         cached = _access_cache.get(uid)
         if cached and cached[1] > now:
             return cached[0]
-        access, expiry = _refresh(uid)
+        access, expiry = _refresh(account)
         _access_cache[uid] = (access, expiry)
         log(f"{uid}: refreshed access token, valid until {expiry.isoformat()}")
         return access
@@ -354,11 +311,13 @@ def refresh_handler_for(account):
     return handler
 
 
-def forget(uid=None):
-    """Drop cached access tokens. Called when an account's custody changes and
-    by tests; a stale cached token would otherwise outlive a re-consent."""
+def forget(acct=None):
+    """Drop what this process cached about an account's custody: the access
+    token here and the data key in `keyring`. Called when an account's custody
+    changes and by tests; either one would otherwise outlive a re-consent."""
     with _lock:
-        if uid is None:
+        if acct is None:
             _access_cache.clear()
         else:
-            _access_cache.pop(uid, None)
+            _access_cache.pop(acct.id, None)
+    keyring.forget(None if acct is None else acct.id)

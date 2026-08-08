@@ -16,6 +16,7 @@ import time
 
 import pytest
 
+import harness
 from backend import audit
 from backend import paths
 from backend import site
@@ -32,6 +33,7 @@ def _manifest(tmp_path, entries):
 def _entry(email, **over):
     e = {
         "id": email,
+        "handle": harness.handle_for(email),
         "identity": {"first": "A", "last": "B", "emails": [email]},
         "telegram": {},
         "timezone": "UTC",
@@ -143,9 +145,13 @@ def test_the_voice_document_is_one_row_per_edit(store):
     assert (cleared["action"], cleared["outcome"]) == (audit.VOICE, "cleared")
 
 
-def test_personal_context_records_its_length_and_never_its_text(store):
+def test_personal_context_records_its_length_and_never_its_text(store, tmp_path,
+                                                                monkeypatch):
+    # The document is encrypted under the account's data key now, so writing one
+    # needs both halves of custody. What is under test is still the row.
     acct = account.get_account("dana@x.com")
-    personal_context.save(acct, "I am in Berlin and I ride a bicycle.")
+    with harness.custody_available(tmp_path, monkeypatch):
+        personal_context.save(acct, "I am in Berlin and I ride a bicycle.")
     (row,) = rows()
     assert (row["action"], row["outcome"]) == (audit.PERSONAL, "saved")
     assert row["detail"] == "chars:36"

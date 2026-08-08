@@ -4,8 +4,7 @@
 #
 # Its two keys are sealed to this host's TPM. Provision them once, as root:
 #
-#   head -c 32 /dev/urandom | base64 | \
-#     systemd-creds encrypt --name=cosigner-master - /etc/credstore.encrypted/cosigner-master
+#   head -c 32 /dev/urandom | base64 | systemd-creds encrypt --name=cosigner-master - /etc/credstore.encrypted/cosigner-master
 #   openssl ecparam -genkey -name prime256v1 -noout | openssl pkcs8 -topk8 -nocrypt | \
 #     systemd-creds encrypt --name=cosigner-dpop - /etc/credstore.encrypted/cosigner-dpop
 #

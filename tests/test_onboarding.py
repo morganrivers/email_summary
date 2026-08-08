@@ -185,6 +185,58 @@ def test_callback_happy_path_provisions_and_lands_in_the_app(monkeypatch):
     assert loc == "/dashboard", "signing in must not push the user into checkout"
 
 
+def test_every_required_scope_is_one_the_consent_asks_for():
+    assert set(oauth_app.REQUIRED_SCOPES) <= set(oauth_app.SCOPES)
+    assert oauth_app.missing_scopes(oauth_app.scope_param()) == ()
+
+
+def test_a_grant_that_says_nothing_is_not_a_full_grant():
+    """Fail closed on silence. A response with no scope field is not evidence
+    that everything was granted."""
+    assert oauth_app.missing_scopes(None) == oauth_app.REQUIRED_SCOPES
+    assert oauth_app.missing_scopes("") == oauth_app.REQUIRED_SCOPES
+
+
+def test_the_calendar_permission_can_be_unticked_and_is_named():
+    granted = " ".join(s for s in oauth_app.SCOPES if "calendar" not in s)
+    missing = oauth_app.missing_scopes(granted)
+    assert missing == (
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.acls.readonly",
+    )
+    assert "calendar.events" in ob.scope_refusal(missing)
+
+
+def test_callback_refuses_a_partial_consent_before_exchanging_the_code(monkeypatch):
+    """The redirect carries the granted scopes, so a user who unticked a box is
+    turned away before a code is exchanged and before the co-signer is asked to
+    wrap anything for them."""
+    def never(*args, **kwargs):
+        raise AssertionError("the code was exchanged for a partial consent")
+
+    monkeypatch.setattr(ob, "provision", never)
+    with pytest.raises(ob.ProvisionError) as ei:
+        ob.handle_callback(
+            {"code": "c", "state": "s",
+             "scope": "https://www.googleapis.com/auth/gmail.modify"},
+            lambda s: True, REDIRECT)
+    assert ei.value.code == 403
+    assert "calendar" in ei.value.msg
+
+
+def test_callback_proceeds_on_a_full_grant(monkeypatch):
+    class Acct:
+        id = "f@x.com"
+
+    monkeypatch.setattr(ob, "provision", lambda code, redirect, state: Acct())
+    monkeypatch.delenv("POLAR_SANDBOX", raising=False)
+    monkeypatch.setenv("POLAR_CHECKOUT_URL", "")
+    acct, _ = ob.handle_callback(
+        {"code": "c", "state": "s", "scope": oauth_app.scope_param()},
+        lambda s: True, REDIRECT)
+    assert acct.id == "f@x.com"
+
+
 def test_checkout_redirect_falls_back_without_polar(monkeypatch):
     monkeypatch.delenv("POLAR_SANDBOX", raising=False)
     monkeypatch.setenv("POLAR_CHECKOUT_URL", "")
@@ -214,6 +266,7 @@ from urllib.parse import parse_qs, urlparse
 
 from backend import secrets
 from backend.custody import client as cosigner
+from backend.custody import keyring
 from backend.custody import tokens
 from backend.custody import wrapping
 from backend.integrations.gmail_gcal import gmail_api, oauth_app
@@ -271,6 +324,11 @@ def test_the_pkce_verifier_is_derived_not_stored(consent):
 
 
 def _google_says(monkeypatch, payload, status=200, seen=None):
+    # A real token response says what was granted, and the code refuses one that
+    # does not, so the default here is a full grant. A test about a partial
+    # consent passes its own `scope`.
+    payload = {"scope": oauth_app.scope_param(), **payload}
+
     class R:
         status_code = status
         headers = {}
@@ -333,9 +391,10 @@ def test_provision_takes_custody_and_registers_the_account(consent, monkeypatch)
 
     assert acct.id == "dana@example.com" and acct.plan_status == "inactive"
     assert acct.identity.first == "Dana" and acct.identity.last == "Reed"
-    token_blob = tokens.token_path("dana@example.com").read_bytes()
+    assert account.HANDLE_RE.match(acct.handle), "the account was registered without a handle"
+    token_blob = tokens.token_path(acct).read_bytes()
     assert b"1//0gRefreshValue" not in token_blob, "the refresh token was stored readable"
-    assert token_blob.startswith(tokens.RECORD_MAGIC)
+    assert keyring.dek_path(acct.id).exists(), "custody stored no data key"
 
 
 def test_a_refused_signup_does_not_leave_a_token_behind(consent, monkeypatch):
@@ -351,9 +410,31 @@ def test_a_refused_signup_does_not_leave_a_token_behind(consent, monkeypatch):
     with pytest.raises(ob.ProvisionError) as ei:
         ob.provision("the-code", REDIRECT, "state-123")
     assert ei.value.code == 503
-    assert not tokens.has_custody("late@example.com"), (
+    refused = ("late@example.com", account.handle_for_email("late@example.com")
+               or "0" * 32)
+    assert not tokens.has_custody(refused), (
         "a token we cannot use was left on disk"
     )
+
+
+def test_a_partial_grant_in_the_token_response_is_refused(consent, monkeypatch):
+    """The redirect parameter is a convenience; this is the grant. Refused
+    before the account exists and before a token is stored, so a consent we
+    cannot use leaves nothing behind."""
+    _google_says(monkeypatch, {
+        "access_token": "ya29.x", "refresh_token": "1//0gRefreshValue",
+        "expires_in": 3600,
+        "scope": "https://www.googleapis.com/auth/gmail.modify "
+                 "https://www.googleapis.com/auth/calendar.events",
+    })
+    monkeypatch.setattr(gmail_api, "profile_address", lambda token: "part@example.com")
+
+    with pytest.raises(ob.ProvisionError) as ei:
+        ob.provision("the-code", REDIRECT, "state-123")
+    assert ei.value.code == 403
+    assert "acls.readonly" in ei.value.msg
+    assert account.MANIFEST.exists() is False
+    assert not tokens.has_custody(("part@example.com", "0" * 32))
 
 
 def test_a_consent_without_a_refresh_token_is_refused(consent, monkeypatch):

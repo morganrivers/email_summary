@@ -13,6 +13,8 @@ it is random per message, as a MIME boundary must be.
 
 import base64
 
+from identity_fixture import OWNER_FIRST
+
 from backend.integrations.gmail_gcal import drafts
 
 BOUNDARY = "BOUND_fixed0123456789ab"
@@ -26,13 +28,13 @@ def _reply():
     return {
         "to": "alice@example.com",
         "subject": "Re: Lunch next week?",
-        "body": "Hi Alice,\n\nLunch sounds great.\n\nBest,\nMorgan",
+        "body": f"Hi Alice,\n\nLunch sounds great.\n\nBest,\n{OWNER_FIRST}",
         "threadId": "t1",
         "inReplyTo": "<msg-e1@mail>",
         "references": "<a@mail> <b@mail>",
         "originalFrom": "Alice Adams <alice@contoso.com>",
         "originalDate": "Mon, 20 Jul 2026 09:00:00 +0000",
-        "originalBody": "Hi Morgan,\r\nwant to grab lunch?\n\n<b>bold</b> & \"quotes\"\n",
+        "originalBody": f"Hi {OWNER_FIRST},\r\nwant to grab lunch?\n\n<b>bold</b> & \"quotes\"\n",
     }
 
 
@@ -48,8 +50,8 @@ def test_reply_carries_threading_headers_and_gmails_quote_markup():
     # the quoted text the way a native reply does.
     assert '<div class="gmail_quote gmail_quote_container">' in out
     assert '<div dir="ltr" class="gmail_attr">On Mon, 20 Jul 2026 09:00:00 +0000,' in out
-    assert "&lt;b&gt;bold&lt;/b&gt; &amp; \"quotes\"" in out
-    assert "> Hi Morgan,\n> want to grab lunch?" in out
+    assert "&lt;b&gt;bold&lt;/b&gt; &amp; &quot;quotes&quot;" in out
+    assert f"> Hi {OWNER_FIRST},\n> want to grab lunch?" in out
 
 
 def test_a_message_with_no_original_has_no_quote_at_all():
@@ -65,12 +67,72 @@ def test_non_ascii_headers_are_encoded_words():
     out = _built({
         "to": "Zoë Müller <zoe@example.com>",
         "subject": "Grüße",
-        "body": "Héllo Zoë,\n\nBis bald.\n\nMorgan",
+        "body": f"Héllo Zoë,\n\nBis bald.\n\n{OWNER_FIRST}",
     })
     assert "To: =?UTF-8?B?" in out and "Subject: =?UTF-8?B?" in out
     assert "Zoë" not in out.split("\r\n\r\n")[0], "a raw non-ASCII header went out"
     # The body itself stays 8-bit UTF-8, which is what the parts declare.
     assert "Héllo Zoë," in out
+
+
+def test_only_the_display_phrase_of_an_address_is_encoded():
+    """RFC 2047 encoded-words are legal in the display phrase and nowhere else.
+    Encoding the whole value leaves a To: no mail server can route."""
+    out = _built({
+        "to": "Zoë Müller <zoe@example.com>",
+        "subject": "s", "body": "b",
+    })
+    assert "?= <zoe@example.com>\r\n" in out
+    plain = _built({"to": "alice@example.com", "subject": "s", "body": "b"})
+    assert "To: alice@example.com\r\n" in plain
+    named = _built({"to": "Alice Adams <alice@example.com>", "subject": "s", "body": "b"})
+    assert "To: Alice Adams <alice@example.com>\r\n" in named
+
+
+def test_body_and_quote_are_escaped_for_an_attribute_not_just_for_text():
+    """Both of these strings are chosen outside the account: the body by a model
+    reading attacker-controlled mail, the quote by the sender. Nothing puts them
+    in an attribute today, and this is what a caller who does may rely on."""
+    out = _built({
+        "to": "alice@example.com", "subject": "s",
+        "body": '" onmouseover="alert(1)" x="',
+        "originalFrom": "Eve <eve@x.com>",
+        "originalBody": "close it: \" and '",
+    })
+    html_part = out.split("Content-Type: text/html; charset=UTF-8\r\n"
+                          "Content-Transfer-Encoding: 8bit\r\n\r\n")[1]
+    assert 'onmouseover="' not in html_part
+    assert "&quot; onmouseover=&quot;alert(1)&quot; x=&quot;" in html_part
+    assert "close it: &quot; and &#x27;" in html_part
+
+
+def test_a_crafted_message_id_cannot_append_a_header():
+    """In-Reply-To and References are copied from the incoming mail's own
+    headers, so their content is the sender's choice. A line break in one used
+    to end our header and start theirs -- a Bcc on a draft the owner sends."""
+    out = _built({
+        "to": "alice@example.com", "subject": "s", "body": "b",
+        "inReplyTo": "<ok@mail>\r\nBcc: attacker@evil.example",
+        "references": "<a@mail>\r\nX-Injected: yes\r\n <b@mail>",
+    })
+    head = out.split("\r\n\r\n")[0]
+    assert "Bcc:" not in head and "X-Injected" not in head
+    assert "In-Reply-To: <ok@mail>\r\n" in out
+    assert "References: <a@mail> <b@mail>\r\n" in out
+
+
+def test_a_crafted_recipient_or_subject_cannot_append_a_header():
+    """The injected text survives as inert characters inside the value it was
+    smuggled into. What must not survive is the line break that would make it
+    a header of its own."""
+    out = _built({
+        "to": "alice@example.com\r\nBcc: attacker@evil.example",
+        "subject": "hi\r\nX-Injected: yes",
+        "body": "b",
+    })
+    lines = out.split("\r\n\r\n")[0].split("\r\n")
+    assert len(lines) == 4
+    assert not any(l.startswith(("Bcc:", "X-Injected:")) for l in lines)
 
 
 def test_attribution_degrades_to_whichever_half_is_known():

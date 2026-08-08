@@ -9,7 +9,6 @@ per account.
 from __future__ import annotations
 
 import datetime
-import os
 import sys
 
 from googleapiclient.errors import HttpError
@@ -17,15 +16,6 @@ from googleapiclient.errors import HttpError
 from backend.integrations.gmail_gcal import calendar_api, gmail_api
 
 MAX_EMAILS = 40
-
-# A community calendar the operator subscribes to, read alongside the account's
-# own for the daily summary. Absent or unreadable, the summary is simply built
-# without it: it is somebody else's calendar and never important enough to fail
-# a fetch over.
-COMMUNITY_CALENDAR_ID = os.environ.get(
-    "LETTERLOCK_COMMUNITY_CALENDAR",
-    "isdrlmn4d5jmagpmta3igf4g0l0pjn9i@import.calendar.google.com",
-)
 
 
 def log(msg):
@@ -73,16 +63,23 @@ def fetch_unread_24h(account):
 
 def fetch_daily(account):
     """The daily summary's whole input: unread mail, the next 24 hours of the
-    account's calendar, and the community calendar when it is readable."""
+    account's calendar, and the second calendar this account named, if any.
+
+    The second calendar comes from the account and there is no default: it is
+    somebody's own subscription, so a constant or an environment value would put
+    one user's community events into everybody's summary. Unreadable, it is
+    skipped rather than raised on -- a calendar the user may have unsubscribed
+    from is not worth failing a summary over."""
     now = datetime.datetime.now(datetime.timezone.utc)
     start_iso = now.isoformat().replace("+00:00", "Z")
     end_iso = (now + datetime.timedelta(days=1)).isoformat().replace("+00:00", "Z")
     emails = fetch_unread_24h(account)
     events = calendar_api.list_events(account, start_iso, end_iso, 50)
     community = []
-    try:
-        community = calendar_api.list_events(
-            account, start_iso, end_iso, 50, COMMUNITY_CALENDAR_ID)
-    except HttpError as err:
-        log(f"community calendar fetch failed: {err}")
+    if account.community_calendar:
+        try:
+            community = calendar_api.list_events(
+                account, start_iso, end_iso, 50, account.community_calendar)
+        except HttpError as err:
+            log(f"community calendar fetch failed: {err}")
     return {"emails": emails, "events": events, "community_events": community}

@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Upcoming Events.md",
-                "mode": "preview",
+                "file": "Evidence/Lawyers and AI confidentiality.md",
+                "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Upcoming Events"
+              "title": "Lawyers and AI confidentiality"
             }
           }
         ]
@@ -55,7 +55,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "",
+                "query": " United States",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -79,7 +79,8 @@
               "title": "Bookmarks"
             }
           }
-        ]
+        ],
+        "currentTab": 1
       }
     ],
     "direction": "horizontal",
@@ -189,34 +190,34 @@
       "edge-tts:Read note aloud": false
     }
   },
-  "active": "5bc98e39f6337370",
+  "active": "6e1fe98cdd92777f",
   "lastOpenFiles": [
-    "Unverified and open questions.md",
-    "Sources.md",
+    "Evidence/Evidence.md",
+    "Audiences/Audiences.md",
+    "Audiences/Privacy-conscious technical users.md",
+    "Organizations/Freedom of the Press Foundation.md",
+    "Evidence/Competitors and adjacent products.md",
     "Outreach Map.md",
-    "People/Person template.md",
-    "People/People.md",
+    "Unverified and open questions.md",
+    "Evidence/Lawyers and AI confidentiality.md",
     "Organizations/Y Combinator.md",
     "Organizations/Sovereign Tech Agency.md",
-    "Organizations/Prototype Fund.md",
-    "Organizations/Phala Network.md",
-    "Organizations/Organizations.md",
-    "Organizations/noyb.md",
     "Organizations/NLnet NGI Zero.md",
-    "Organizations/NEAR AI.md",
-    "Organizations/Freedom of the Press Foundation.md",
-    "Organizations/EDRi.md",
-    "Organizations/DeCC Alliance.md",
-    "Organizations/Confidential Computing Consortium.md",
-    "Organizations/Chaos Computer Club.md",
-    "Evidence/Evidence.md",
-    "Evidence/Therapists HIPAA and AI notes.md",
-    "Audiences/German professional secrecy holders.md",
-    "Audiences/Audiences.md",
-    "Evidence/AI email tools that broke trust.md",
-    "Evidence/Competitors and adjacent products.md",
-    "Upcoming Events.md",
-    "Welcome.md",
+    "Organizations/Organizations.md",
+    "Organizations/Phala Network.md",
+    "Channels/Show HN.md",
+    "Channels/SaaSHub and AlternativeTo.md",
+    "Channels/Reddit.md",
+    "Channels/Product Hunt.md",
+    "Channels/Privacy Guides Community.md",
+    "Channels/Press and newsletters.md",
+    "Channels/Podcasts and YouTube.md",
+    "Channels/Peerlist Launchpad.md",
+    "Channels/MicroLaunch.md",
+    "Channels/Mastodon and Bluesky.md",
+    "Channels/Channels.md",
+    "Channels/BetaList.md",
+    "Audiences/Therapists and counsellors.md",
     "Untitled.base"
   ]
 }

@@ -7,14 +7,16 @@ starts sealed after every reboot, and a fail-closed design plus a human-operated
 unseal means no mail moves until someone wakes up (docs/plan_token_custody.md
 §3). No third party, no human, one directory readable only by this unit.
 
-The outer key is per user: `HKDF(master, salt=uid, info="outer")`. Deriving per
-uid is what makes a future per-user revocation and a per-user audit line mean
-something -- a single global key would make every row in the log say the same
-thing about blast radius.
+The outer key is per account: `HKDF(master, salt=handle, info="outer")`. The
+salt is an opaque handle the enclave minted, not an address and not anything
+this box can turn back into a person (`backend.accounts.account.new_handle`).
+Deriving per handle is what makes a per-account revocation and a per-account
+audit line mean something -- a single global key would make every row in the log
+say the same thing about blast radius.
 
 What this module must never do is open an `inner`. It cannot: `K_inner` comes
 from the dstack KMS and is released only to an attested enclave. If a change
-here ever makes `unwrap()` return something a caller can read as a token, the
+here ever makes `unwrap()` return something a caller can read as a data key, the
 layer order has been reversed and this box has become the single point that can
 read every mailbox. See the invariants in `cosigner/__init__.py`.
 
@@ -27,6 +29,31 @@ Provisioning the credentials (once, on the box, as root):
       openssl pkcs8 -topk8 -nocrypt | \\
       systemd-creds encrypt --name=cosigner-dpop - \\
       /etc/credstore.encrypted/cosigner-dpop
+
+Rotating the master key, which this service can now actually do:
+
+ 1. Provision the next one beside the current one. Version 1 is the unsuffixed
+    name above; every later version is `cosigner-master-vN`.
+
+        head -c 32 /dev/urandom | base64 | \\
+          systemd-creds encrypt --name=cosigner-master-v2 - \\
+          /etc/credstore.encrypted/cosigner-master-v2
+
+    and add a `LoadCredentialEncrypted=` line for it to the unit.
+ 2. Bump `KEY_VERSION` here and restart. New wraps use v2; every existing record
+    still opens, because `unwrap()` reads the version out of the record and
+    `known_versions()` reports both keys as loadable.
+ 3. Run `python -m backend.custody.rotate` on the enclave. It hands each stored
+    record back through `/rewrap`, which unwraps under whichever version the
+    record names and re-wraps under the current one. No plaintext is involved on
+    either box: what is re-wrapped is still the enclave's sealed ciphertext.
+ 4. Once `rotate` reports every record at the current version, delete the old
+    credential and its `LoadCredentialEncrypted=` line. `known_versions()` then
+    stops reporting it and a record still carrying it fails closed.
+
+The DPoP key is the one that cannot be rotated at all: Google binds every
+refresh token to it at the authorization-code exchange, so replacing it forces
+every user to consent again.
 
 For a dev box with no TPM, `python -m cosigner.keys <dir>` writes the same two
 files in the clear and `COSIGNER_CREDENTIALS_DIR` points at them.
@@ -51,9 +78,17 @@ DPOP_NAME = "cosigner-dpop"
 MASTER_BYTES = 32
 NONCE_BYTES = 12
 
-# Prefixed to every `outer` so the master key can be rotated without a schema
-# change: an old ciphertext still says which derivation produced it.
+# Which master key new wraps are made under. Prefixed to every `outer`, so an
+# old ciphertext still says which derivation produced it and rotation is a
+# re-wrap of small records rather than a re-encryption of user data.
 KEY_VERSION = 1
+
+# Version 1 is the unsuffixed credential, because that is the one already sealed
+# to the TPM on the deployed box and a rename is a re-provisioning nobody would
+# get right at 3am. Later versions are suffixed. One function owns the mapping,
+# so the file name a rotation must create is derived rather than remembered.
+FIRST_VERSION = 1
+MAX_VERSION = 255
 
 DPOP_ALG = "ES256"
 
@@ -106,57 +141,138 @@ def _cached(name, build):
         return _CACHE[name]
 
 
-def master_key():
-    """The 32 bytes every outer key is derived from. Base64 in the file, so it
-    survives being piped through systemd-creds and read back by eye."""
+def current_version(version=None):
+    """`version`, or the one new wraps are made under.
+
+    Resolved at call time rather than as a default argument. A default is bound
+    at import, so a `KEY_VERSION` changed afterwards -- by a rotation rehearsal,
+    or by a test -- would move the version written into a record without moving
+    the key it was derived from, and the record would open until the day the two
+    disagreed."""
+    version = KEY_VERSION if version is None else version
+    assert FIRST_VERSION <= version <= MAX_VERSION, f"key version {version} out of range"
+    return version
+
+
+def master_name(version=None):
+    """The credential file holding one version's master key. Sole definition of
+    the name, so the rotation procedure in the module docstring, the unit's
+    `LoadCredentialEncrypted=` lines and the dev writer cannot disagree."""
+    version = current_version(version)
+    return MASTER_NAME if version == FIRST_VERSION else f"{MASTER_NAME}-v{version}"
+
+
+def master_key(version=None):
+    """The 32 bytes one version's outer keys are derived from. Base64 in the
+    file, so it survives being piped through systemd-creds and read back by
+    eye."""
+    name = master_name(version)
+
     def build():
-        text = _read(MASTER_NAME).decode(errors="replace").strip()
+        text = _read(name).decode(errors="replace").strip()
         try:
             key = base64.b64decode(text, validate=True)
         except Exception as err:
-            raise NotConfigured(f"{MASTER_NAME} is not valid base64: {err}") from err
+            raise NotConfigured(f"{name} is not valid base64: {err}") from err
         if len(key) != MASTER_BYTES:
             raise NotConfigured(
-                f"{MASTER_NAME} decodes to {len(key)} bytes, expected {MASTER_BYTES}"
+                f"{name} decodes to {len(key)} bytes, expected {MASTER_BYTES}"
             )
         return key
 
-    return _cached(MASTER_NAME, build)
+    return _cached(name, build)
 
 
-def outer_key(uid, version=KEY_VERSION):
-    assert uid, "outer_key requires a non-empty uid"
-    assert version == KEY_VERSION, f"unknown outer key version {version}"
+def known_versions():
+    """Every master key this box can actually load, newest first.
+
+    Derived from what is in the credential directory rather than from a second
+    constant, so retiring a key is deleting its file and nothing else. That is
+    also what makes retirement fail closed: a record still naming a version
+    whose credential is gone does not open, which is the whole point of
+    finishing a rotation before deleting the old key."""
+    found = []
+    for version in range(KEY_VERSION, FIRST_VERSION - 1, -1):
+        try:
+            master_key(version)
+        except NotConfigured:
+            continue
+        found.append(version)
+    return tuple(found)
+
+
+def outer_key(handle, version=None):
+    assert handle, "outer_key requires a non-empty handle"
     return HKDF(
-        algorithm=SHA256(), length=32, salt=uid.encode(), info=b"outer"
-    ).derive(master_key())
+        algorithm=SHA256(), length=32, salt=handle.encode(), info=b"outer"
+    ).derive(master_key(current_version(version)))
 
 
-def wrap(uid, inner):
-    """Put the operator's layer on the outside of the enclave's ciphertext.
+def wrap(handle, inner):
+    """Put the operator's layer on the outside of the enclave's ciphertext,
+    under the current key version.
 
     `inner` is opaque here and must stay that way: it is AES-GCM output under a
     KMS-released key this box has never held."""
-    assert uid, "wrap requires a uid"
+    assert handle, "wrap requires a handle"
     assert isinstance(inner, (bytes, bytearray)) and inner, "wrap requires non-empty inner bytes"
+    # Read once and used for both the derivation and the prefix. Letting the
+    # prefix come from the module global while the key came from a default
+    # argument bound at import time is a record that says one version and is
+    # encrypted under another -- which opens fine until the day the two differ,
+    # and then fails as tampering.
+    version = current_version()
     nonce = os.urandom(NONCE_BYTES)
-    sealed = AESGCM(outer_key(uid)).encrypt(nonce, bytes(inner), uid.encode())
-    return bytes([KEY_VERSION]) + nonce + sealed
+    sealed = AESGCM(outer_key(handle, version)).encrypt(
+        nonce, bytes(inner), handle.encode())
+    return bytes([version]) + nonce + sealed
 
 
-def unwrap(uid, outer):
-    """Strip the outer layer. What comes back is still ciphertext.
+def unwrap(handle, outer):
+    """Strip the outer layer, under whichever version the record names. What
+    comes back is still ciphertext.
 
-    The uid is the AAD, so an `outer` belonging to one user cannot be replayed
-    under another's id to get their rate-limit budget or their audit line."""
-    assert uid, "unwrap requires a uid"
+    Accepting an older version is what makes rotation possible at all: the new
+    key has to coexist with the old one for as long as it takes to re-wrap every
+    record, and a service that only opened its current version would make every
+    stored record unreadable the moment `KEY_VERSION` moved. A version whose
+    credential is not present raises, so retiring a key is still a hard stop
+    rather than a silent fallback to another one.
+
+    The handle is the AAD, so an `outer` belonging to one account cannot be
+    replayed under another's to get their rate-limit budget or their audit
+    line."""
+    assert handle, "unwrap requires a handle"
     assert isinstance(outer, (bytes, bytearray)), "unwrap requires bytes"
     header = 1 + NONCE_BYTES
     assert len(outer) > header + 16, f"outer too short to be a sealed record ({len(outer)} bytes)"
     version = outer[0]
-    assert version == KEY_VERSION, f"unknown outer key version {version}"
+    versions = known_versions()
+    assert version in versions, (
+        f"record was wrapped under outer key version {version}; this box can "
+        f"load {list(versions) or 'no versions'}"
+    )
     nonce = bytes(outer[1:header])
-    return AESGCM(outer_key(uid, version)).decrypt(nonce, bytes(outer[header:]), uid.encode())
+    return AESGCM(outer_key(handle, version)).decrypt(
+        nonce, bytes(outer[header:]), handle.encode())
+
+
+def rewrap(handle, outer):
+    """Move one record onto the current key version. Returns the new `outer`.
+
+    The only operation that reads a record and writes one back, and it is still
+    blind: what it unwraps is the enclave's sealed ciphertext, which this box
+    cannot read at either version. Possession of an `outer` that opens is the
+    authorization -- it is a value that exists only in the enclave's store, so
+    presenting one proves the caller is the box already entitled to unwrap it,
+    and unlike `/wrap` this cannot introduce a record for an account that had
+    none.
+
+    Already-current records are re-wrapped rather than skipped: the caller
+    cannot tell the version without parsing our record format, and a second wrap
+    at the same version is harmless."""
+    assert handle, "rewrap requires a handle"
+    return wrap(handle, unwrap(handle, outer))
 
 
 def dpop_key():
@@ -217,37 +333,44 @@ def configured():
     return None
 
 
-def write_dev_credentials(directory):
+def write_dev_credentials(directory, version=None):
     """Dev-only: the same two files, unsealed, for a box with no TPM. Kept here
     so the file names and formats have one definition rather than one in the
-    service and another in a README that drifts."""
+    service and another in a README that drifts.
+
+    `version` writes the master key under a later version's name, which is how a
+    rotation is rehearsed off the box. The DPoP key is written only alongside
+    version 1, because there is only ever one of it."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    master = directory / MASTER_NAME
+    master = directory / master_name(version)
     dpop = directory / DPOP_NAME
-    assert not master.exists() and not dpop.exists(), (
-        f"refusing to overwrite existing credentials in {directory}; every "
-        "wrapped token on the enclave becomes unreadable when the master key changes"
+    assert not master.exists(), (
+        f"refusing to overwrite {master}; every record wrapped under this "
+        "version becomes unreadable when the key behind it changes"
     )
     master.write_text(base64.b64encode(os.urandom(MASTER_BYTES)).decode() + "\n")
-    dpop.write_bytes(
-        ec.generate_private_key(ec.SECP256R1()).private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-    )
     master.chmod(0o600)
-    dpop.chmod(0o600)
+    if not dpop.exists():
+        dpop.write_bytes(
+            ec.generate_private_key(ec.SECP256R1()).private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        dpop.chmod(0o600)
     return directory
 
 
 def main(argv):
     if not argv:
-        print(f"usage: python -m {__package__}.keys <dev-credentials-dir>", file=sys.stderr)
+        print(f"usage: python -m {__package__}.keys <dev-credentials-dir> [key-version]",
+              file=sys.stderr)
         return 2
-    directory = write_dev_credentials(argv[0])
-    print(f"wrote {MASTER_NAME} and {DPOP_NAME} to {directory}")
+    version = int(argv[1]) if len(argv) > 1 else KEY_VERSION
+    directory = write_dev_credentials(argv[0], version)
+    print(f"wrote {master_name(version)} and {DPOP_NAME} to {directory}")
     print(f"COSIGNER_CREDENTIALS_DIR={directory}")
     return 0
 

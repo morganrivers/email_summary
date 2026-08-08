@@ -1,21 +1,32 @@
 """The enclave's half of split custody: the inner encryption layer.
 
-One refresh token is protected by two independent keys. This module owns the
-inner one, derived from the dstack KMS `app_secret`, which is released only to
-a CVM whose measurement the KMS has authorized. The outer layer belongs to the
-co-signer (backend.custody.client) and is applied on top, so the ciphertext
-that reaches disk cannot be opened by either box alone.
+Every account has one random 32-byte data encryption key. That DEK is what
+encrypts the account's data -- its refresh token, its voice profile, its
+personal information. The DEK itself is protected by two independent keys. This
+module owns the inner one, derived from the dstack KMS `app_secret`, which is
+released only to a CVM whose measurement the KMS has authorized. The outer layer
+belongs to the co-signer (backend.custody.client) and is applied on top, so the
+wrapped DEK that reaches disk cannot be opened by either box alone.
 
 Layer order is the whole guarantee and it is not symmetric. The operator's wrap
 is outside; ours is inside. Reversed, the co-signer's unwrap would yield a
-plaintext refresh token, making it the single box that can read every mailbox,
-which is the arrangement this design exists to avoid. Anything that changes the
-order here silently destroys the property, so seal_inner/open_inner are the only
-functions that touch a plaintext token and neither one talks to the network.
+plaintext data key, making it the single box that can read every mailbox, which
+is the arrangement this design exists to avoid. Anything that changes the order
+here silently destroys the property, so seal_dek/open_dek are the only functions
+that touch a plaintext key and neither one talks to the network.
+
+What the DEK buys over encrypting each file directly under a derived key:
+rotation re-wraps 32 bytes per account instead of rewriting every record, and
+destroying one account's wrapped DEK destroys that account's data without
+touching anyone else's -- a per-user revocation a purely derived scheme cannot
+offer, because there is nothing account-specific to destroy.
+
+The DEK is keyed to an opaque handle, not to an address. See
+`backend.accounts.account.new_handle`.
 
 Outside a CVM there is no KMS. A dev key from the environment stands in, but
 only while TEE_REQUIRED is unset: on a box that claims to be an enclave, a
-derived-from-nothing key would mean the tokens were never protected at all.
+derived-from-nothing key would mean the data was never protected at all.
 """
 
 from __future__ import annotations
@@ -31,7 +42,7 @@ from backend.tee import tee_boot
 from backend.tee.dstack_client import DstackClient, DstackError
 
 # Bumping this re-derives every inner key. The version travels with each stored
-# record (tokens.encode_record), so an old record stays openable after a bump
+# record (keyring.encode_record), so an old record stays openable after a bump
 # and rotation needs no schema change.
 KEY_VERSION = 1
 
@@ -39,7 +50,7 @@ KEY_LEN = 32
 NONCE_LEN = 12
 TAG_LEN = 16
 
-_INFO_INNER = b"gmail-refresh"
+_INFO_INNER = b"account-dek"
 
 DEV_SECRET_ENV = "LETTERLOCK_DEV_APP_SECRET"
 
@@ -106,49 +117,59 @@ def derive(salt, info, length=KEY_LEN):
     ).derive(app_secret())
 
 
-def inner_key(uid, key_version=KEY_VERSION):
-    assert uid, "inner_key needs an account id"
-    salt = f"{uid}|{key_version}".encode()
+def inner_key(handle, key_version=KEY_VERSION):
+    assert handle, "inner_key needs an account handle"
+    salt = f"{handle}|{key_version}".encode()
     return derive(salt, _INFO_INNER)
 
 
-def seal_inner(uid, refresh_token, key_version=KEY_VERSION):
-    """Encrypt a refresh token under this enclave's key. The result is what the
-    co-signer wraps; it never sees anything else."""
-    assert uid, "seal_inner needs an account id"
-    assert refresh_token, "seal_inner needs a refresh token"
-    plaintext = (refresh_token.encode() if isinstance(refresh_token, str)
-                 else bytes(refresh_token))
+def new_dek():
+    """A fresh data encryption key. Random, not derived: derived keys cannot be
+    destroyed, and destroying one account's key is what makes deleting that
+    account mean something beyond unlinking its files."""
+    return os.urandom(KEY_LEN)
+
+
+def seal_dek(handle, dek, key_version=KEY_VERSION):
+    """Encrypt an account's data key under this enclave's key. The result is what
+    the co-signer wraps; it never sees anything else."""
+    assert handle, "seal_dek needs an account handle"
+    assert isinstance(dek, (bytes, bytearray)) and len(dek) == KEY_LEN, (
+        f"a data key is {KEY_LEN} bytes, got {len(dek) if dek else 0}"
+    )
     nonce = os.urandom(NONCE_LEN)
-    sealed = AESGCM(inner_key(uid, key_version)).encrypt(
-        nonce, plaintext, uid.encode()
+    sealed = AESGCM(inner_key(handle, key_version)).encrypt(
+        nonce, bytes(dek), handle.encode()
     )
     return nonce + sealed
 
 
-def open_inner(uid, inner, key_version=KEY_VERSION):
+def open_dek(handle, inner, key_version=KEY_VERSION):
     """Decrypt what the co-signer handed back. Returns a bytearray so the caller
-    can clear it after use; a str could not be.
+    can clear it after use; a bytes could not be.
 
-    A tag failure means the ciphertext, the uid or the key does not match, and
+    A tag failure means the ciphertext, the handle or the key does not match, and
     the message says exactly that and nothing else. Logging the ciphertext here
     would put the one thing the co-signer is not allowed to see into a log the
     enclave writes."""
-    assert uid, "open_inner needs an account id"
+    assert handle, "open_dek needs an account handle"
     assert isinstance(inner, (bytes, bytearray)), "inner must be bytes"
     assert len(inner) > NONCE_LEN + TAG_LEN, (
         f"inner ciphertext is {len(inner)} bytes, too short to be sealed output"
     )
     nonce, sealed = bytes(inner[:NONCE_LEN]), bytes(inner[NONCE_LEN:])
     try:
-        plaintext = AESGCM(inner_key(uid, key_version)).decrypt(
-            nonce, sealed, uid.encode()
+        plaintext = AESGCM(inner_key(handle, key_version)).decrypt(
+            nonce, sealed, handle.encode()
         )
     except Exception as err:
         raise CustodyError(
-            f"inner unwrap failed for {uid} at key_version {key_version}: "
+            f"inner unwrap failed for {handle} at key_version {key_version}: "
             f"{type(err).__name__}"
         ) from None
+    assert len(plaintext) == KEY_LEN, (
+        f"inner layer opened to {len(plaintext)} bytes, which is not a data key"
+    )
     return bytearray(plaintext)
 
 

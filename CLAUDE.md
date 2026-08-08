@@ -5,141 +5,54 @@ Email drafting + daily summary system running on a Hetzner host
 
 ## Deployment
 
-The server has no git repo. Never `scp` individual files or edit remote files
-in place — both will drift from git. Instead:
+The server has no git repo. Never `scp` individual files or edit remote files in
+place — both drift from git. Instead:
 
 ```bash
 ./deploy/deploy.sh              # rsync + systemd daemon-reload + restart services
 DRY_RUN=1 ./deploy/deploy.sh    # preview only
+SERVICES="email-daemon.service" TIMERS="" ./deploy/deploy.sh   # subset
 ```
 
-`deploy/deploy.sh` (SSH key `~/.ssh/hezner`, user `root`) rsyncs the repo root
-(its own parent directory) to `root@hezner.morganrivers.com:/opt/letterlock/`,
-syncs the systemd units in `deploy/hetzner/*.service` and `*.timer` to
-`/etc/systemd/system/`, syncs the operator prompts named in `CONFIG_FILES`
-(`~/.system_files/prompt_for_email`, `voice-dna-email.md`) into
+`deploy/deploy.sh` (SSH key `~/.ssh/hezner`, user `root`) rsyncs the repo root to
+`root@hezner.morganrivers.com:/opt/letterlock/`, syncs `deploy/hetzner/*.service`
+and `*.timer` to `/etc/systemd/system/`, syncs the operator prompts named in
+`CONFIG_FILES` (`~/.system_files/prompt_for_email`, `voice-dna-email.md`) into
 `/opt/letterlock/config/`, then reloads systemd and restarts what it deployed.
 
-The repo sync is authoritative: `--delete-after` removes remote files the repo
-no longer has, so a rename or a restructure leaves no stale copy behind. The
-`EXCLUDES` list in the script is therefore the protected set (rsync never
-deletes an excluded path) and must stay in step with the server-only files
-below.
+The sync is authoritative: `--delete-after` removes remote files the repo no
+longer has, so `EXCLUDES` is the protected set and must stay in step with the
+server-only files below. A changed `requirements.txt` triggers
+`venv/bin/pip install -r requirements.txt`. No Node on the box: Gmail and
+Calendar are called from Python.
 
-Dependencies are installed automatically when their manifests change in a push:
-`requirements.txt` triggers `venv/bin/pip install -r requirements.txt`. There is
-no Node on the box: Gmail and Calendar are called from Python, so there is one
-language and one dependency tree.
+Which units deploy is derived from `deploy/hetzner/`: every `.service` with an
+`[Install]` section plus every `.timer`. `deploy/preflight.py` runs on the box
+first and checks per unit that its entry module imports and its configuration is
+present (through `backend/secrets.py`, the same code the service runs); a failing
+unit is reported and left alone rather than restarted into a crash loop. After
+the restart it verifies each unit is active and exits nonzero if not.
 
-`requirements.txt` is also the only list of what ships. The enclave image's
-`deploy/phala/pyproject.toml` is generated from it, so adding a pin is:
+Nothing runs as root. The deploy creates the `letterlock` system user, chowns the
+app directory, and installs `deploy/hetzner/hardening.conf` as
+`/etc/systemd/system/<unit>.d/10-hardening.conf` for every unit it touches —
+systemd has no include directive, so one file fans out to per-unit drop-ins. A
+unit needing an exception says so in `deploy/hetzner/<unit>.d/*.conf`, numbered
+above `10-hardening.conf`; exceptions live beside their unit rather than
+loosening the common sandbox. The deploy deletes drop-ins the repo no longer has.
 
-```bash
-python -m deploy.render_pyproject      # rewrite the pyproject dependency array
-(cd deploy/phala && uv lock)           # re-pin the lock uv2nix builds from
-```
+`cosigner.service.d/20-cosigner.conf` is the only one: the co-signer holds the
+outer wrapping key and the DPoP key, so it must not share the app's uid. It runs
+as `cosigner`, reads the source through `SupplementaryGroups=letterlock` (app dir
+750; `database/`, `state/`, `config/`, `.env` are 700/600, so group membership
+does not reach user data), with `ReadWritePaths=` emptied since it writes only to
+`StateDirectory=cosigner`. The deploy derives accounts to create by reading
+`User=` out of the drop-ins. Until the enclave moves to Phala this is separation
+of privilege on one box, not separation of operator, and no product copy may say
+otherwise.
 
-`tests/test_requirements.py` fails if the committed pyproject drifts.
-
-`requirements-dev.txt` is the second list, and the only other one: pytest,
-pip-audit and uv, installed on neither the box nor the image. The same test
-fails if a pin there reaches either shipped list, and `deploy/deploy.sh`
-excludes the file the way it excludes `tests/` and `docs/`.
-
-## Dependency advisories
-
-`python -m deploy.audit` says whether anything we ship has a known
-vulnerability. It audits `deploy/phala/uv.lock`, not `requirements.txt`: the
-lock is the full transitive closure, so a CVE in something pulled in indirectly
-is visible there and nowhere else.
-
-The check runs from `tests/test_dependency_audit.py` and is gated on
-`LETTERLOCK_AUDIT=1`, because it calls the advisory service and a test that
-fails offline gets deleted rather than debugged. Three GitHub workflows drive
-the rest:
-
-- `tests.yml` — the suite on every push and pull request, plus the `regenerate`
-  job that re-renders the pyproject and re-locks on Dependabot's own branch.
-  Dependabot cannot know those two files are generated, so without it every one
-  of its pull requests arrives failing `tests/test_requirements.py`.
-- `dependency-audit.yml` — daily, blocking. The pins do not change daily; the
-  advisory database does.
-- `dependency-latest.yml` — weekly, non-blocking. Installs the direct
-  dependencies unpinned and runs the suite, which answers whether the next
-  security bump will break the code.
-
-Kept separate on purpose: they fail for different reasons and at different
-rates, and one exit code for both trains you to ignore the one that matters.
-`deploy/testenv.sh` builds the environment for all of them, so no two workflows
-can disagree about what "installed" means.
-
-An advisory with no fixed version is the one case that needs a decision rather
-than a bump. It goes in `deploy/audit_ignores.toml` with an expiry date, and an
-entry past its date fails the audit exactly as the advisory did.
-
-Dependabot is configured for security updates only
-(`open-pull-requests-limit: 0` switches off version updates; security updates
-come from the repository setting and ignore that limit) and points at
-`requirements.txt` alone. Never point it at the `uv` ecosystem: it would edit
-the generated pyproject, and the next render reverts its work.
-
-The PII analyzer (Presidio + spaCy + `en_core_web_lg`) is commented out of
-`requirements.txt` and off by default, because it costs ~1.6 GB resident per
-masking process and the confidential VMs this runs on are priced by the GB.
-Uncomment the three pins and install the model to switch it on; nothing else
-changes, since `pseudonymizer.analyzer_available()` detects it. Note that pip
-never uninstalls: a box that already has it keeps it until the venv is rebuilt.
-The enclave image inherits the same default, because a commented-out pin is one
-the renderer above does not emit. Putting the analyzer in the image needs the
-model too, which is a URL rather than a pin; `requirements.txt` says how.
-
-Which units get deployed is derived from `deploy/hetzner/`: every `.service`
-with an `[Install]` section plus every `.timer`. Adding a unit file is all it
-takes to deploy it. Before restarting anything, `deploy/preflight.py` runs on the
-box and checks, per unit, that its entry module imports and its configuration is
-present — through `backend/secrets.py`, which answers with the same code the
-service runs (`PolarBilling()`). A unit that fails is reported and left alone
-rather than restarted into a crash loop, so an unprovisioned service never fails
-the whole deploy. After the restart the script verifies each unit is actually
-active and exits nonzero if not.
-
-Nothing runs as root. The deploy creates the `letterlock` system user, chowns
-the app directory to it, and installs `deploy/hetzner/hardening.conf` as
-`/etc/systemd/system/<unit>.d/10-hardening.conf` for every unit it touches. That
-file is the only copy of the sandbox settings (`User=`, `ProtectSystem=strict`,
-`NoNewPrivileges`, `UMask=0077`, …); systemd has no include directive, so the
-deploy fans one file out to per-unit drop-ins rather than repeating the block in
-seven `.service` files.
-
-A unit that must differ from that common sandbox says so in
-`deploy/hetzner/<unit>.d/*.conf`, numbered above `10-hardening.conf` so it wins.
-One unit's exception belongs beside that unit rather than in a loosened
-`hardening.conf` every other unit then inherits. The deploy installs those
-drop-ins and deletes any the repo no longer has, so a setting that still runs is
-always a setting you can read in git.
-
-`cosigner.service.d/20-cosigner.conf` is the only one so far, and it exists
-because the co-signer must not share the application's account: it holds the
-outer wrapping key and the DPoP key, and `User=letterlock` would put them inside
-the blast radius of the web UI and the mail daemon. It runs as `cosigner`,
-reaches the source read-only through `SupplementaryGroups=letterlock` (the app
-directory is 750; `database/`, `state/`, `config/` and `.env` are 700/600, so
-group membership does not reach user data), and gets `ReadWritePaths=` reset to
-empty since everything it writes lives in `StateDirectory=cosigner`. The deploy
-derives the accounts it must create by reading `User=` back out of the drop-ins,
-so the name is defined in one file. Until the enclave moves to Phala this is
-separation of privilege on one box, not separation of operator, and no product
-copy may say otherwise.
-
-`SERVICES` / `TIMERS` override the derived lists when you want to touch a subset:
-
-```bash
-SERVICES="email-daemon.service" TIMERS="" ./deploy/deploy.sh
-```
-
-Caddy config is not synced by `deploy/deploy.sh`. `deploy/hetzner/Caddyfile` is
-generated from `backend/site.py` (see "Single sources of truth"), so change the
-host or port there and regenerate rather than editing the Caddyfile:
+Caddy config is not synced. `deploy/hetzner/Caddyfile` is generated from
+`backend/site.py`, so change the host or port there and regenerate:
 
 ```bash
 python -m deploy.render_caddyfile > deploy/hetzner/Caddyfile
@@ -149,480 +62,469 @@ ssh root@hezner.morganrivers.com \
    && install -m 0644 /tmp/Caddyfile.new /etc/caddy/Caddyfile && systemctl reload caddy'
 ```
 
-The typical loop: edit → commit → `./deploy/deploy.sh`.
+Typical loop: edit → commit → `./deploy/deploy.sh`.
+
+## Dependencies and advisories
+
+`requirements.txt` is the only list of what ships, for the box and the measured
+enclave image alike. `deploy/phala/pyproject.toml` is generated from it:
+
+```bash
+python -m deploy.render_pyproject      # rewrite the pyproject dependency array
+(cd deploy/phala && uv lock)           # re-pin the lock uv2nix builds from
+```
+
+`tests/test_requirements.py` fails if the committed pyproject drifts.
+`requirements-dev.txt` (pytest, pip-audit, uv) is the only other list, installed
+on neither the box nor the image; the same test fails if one of its pins reaches
+a shipped list. `deploy/requirements.py` owns parsing and name-stripping.
+
+`python -m deploy.audit` says whether anything we ship has a known
+vulnerability. It audits `deploy/phala/uv.lock`, not `requirements.txt`: the lock
+is the full transitive closure. It runs from `tests/test_dependency_audit.py`
+gated on `LETTERLOCK_AUDIT=1`, because a test that fails offline gets deleted
+rather than debugged. An advisory with no fixed version goes in
+`deploy/audit_ignores.toml` with an expiry date; an entry past its date fails the
+audit exactly as the advisory did.
+
+Three workflows, kept separate because they fail for different reasons and one
+exit code for both trains you to ignore the one that matters:
+
+- `tests.yml` — the suite on every push and PR, plus the `regenerate` job that
+  re-renders the pyproject and re-locks on Dependabot's branch (Dependabot cannot
+  know those files are generated, so without it every one of its PRs fails
+  `tests/test_requirements.py`).
+- `dependency-audit.yml` — daily, blocking. The pins do not change daily; the
+  advisory database does.
+- `dependency-latest.yml` — weekly, non-blocking. Direct dependencies unpinned,
+  answering whether the next security bump will break the code.
+
+`deploy/testenv.sh` builds the environment for all three (`locked` = the image's
+closure, `latest` = the same distributions unpinned).
+
+Dependabot is security-updates-only (`open-pull-requests-limit: 0`) and points at
+`requirements.txt` alone. Never point it at the `uv` ecosystem: it would edit the
+generated pyproject and the next render reverts its work.
+
+The PII analyzer (Presidio + spaCy + `en_core_web_lg`) is commented out of
+`requirements.txt` and off by default: ~1.6 GB resident per masking process, and
+confidential VMs are priced by the GB. Uncomment the three pins and install the
+model to switch it on; `pseudonymizer.analyzer_available()` detects it. pip never
+uninstalls, so a box that already has it keeps it until the venv is rebuilt. The
+image inherits the default, since a commented-out pin is not rendered.
 
 ## Server-only files (never overwritten or deleted by deploy)
 
-Each entry here has a matching `--exclude` in `deploy/deploy.sh`; that exclusion
-is what protects it from `--delete-after`.
+Each has a matching `--exclude` in `deploy/deploy.sh`.
 
-- `.env` — API keys, not in git. `DEEPSEEK_API_KEY` and, to offer the
-  confidential routes, `NEARAI_API_KEY` (see `llm_client.PROVIDERS`; one key
-  serves both NEAR AI providers). Read once,
-  through `secrets.load()`. Inside the enclave this file must not exist at all;
-  the same values arrive as injected environment.
-- `.gmail-mcp/` — `gcp-oauth.keys.json`, the OAuth *app*'s client_id and
-  client_secret. One app serves every user; no per-user token lives here any
-  more (see `database/`). Read only through
-  `backend/integrations/gmail_gcal/oauth_app.py`, which takes the injected
-  `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` pair first and refuses
-  this file entirely under `TEE_REQUIRED`. It is the box's fallback, not the
-  enclave's: the CVM mounts no such directory and the boot gate will not start
-  with one present.
-- `state/` — daemon runtime scratch: `state.json`, `wake.fifo`,
-  `wake_queue.jsonl`, `wake_queue.lock`, `restart.flag`. Created on first write
-  by `paths.ensure_run_dir()`.
-- `database/` — multi-tenant account store (`database/accounts.json`: per-user
-  identity, token file, telegram targets, timezone, plan status) plus each
-  user's `<id>/token.bin`, the nested-wrapped refresh token. Holds PII, so it is
-  git-ignored and written 0600 inside a 0700 directory; the token records are
-  useless to anyone who reads them without the co-signer. A manifest is
-  required; seed the owner once with `python -m backend.accounts.seed_owner`,
-  then have them sign in through `/auth/callback` to grant Gmail access.
-- `config/` — operator prompts pushed from `~/.system_files` (see above).
-  `paths.config_file()` reads these, falling back to `~/.system_files` so a
-  laptop checkout works unchanged.
+- `.env` — API keys, not in git: `DEEPSEEK_API_KEY`, and `NEARAI_API_KEY` for the
+  confidential routes (one key serves both NEAR AI providers). Read once through
+  `secrets.load()`. Inside the enclave this file must not exist; the same values
+  arrive as injected environment.
+- `.gmail-mcp/` — `gcp-oauth.keys.json`, the OAuth *app*'s client_id/secret. One
+  app serves every user; no per-user token lives here. Read only through
+  `gmail_gcal/oauth_app.py`, which prefers the injected
+  `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` and refuses this file
+  entirely under `TEE_REQUIRED`. The box's fallback, not the enclave's.
+- `state/` — daemon scratch: `state.json`, `wake.fifo`, `wake_queue.jsonl`,
+  `wake_queue.lock`, `restart.flag`. Created by `paths.ensure_run_dir()`.
+- `database/` — multi-tenant account store. `database/accounts.json` is the
+  manifest (identity, opaque handle, token file, telegram targets, timezone, plan
+  status) and the only plaintext left: it maps a handle back to a person, and
+  encrypting it per account would need the account list to find the account.
+  Everything under `<id>/` is ciphertext — `dek.bin`, `token.bin`,
+  `voice-dna.enc`, `personal-context.enc` — and opening any of it costs a
+  co-signer round trip that is rate limited and logged. Git-ignored, 0600 inside
+  0700, but the modes are not the isolation: all six units share the `letterlock`
+  uid, so the key is. Seed the owner once with
+  `python -m backend.accounts.seed_owner`, then have them sign in through
+  `/auth/callback`.
+- `config/` — operator prompts pushed from `~/.system_files`.
+  `paths.config_file()` falls back to `~/.system_files` so a laptop checkout
+  works unchanged.
 - `venv/` — Python virtualenv at `/opt/letterlock/venv`.
 
 ## Runtime paths
 
-- `daemon_loop.py` — long-running FIFO listener run by the `email-daemon`
-  systemd service (`Restart=always`). On wake, routes each fetched email
-  through `manual_draft.is_bot_request(email, account)` and either
-  `manual_draft.process_draft_request()` (bot-request path) or
-  `draft_replies.process_emails()` (auto-reply path). The bot alias is derived
-  per account (`user+bot@…`), not a global constant.
-- `gmail_hook_server.py` — HTTPS webhook receiver run by the `email-webhook`
-  systemd service, behind Caddy (`127.0.0.1:8787`). Verifies the Pub/Sub OIDC
-  JWT and wakes the daemon via the FIFO.
-- `email_summary.py` — daily summary run by the `email-summary.timer`
-  (05:00 UTC). Sweeps every active account, fetching each user's mailbox through
-  `mailbox.fetch_daily(account)` and delivering to `account.telegram`. Accounts
-  with no linked chat are skipped.
-- `watch_renew.py` — weekly per-account Gmail `users.watch` renewal run by the
-  `gmail-watch.timer`; iterates every active account and calls
-  `gmail_api.register_watch()` for each.
-- `frontend/web_server.py` — the product web UI run by the `letterlock-web`
-  service, behind Caddy (`127.0.0.1:8790` on `APP_HOST`). Sign-in with Google,
-  dashboard, voice DNA, personal info, settings, billing. `/voice` generates a
-  profile from the user's sent mail on a background thread (`voice_dna.start()`,
-  page polls by meta refresh) and shows it as editable plaintext; `/personal` is
-  the second box, the owner's own facts (`personal_context`), kept apart from the
-  profile precisely because generating a profile overwrites the profile.
-  The standalone `/onboard` flow it superseded was
-  removed; its OAuth sequence now lives in `backend/onboarding/provisioning.py`.
-  Telegram is linked by a round trip through the bot (`/settings/telegram/*`),
-  never by typing a chat id.
-- `cosigner/server.py` — the split-custody co-signer run by the `cosigner`
-  service, behind Caddy (`127.0.0.1:8791` on `COSIGNER_HOST`, the one site block
-  that demands a client certificate). Holds the outer wrapping key and the DPoP
-  signing key and no ciphertext at all, so compromising it alone reads no mail;
-  the enclave holds the ciphertext and cannot strip the outer layer alone. It is
-  a hard dependency by design: if it is down, no mail is processed for anyone,
-  and there is deliberately no bypass. Its two keys come from
-  `LoadCredentialEncrypted=` (sealed to the host TPM) and must be provisioned by
-  hand once — see the header of `deploy/hetzner/cosigner.service`. Design and
-  sequencing: `docs/plan_token_custody.md`.
-- `backend/daemons/egress_proxy.py` — the egress allowlist proxy run by the
-  `egress-proxy` service (`127.0.0.1:8792`, not behind Caddy: it is the one
-  loopback port the units dial outward). An HTTP CONNECT proxy, and the only
-  process on the box with unrestricted network access. Every other unit runs
-  under `IPAddressDeny=any` / `IPAddressAllow=localhost` with its HTTP clients
-  pointed here, so the machine's reachable destination set is exactly
-  `backend/egress.py`. Runs as `egress`, its own account, for the reason the
-  co-signer runs as `cosigner`: the process holding the network must not be the
-  process holding the API keys. Like the co-signer it is a hard dependency with
-  no bypass — a fallback to direct connections would be an outage that silently
-  turns the control off. Written in-repo rather than installed (tinyproxy,
-  squid) because it faces an attacker who already has code execution and is the
-  one process whose compromise returns the whole privilege, so a memory-unsafe
-  C parser is the wrong thing to put there.
+- `daemon_loop.py` — FIFO listener, `email-daemon` service (`Restart=always`). On
+  wake routes each email through `manual_draft.is_bot_request(email, account)` to
+  either `manual_draft.process_draft_request()` or
+  `draft_replies.process_emails()`. The bot alias is derived per account
+  (`user+bot@…`), not a global constant.
+- `gmail_hook_server.py` — HTTPS webhook, `email-webhook` service behind Caddy
+  (`127.0.0.1:8787`). Verifies the Pub/Sub OIDC JWT and wakes the daemon.
+- `email_summary.py` — daily summary, `email-summary.timer` (05:00 UTC). Sweeps
+  every active account via `mailbox.fetch_daily(account)`, delivers to
+  `account.telegram`, skips accounts with no linked chat.
+- `watch_renew.py` — weekly per-account `users.watch` renewal, `gmail-watch.timer`.
+- `frontend/web_server.py` — product web UI, `letterlock-web` service behind
+  Caddy (`127.0.0.1:8790` on `APP_HOST`): sign-in, dashboard, voice DNA, personal
+  info, settings, billing. `/voice` generates a profile on a background thread
+  (`voice_dna.start()`, page polls by meta refresh); `/personal` is the second
+  box (`personal_context`), kept apart because generating a profile overwrites
+  the profile. Telegram is linked by a round trip through the bot
+  (`/settings/telegram/*`), never by typing a chat id. The old `/onboard` flow was
+  removed; its OAuth sequence lives in `backend/onboarding/provisioning.py`.
+- `cosigner/server.py` — split-custody co-signer, `cosigner` service behind Caddy
+  (`127.0.0.1:8791` on `COSIGNER_HOST`, the one site block demanding a client
+  certificate). Holds the outer wrapping key and the DPoP signing key and no
+  ciphertext, so compromising it alone reads no mail; the enclave holds the
+  ciphertext and cannot strip the outer layer alone. A hard dependency by design:
+  if it is down no mail is processed, and there is deliberately no bypass. Its
+  two keys come from `LoadCredentialEncrypted=` (sealed to the host TPM),
+  provisioned by hand once — see the header of `deploy/hetzner/cosigner.service`.
+  Design: `docs/plan_token_custody.md`.
+- `backend/daemons/egress_proxy.py` — egress allowlist proxy, `egress-proxy`
+  service (`127.0.0.1:8792`, not behind Caddy). An HTTP CONNECT proxy and the
+  only process with unrestricted network access; every other unit runs under
+  `IPAddressDeny=any` / `IPAddressAllow=localhost` pointed here, so the machine's
+  reachable set is exactly `backend/egress.py`. Runs as `egress`, its own
+  account: the process holding the network must not be the one holding the API
+  keys. Hard dependency with no bypass — a fallback to direct connections would
+  silently turn the control off. Written in-repo rather than tinyproxy/squid
+  because it faces an attacker with code execution and a memory-unsafe C parser
+  is the wrong thing there.
 
-Code changes take effect when the systemd services restart, which `deploy/deploy.sh`
-does via `systemctl restart`. The daemon also honors `restart.flag` (it exits
-and `Restart=always` respawns it), but restarting the webhook requires a
-service restart.
+Code changes take effect on service restart, which `deploy/deploy.sh` does. The
+daemon also honors `restart.flag`; the webhook needs a real service restart.
 
 ## Single sources of truth
 
-Keep these centralized. If you need behavior that lives here, import — don't
-copy.
+Keep these centralized. If you need behavior that lives here, import — don't copy.
 
 - `backend/secrets.py` — how a secret reaches the process. `secrets.load()` is
-  the only read of `.env` (idempotent, and injected environment always wins over
-  the file), and the `*_configured()` checks are the only definition of "this
-  value is present", answered by calling the same code the services call
-  (`PolarBilling()`, `telegram.operator_target()`) wherever presence is a
-  judgement rather than a lookup, and owning the variable name itself where it
-  is not: `frontend/session.py` reads `SESSION_SECRET_ENV` and
-  `SESSION_SECRET_PREVIOUS_ENV` from here rather than
-  the reverse, so nothing in `backend/` reaches up into `frontend/` to ask. `tee_boot.run_gate()` and
-  `deploy/preflight.py` both build on them, so the enclave's fail-closed set and
-  the deploy's skip set cannot drift apart. `fingerprint()` is the third: how a
-  secret is named in a log, so a startup line can say which value the process
-  captured without printing it, and a `.env` edited under a running service is
-  visible rather than silent — the old gate listed four names and
-  so booted happily without `SESSION_SECRET` or the Polar keys. Under
-  `TEE_REQUIRED` no file is read at all: secrets are injected post-attestation,
-  the compose file mounts no `.env` and no `.gmail-mcp`, and `volume_secrets()`
-  is the one list of files whose mere presence fails the boot gate — it names
-  `.env` and `oauth_app.keys_path()`, so the gate refuses exactly what the
-  loaders refuse. `google_oauth_configured()` is in `REQUIRED` and answers by
-  calling `oauth_app.load_keys()`, which is what decides between the injected
-  pair and the volume file, so the gate cannot approve a source the reader
-  rejects.
-- `frontend/session.py` — the two signed cookies (the session and the OAuth
-  state) and the keyring that verifies them. Each cookie is
-  `kid:value:iat:mac`, the `kid` naming which key signed it, so more than one
-  key is live at once and verification still has exactly one key to try. That
-  is what makes the secret rotatable: put the new value in `SESSION_SECRET`,
-  the outgoing one in `SESSION_SECRET_PREVIOUS`, restart, and nobody is signed
-  out — only the current key mints, so the old one drains as cookies are
-  re-issued. Drop `SESSION_SECRET_PREVIOUS` on a later deploy to retire the
-  sessions it signed; `SESSION_TTL` (30 days) is how long that takes to empty
-  by itself. The web server's startup line fingerprints both, and a cookie's
-  `kid` is the digest half of one of those fingerprints, so "which key signed
-  this session" is answerable from the journal and a browser without either
-  holding the key. The OAuth state inherits all of it, which is why a restart
-  mid-consent no longer comes back as a CSRF alarm.
-- `backend/site.py` — public hostnames (`APP_HOST` = the product,
-  `API_HOST` = the Pub/Sub push + Polar webhook box), loopback ports, and every
-  externally visible URL built from them (OAuth callbacks, Polar webhook, the
-  Pub/Sub `aud`). Overridable from `.env` via `LETTERLOCK_HOST`,
-  `LETTERLOCK_API_HOST`, `LETTERLOCK_ALIAS_HOSTS`.
-  `deploy/render_caddyfile.py` renders the Caddy site blocks from it, so the
-  proxy and the app cannot disagree about a host or a port. `LOOPBACK` /
-  `TRUSTED_PROXIES` / `upstream()` are the same fact for the peer rather than
-  the port: the address Caddy proxies from, and therefore the only peer whose
-  `X-Forwarded-For` `web_server._source_ip()` will read. Drift between the two
-  means every audit row silently records the proxy's own address instead of a
-  browser's, so `upstream()` asserts the address it renders is one the app
-  trusts. `COSIGNER_PORT` is
-  the exception it re-exports rather than defines: it belongs to
-  `cosigner/protocol.py`, next to the server that binds it.
+  the only read of `.env` (idempotent; injected environment wins). The
+  `*_configured()` checks are the only definition of "this value is present",
+  answered by calling the same code the services call (`PolarBilling()`,
+  `telegram.operator_target()`) and owning the variable name where presence is a
+  lookup — `frontend/session.py` reads `SESSION_SECRET_ENV` and
+  `SESSION_SECRET_PREVIOUS_ENV` from here, not the reverse. `tee_boot.run_gate()`
+  and `deploy/preflight.py` both build on them, so the enclave's fail-closed set
+  and the deploy's skip set cannot drift. `fingerprint()` names a secret in a log
+  without printing it. Under `TEE_REQUIRED` no file is read at all;
+  `volume_secrets()` is the one list of files whose mere presence fails the boot
+  gate (`.env`, `oauth_app.keys_path()`), so the gate refuses exactly what the
+  loaders refuse, and `google_oauth_configured()` answers through
+  `oauth_app.load_keys()` so it cannot approve a source the reader rejects.
+- `frontend/session.py` — the two signed cookies (session, OAuth state) and the
+  keyring verifying them. Each is `kid:value:iat:mac`, the `kid` naming the
+  signing key, so several keys are live at once and verification still has one
+  key to try. That is what makes the secret rotatable: new value in
+  `SESSION_SECRET`, outgoing one in `SESSION_SECRET_PREVIOUS`, restart, nobody
+  signed out; only the current key mints, so the old drains as cookies re-issue.
+  Drop `SESSION_SECRET_PREVIOUS` later to retire them; `SESSION_TTL` (30 days) is
+  how long that takes by itself. The OAuth state inherits all of it, which is why
+  a restart mid-consent is no longer a CSRF alarm.
+- `backend/site.py` — public hostnames (`APP_HOST` = product, `API_HOST` =
+  Pub/Sub push + Polar webhook), loopback ports, and every externally visible URL
+  built from them. Overridable via `LETTERLOCK_HOST`, `LETTERLOCK_API_HOST`,
+  `LETTERLOCK_ALIAS_HOSTS`. `deploy/render_caddyfile.py` renders the Caddy site
+  blocks from it. `LOOPBACK` / `TRUSTED_PROXIES` / `upstream()` are the same fact
+  for the peer: the only address whose `X-Forwarded-For` `web_server._source_ip()`
+  reads, so `upstream()` asserts the address it renders is one the app trusts —
+  drift means every audit row records the proxy instead of a browser.
+  `COSIGNER_PORT` is re-exported from `cosigner/protocol.py`, not defined here.
 - `backend/egress.py` — every hostname anything on this box may connect to, and
   the check that decides one connection. Derived, not typed: each entry comes
-  from the module that already names the host for its own reasons
-  (`llm_client.PROVIDERS`, `oauth_app`, `telegram.API_ROOT`, `polar_api`'s two
-  bases, both TDX allowlists' `pccs_url`, `site.COSIGNER_HOST`), so adding a
-  provider cannot leave the allowlist behind and there is nothing here to forget
-  to edit. Exact matches only — no wildcards, no suffix rules — because a suffix
-  rule for `near.ai` is what permits an attacker's `evil.near.ai`. Google's two
-  API roots are the one pair no constant of ours produces (googleapiclient reads
-  them from a discovery document bundled in the library); `GOOGLE_API_HOSTS`
-  holds them and `tests/test_egress.py` reads those documents for
-  `google_client.APIS` and fails if one is missing. The list holds names and no
-  addresses, so no bare IP is reachable through the proxy at all.
-
-  What it does not defend: the drafter's tools (`search_emails`,
-  `get_calendar_events`, `get_email_thread`) fetch no URLs, so prompt injection
-  in an email body could not open a connection before this existed and cannot
-  now. This is for the post-compromise case and for a dependency that ships a
-  release which phones home. `deploy/check_egress.py` is what proves it is on:
-  `IPAddressDeny=` needs cgroup v2 with BPF, and without it systemd logs a line
-  and starts the unit anyway, so a green deploy is not evidence.
-- `cosigner/` — the co-signer, which imports nothing from `backend/` except the
-  single Telegram seam in `alerts.py`, so it can be moved to its own box under
-  its own operator. The dependency points the other way: `backend/site.py` and
-  the enclave's custody client import `cosigner.protocol`, the wire contract.
-  `keys.py` is the only place the outer key is derived or the DPoP proof signed;
-  `policy.py` is the only place a request is decided, and the same call writes
-  its audit row, so the rate limit it enforced and the log cannot disagree —
-  including the sweep rule (`_sweep_refusal`), which meters how many *different*
-  accounts were unwrapped in a short window rather than how many requests, since
-  bulk exfiltration is one request per account and every per-account rule reads
-  that as normal. `audit.py` keeps two tables for one reason: `grants` is the
-  wrap-once state and is never deleted, `requests` is the log and every reader of
-  it is windowed, which is what lets `retention.py` prune. `retention.py` is the
-  only code in the package that deletes a row, it runs on a thread inside the
-  co-signer rather than as its own unit (a second process would VACUUM under the
-  one that answers every request), and its floor is derived from
-  `policy.longest_window()` so a new limiter cannot outlive what it deletes.
-  `attest.py` holds this box's own measurement allowlist, which is the point of
-  the second machine — the enclave cannot edit it, so a new `compose_hash` must
-  be authorized here *and* in the AppAuth contract before deploying, or every
-  unwrap fails. `cosigner/__init__.py` states the four invariants the whole
-  design rests on; read them before refactoring anything in that package.
+  from the module that already names the host (`llm_client.PROVIDERS`,
+  `oauth_app`, `telegram.API_ROOT`, `polar_api`'s two bases, both TDX
+  allowlists' `pccs_url`, `site.COSIGNER_HOST`). Exact matches only — a suffix
+  rule for `near.ai` is what permits `evil.near.ai`. `GOOGLE_API_HOSTS` holds the
+  one pair no constant of ours produces (googleapiclient reads them from bundled
+  discovery documents); `tests/test_egress.py` reads those documents and fails if
+  one is missing. Names only, no addresses, so no bare IP is reachable.
+  This does not defend against prompt injection: the drafter's tools fetch no
+  URLs. It is for the post-compromise case and for a dependency that phones home.
+  `deploy/check_egress.py` proves it is on — `IPAddressDeny=` needs cgroup v2
+  with BPF, and without it systemd logs a line and starts the unit anyway.
+- `cosigner/` — imports nothing from `backend/` except the Telegram call in
+  `alerts.py`, so it can move to its own box under its own operator; the
+  dependency points the other way (`backend/site.py` and the custody client
+  import `cosigner.protocol`, the wire contract). `keys.py` is the only place the
+  outer key is derived or the DPoP proof signed, and the only written-down
+  rotation procedure: a master key per version, `master_name()` owning credential
+  file names, `known_versions()` derived from which credentials actually load so
+  retiring one fails closed, `/rewrap` moving a record between versions without
+  opening it. `policy.py` is the only place a request is decided and the same
+  call writes its audit row, so the limit enforced and the log cannot disagree —
+  including `_sweep_refusal`, which meters how many *different* accounts were
+  unwrapped in a window (bulk exfiltration is one request per account, which
+  every per-account rule reads as normal) and counts across
+  `policy.KEY_RELEASING` so a sweep cannot split itself across both unwrap paths.
+  `audit.py` keeps `grants` (wrap-once state, never deleted) apart from
+  `requests` (the log, every reader windowed), which is what lets `retention.py`
+  prune; that module is the only code in the package that deletes a row, runs on
+  a thread inside the co-signer (a second process would VACUUM under the one
+  answering requests), and derives its floor from `policy.longest_window()`.
+  `attest.py` holds this box's measurement allowlist — the point of the second
+  machine, since the enclave cannot edit it. `cosigner/__init__.py` states the
+  four invariants; read them before refactoring anything in that package.
+  An account is named by an opaque handle the enclave minted, never an address
+  (`account.new_handle`); nothing here parses it, which is why
+  `tests/test_handle_boundary.py` reads the tree for a call passing the wrong one
+  — an account id would work at every layer, derive a different key, and surface
+  later as a record that will not open. The mapping back to a person exists only
+  in the enclave's manifest; `python -m backend.accounts.whois <handle>` reads it,
+  deliberately a command rather than a route.
 - `backend/onboarding/provisioning.py` — the Google consent sequence: auth URL
   (PKCE + `dpop_jkt`), code exchange, `tokens.take_custody`, `register_account`,
   watch registration, checkout redirect. `handle_callback()` is the whole
-  decision path, HTTP-free and directly tested. Any future sign-in surface
+  decision path, HTTP-free and directly tested; any future sign-in surface
   imports this rather than reimplementing token custody. The exchange is in
   Python because Google binds the refresh token to the co-signer's DPoP key at
-  that one request and nowhere else.
-- `backend/custody/` — split custody of every Gmail refresh token
-  (docs/plan_token_custody.md Track I). `wrapping.py` owns the inner AES-GCM
-  layer, keyed by HKDF from the dstack KMS `app_secret`; `client.py` is the sole
-  network boundary to the co-signer, which holds the outer wrapping key and the
-  DPoP private key and stores nothing; `tokens.py` is the only path from a
-  stored record to a usable access token. The layer order is the guarantee:
-  ours inside, theirs outside. Reversed, the co-signer's unwrap would yield
-  plaintext and it would become the single box that can read every mailbox.
-  There is no bypass and must never be one: a co-signer that is down means no
-  mail is processed, which is the availability cost the design accepts in
-  exchange for removing a confidentiality risk.
-- `backend/integrations/gmail_gcal/` — the only code that talks to Google's
-  mail and calendar APIs. `oauth_app.py` (client keys, scopes, endpoints),
-  `google_client.py` (credentials + the per-thread service cache),
-  `gmail_api.py` (messages/threads/history/watch), `calendar_api.py`,
-  `mailbox.py` (the two fetch shapes), `drafts.py` (RFC822 assembly +
-  create/update). Credentials are constructed with no refresh token at all, so
-  every acquisition goes through `tokens.refresh_handler_for()`; putting one in
-  that object would defeat split custody for as long as the object lives.
-  One consent covers both APIs, so the credentials and the service cache belong
-  to `google_client` rather than to either API module: `calendar_api` used to
-  import the calendar service from `gmail_api`, which made the mail module a
-  dependency of every calendar call and said, in the diagram and in the import
-  graph, that calendar goes through Gmail. The two are siblings over the client
-  layer, and `forget_services()` lives there too, since one cache is what a
-  re-consent has to invalidate.
-
-  Calendar reads take a `calendar_id`, because the daily summary reads a
-  community calendar as well as the account's own. `create_event()` does not:
-  the calendar is `calendar_api.WRITE_CALENDAR`, there is no attendee list, and
-  `sendUpdates="none"`. What gets written is decided by a model reading mail an
-  outside sender wrote, so a `calendar_id` parameter is one a future caller
-  could fill from that model, and the calendar it named could be a public one.
-  The text fields are capped by `MAX_SUMMARY` / `MAX_LOCATION` /
-  `MAX_DESCRIPTION`, asserted at that boundary and truncated to the same
-  constants at the model boundary in `schedule_from_sent._normalize()`, so a
-  long draft is an ugly event rather than an operator alert.
-
-  Gmail's search takes one opaque string, has no parameterized form and no
-  escape character, and its quoting rules are documented nowhere you could rely
-  on. So `find_thread_by_from_subject()` puts exactly one header value in a
-  query, the sender, and only after `ADDRESS_QUERY_RE` has checked it into the
-  shape of a bare address; a sender that is not one is refused, and the caller
-  drafts on a new thread the same way it does when nothing is found. The
-  subject never enters the query. Candidates come back as metadata and
-  `comparable_subject()` matches them here, where a string cannot become a
-  second operator, which is also a tighter match than `subject:"…"` (a phrase
-  search that took any thread mentioning the word) and the reason
-  `strip_reply_prefixes()` strips repeatedly: a forwarded reply carries more
-  than one prefix and both sides of the comparison have to lose all of them.
-  `manual_draft.reply_subject()` uses that same helper rather than its own
-  regex.
-- `llm_client.py` — the inference client + `complete()`. The provider catalog
-  (`PROVIDERS`), model, thinking mode, reasoning effort, and the masking
-  boundary all live here. Three providers ship: `deepseek` (direct, the
-  default), and `nearai-glm` / `nearai-gpt-oss`, both keyed by `NEARAI_API_KEY`
-  and both reaching NEAR AI's *per-model* direct completions endpoints
-  (`glm-5-2.completions.near.ai`, `gpt-oss-120b.completions.near.ai`) rather
-  than the `cloud-api.near.ai` gateway — a per-model endpoint is the only shape
-  whose attestation can say which model it serves, and the gateway's
-  attestation endpoint is authenticated and answers for the fleet. A provider
-  whose key is absent from `.env` is not offered in Settings and cannot be
-  selected. `make_client(account)` is the only constructor and `resolve(account)`
-  the only chooser; a stated per-account preference is honored or it raises,
-  never substituted, because standing in a different provider would send that
-  user's mail somewhere they did not agree to. `confidential=True` now costs
-  something: the `Provider` constructor asserts such a provider names an
-  attestation endpoint, and `make_client()` will not return a client until
-  `inference_attestation.require()` has passed. Masking applies on every
-  provider. Every call is `/v1/chat/completions` and none is `/v1/responses`,
-  which is stateful and persists content server-side; `tests/test_llm_boundary.py`
-  reads the tree as an AST and fails if anything reaches for it, or if
-  `chat.completions.create` is called anywhere but here. LangSmith tracing is
-  off unless `LANGSMITH_TRACING=1`: it ships prompts to a third party, outside
-  whatever enclave the chosen provider runs in.
-
-  `ProviderUnavailable` names the ordinary failure that is not a bug: 401, 402
-  or 403 mean the provider will keep refusing until a human tops up a balance or
-  fixes a key, unlike 429 and 5xx which propagate untouched because this is not
-  the layer that decides how to retry. It alerts the operator through
-  `telegram.notify_error` once per provider per six hours rather than once per
-  email, since a drained balance fails every draft in the queue and a hundred
-  identical alerts is how an operator learns to mute the channel. It still does
-  not fall back: an exhausted balance is not a reason to send someone's mail to
-  a provider they did not choose.
-- `backend/tee/quote_policy.py` — the five checks that decide whether a TDX
-  quote is one we authorized: parse and is-TDX, report_data binding,
-  measurements against an allowlist, signature chain to the Intel root through
-  PCCS collateral, TCB status and advisories. Two callers verify quotes in
-  opposite directions and must not drift: `cosigner/attest.py` checks an inbound
-  RA-TLS client certificate, `backend/integrations/inference_attestation.py`
-  checks an outbound inference provider. Each supplies only what is its own —
-  where the quote came from, and what report_data must bind. `Policy.match()`
-  takes a `scope` so one allowlist file can serve several verified things
-  without an entry for one silently authorizing another; `mr_td` may never be
-  null. `fetch_collateral()` exists because `dcap_qvl.get_collateral` is a pyo3
-  builtin that grabs the running loop when *called*, so `asyncio.run(get_...())`
-  raises "no running event loop" every time and reads as a refused attestation
-  rather than a broken one.
+  that one request. Google's screen lets a user untick a permission, so
+  `oauth_app.REQUIRED_SCOPES` is the set the code calls and `missing_scopes()`
+  the one comparison, applied twice: in `handle_callback()` off the redirect's
+  `scope` (refusing before a code is exchanged or anything wrapped) and in
+  `exchange_code()` off the token response (the grant itself), before anything is
+  stored. Absent counts as granting nothing. Identity scopes are deliberately not
+  required — the address comes from the Gmail profile and `split_name()` falls
+  back.
+- `backend/custody/` — split custody of everything an account owns
+  (docs/plan_token_custody.md Track I, docs/plan_security_hardening.md Track G).
+  One random 32-byte data key per account. `keyring.py` owns it: minting, the
+  record, the TTL cache, and `read_encrypted`/`write_encrypted`, the one path
+  every per-account file goes through (token, voice profile, personal context).
+  `wrapping.py` is the inner AES-GCM layer from the dstack KMS `app_secret`;
+  `client.py` the sole network boundary to the co-signer; `tokens.py` the only
+  path from a stored record to a usable access token; `rotate.py` moves every
+  record onto a new co-signer key without opening one.
+  Layer order is the guarantee: ours inside, theirs outside. Reversed, the
+  co-signer's unwrap would yield a usable key and it would become the one box
+  that can read every mailbox. No bypass, ever: a co-signer that is down means no
+  mail is processed, the availability cost accepted for the confidentiality gain.
+  The data key is what makes rotation 32 bytes an account and makes
+  `keyring.destroy()` a destruction rather than an unlink (a backup taken
+  beforehand stays ciphertext); neither is possible when the key is a function of
+  a salt. Two ways out, metered apart on purpose: `release_for_refresh()` is the
+  mail path, never cached, one round trip per token refresh, which is what makes
+  the per-account rate limit a limit on mail access; `dek_for()` is the document
+  path, cached for `DEK_TTL`, a security parameter and not a tuning knob — it
+  must stay under `cosigner.policy.DISTINCT_WINDOW_SECONDS` or a slow sweep hides
+  behind the cache. Nothing here takes a bare account id: `keyring.identify()`
+  returns the pair (id names the directory, handle names the account everywhere
+  else), because a function accepting either would accept the wrong one and
+  derive a different key without raising.
+- `backend/integrations/gmail_gcal/` — the only code talking to Google's mail and
+  calendar APIs: `oauth_app.py` (keys, scopes, endpoints), `google_client.py`
+  (credentials + per-thread service cache), `gmail_api.py`, `calendar_api.py`,
+  `mailbox.py` (the two fetch shapes), `drafts.py` (RFC822 + create/update).
+  Credentials carry no refresh token at all, so every acquisition goes through
+  `tokens.refresh_handler_for()`. One consent covers both APIs, so credentials
+  and the service cache belong to `google_client` rather than either API module,
+  and `forget_services()` lives there since one cache is what a re-consent
+  invalidates.
+  Calendar reads take a `calendar_id` (the daily summary reads a community
+  calendar too). `create_event()` does not: the calendar is
+  `calendar_api.WRITE_CALENDAR`, no attendees, `sendUpdates="none"` — what gets
+  written is decided by a model reading outside mail, so a `calendar_id`
+  parameter is one a future caller could fill from that model. Text fields are
+  capped by `MAX_SUMMARY`/`MAX_LOCATION`/`MAX_DESCRIPTION`, asserted at that
+  boundary and truncated to the same constants in
+  `schedule_from_sent._normalize()`, so a long draft is an ugly event rather than
+  an operator alert.
+  Pinning the calendar answers which calendar, not who reads it, so
+  `create_event()` reads the ACL first (`write_calendar_audience()`) and refuses
+  when anyone but the owner can read event contents: scope `default` or `domain`
+  at role `reader`/`writer`/`owner`. `freeBusyReader` is allowed — it exposes
+  that a span is taken and no field of the event. This is what
+  `calendar.acls.readonly` is for, read-only on purpose: the code refusing to
+  write to a public calendar must not be able to make one private and proceed.
+  Cached per account for `SHARING_TTL`. It fails closed even when the question
+  cannot be asked: a token minted before that scope answers 403, as does an
+  outage, and `CalendarSharingUnknown` is a subclass so every caller refusing on
+  one refuses on the other while the user still gets the right remedy. Existing
+  users lose scheduling from sent mail until they sign in again at `/auth/login`;
+  `tokens.take_custody()` reuses the account's data key so a returning user works.
+  `tests/test_calendar_boundary.py` enforces all of it by reading the tree: no
+  `calendarId` outside `calendar_api` and none that is not `WRITE_CALENDAR`, no
+  `calendars`/`calendarList` call, no ACL read outside `calendar_api` and no ACL
+  write at all, no calendar write tool in `tool_executors.TOOL_REGISTRY`, and a
+  model-supplied `calendar_id` dropped on the read path.
+  Gmail's search takes one opaque string with no parameterized form and no escape
+  character, so `find_thread_by_from_subject()` puts exactly one header value in
+  a query — the sender, and only after `ADDRESS_QUERY_RE` checks it into the
+  shape of a bare address; anything else is refused and the caller drafts on a
+  new thread. The subject never enters the query: candidates come back as
+  metadata and `comparable_subject()` matches them here, which is also tighter
+  than `subject:"…"`. `strip_reply_prefixes()` strips repeatedly because a
+  forwarded reply carries more than one prefix; `manual_draft.reply_subject()`
+  uses the same helper.
+- `llm_client.py` — the inference client + `complete()`: provider catalog
+  (`PROVIDERS`), model, thinking mode, reasoning effort, masking boundary. Three
+  providers ship: `deepseek` (default) and `nearai-glm` / `nearai-gpt-oss`, both
+  on NEAR AI's *per-model* completions endpoints
+  (`glm-5-2.completions.near.ai`, `gpt-oss-120b.completions.near.ai`) rather than
+  the `cloud-api.near.ai` gateway — only a per-model endpoint's attestation can
+  say which model it serves. A provider whose key is absent is not offered in
+  Settings. `make_client(account)` is the only constructor, `resolve(account)` the
+  only chooser; a stated preference is honored or it raises, never substituted.
+  `confidential=True` costs something: the `Provider` constructor asserts such a
+  provider names an attestation endpoint, and `make_client()` returns nothing
+  until `inference_attestation.require()` passes. Masking applies on every
+  provider. Every call is `/v1/chat/completions`, never `/v1/responses` (stateful,
+  persists content server-side); `tests/test_llm_boundary.py` reads the tree as an
+  AST and fails if anything reaches for it or calls `chat.completions.create`
+  elsewhere. LangSmith tracing is off unless `LANGSMITH_TRACING=1`.
+  `ProviderUnavailable` names the ordinary failure that is not a bug: 401/402/403
+  mean the provider keeps refusing until a human tops up a balance or fixes a key,
+  unlike 429 and 5xx which propagate untouched. It alerts through
+  `telegram.notify_error` once per provider per six hours, not once per email. It
+  still does not fall back.
+- `backend/tee/quote_policy.py` — the five checks deciding whether a TDX quote is
+  one we authorized: parse and is-TDX, report_data binding, measurements against
+  an allowlist, signature chain to the Intel root through PCCS collateral, TCB
+  status and advisories. Two callers verify in opposite directions and must not
+  drift: `cosigner/attest.py` (inbound RA-TLS client cert) and
+  `inference_attestation.py` (outbound provider). `Policy.match()` takes a `scope`
+  so one allowlist file serves several things without one entry authorizing
+  another; `mr_td` may never be null. `fetch_collateral()` exists because
+  `dcap_qvl.get_collateral` is a pyo3 builtin that grabs the running loop when
+  called, so `asyncio.run(...)` reads as a refused attestation rather than a
+  broken one.
 - `backend/integrations/inference_attestation.py` — whether the enclave about to
-  read a user's mail is one we authorized, and the only thing that makes
-  `confidential=True` mean anything. Fetches the provider's report with a nonce
-  we generated seconds ago and requires three bindings: report_data carries the
-  response signing address (so the key that signs completions is the key the
-  quote vouches for), report_data carries our nonce (so a captured report from a
-  previously-good image cannot be replayed), and the enclave's stated
-  `model_name` matches the model the provider asks for (so a silent reroute to
-  another model fails even though every signature checks out). Verdicts cache on
-  the signing address, which changes when the enclave reboots, and a reboot is
-  when the measurement can change. `backend/integrations/inference_allowlist.json`
-  is the committed pin list, so authorizing an image is a reviewed diff.
-  `rt_mr3` moves whenever NEAR redeploys the bootstrap — NEAR runs several
-  images behind one hostname, so expect to pin more than one per model — and a
-  drift fails closed. Re-pin with
+  read a user's mail is one we authorized, and the only thing making
+  `confidential=True` mean anything. Fetches the provider's report with a fresh
+  nonce and requires three bindings: report_data carries the response signing
+  address, report_data carries our nonce (so a captured report cannot be
+  replayed), and the enclave's stated `model_name` matches the model requested
+  (so a silent reroute fails even with valid signatures).
+  `inference_allowlist.json` is the committed pin list, so authorizing an image
+  is a reviewed diff. `rt_mr3` moves whenever NEAR redeploys the bootstrap and a
+  drift fails closed; re-pin with
   `python -m backend.integrations.inference_attestation <provider>`, read the
   diff, commit. `deploy/preflight.py` calls `configured()` so an unpinned image
-  is reported at deploy time rather than by every draft failing.
-
+  is reported at deploy time.
   **RTMR3 does not measure the model server.** NEAR's TD boots a bootstrap
-  compose (compose-manager, certbot, an otel collector); the manager brings
-  model containers up and down afterwards, from separate files, without RTMR3
-  moving. So the measurement pins the launcher, not what is serving tokens.
-  `ComposeLog` closes that: the endpoint publishes a second quote over
-  `actions_hash || nonce`, where `actions_hash` is SHA-256 of the manager's
-  action log as compact JSON with sorted keys. The hash is *recomputed* from the
-  actions rather than read, so appending a line fails; and because the quote
-  signs the published hash, re-hashing a forged log fails the binding instead,
-  which is the stronger of the two refusals. Replaying the log gives every
-  compose brought up and not since brought down, each with its `file_sha256`,
-  and every one must appear in the allowlist's `composes` rows — pinned by file
-  content, not filename. That set includes housekeeping and models left from
-  earlier deployments, because they ran in the same TD.
-
-  **One hostname is a pool.** `glm-5-2.completions.near.ai` fronts two CVMs
-  with different compose histories, and they share a signing address, so the
-  verdict cache keys on `Report.identity()` (signing address + instance id +
-  actions_hash) rather than the address alone — otherwise a pinned instance's
-  pass would be replayed from cache for an unpinned one, and a load balancer
-  would be the bypass. The pins must cover every instance, which means pinning
-  is a sampling job: `test_live_pins_cover_the_whole_instance_pool` fetches
-  repeatedly rather than once, because verifying a single time only proves you
-  landed on an instance you had already authorized.
-
-  Still unclosed above this: a compose names container images by digest, and
-  digest → reviewed source needs the build's Sigstore/SLSA provenance
-  (`cosign verify-attestation`). Until that is checked, the pins say which bytes
-  ran, not what was in them, and NEAR is both the image publisher and the
-  machine operator.
-- `backend/audit.py` — the web tier's record of what a person changed: one
-  SQLite row per sign-in, setting, document edit, plan flip and deletion, under
-  `state/` at 0600. Deliberately not the co-signer's log and sharing no code
-  with it, because `cosigner/` must not learn who its users are and imports
-  nothing from `backend/` but the Telegram seam; the duplicated connection
-  boilerplate is the price of that boundary, not an oversight. The rows are
-  written by the account mutators in `backend/accounts/account.py` rather than
-  by the route handlers, so a second caller of a manifest writer cannot forget
-  to log — the same reasoning that makes those functions the sole manifest
-  writers. Where the request came from is ambient: `frontend/web_server.py`
-  wraps each request in `audit.request_context()`, so nine mutators do not grow
-  a parameter for a browser they never see, and anything running outside a
-  request (a background voice generation, the billing webhook, the seed) writes
-  a row with no origin, which is the correct answer rather than a gap. Nothing
-  in a row can carry content: `detail` takes a tuple of short name tokens
-  checked against `TOKEN` (`timezone`, `chars:2048`, `provider:deepseek`), so a
-  document body, an address or a chat id does not fit through the parameter at
-  all. `RETENTION_DAYS` is the only bound on how long a departed user's address
-  stays — deleting an account deliberately does not delete its rows, since the
-  row saying the account was deleted is the one most worth keeping — and the
-  prune rides on `record()` behind `PRUNE_INTERVAL` rather than a timer, with
-  `secure_delete` on so a pruned row does not stay readable in the file's free
-  list.
-- `backend/integrations/telegram.py` — `TelegramTarget`, sends, and chat
-  linking. `send_telegram(msg, target)` always takes an explicit target;
-  `operator_target()` (env) is only for box-level failures, never for a user's
-  mail. There is deliberately no env fallback on the per-account path.
+  compose; the manager brings model containers up and down afterwards without
+  RTMR3 moving. `ComposeLog` closes that: the endpoint publishes a second quote
+  over `actions_hash || nonce`, SHA-256 of the manager's action log as compact
+  sorted-key JSON. The hash is recomputed from the actions, so appending a line
+  fails; and because the quote signs the published hash, re-hashing a forged log
+  fails the binding instead. Replaying the log gives every compose brought up and
+  not since brought down, each with its `file_sha256`, and every one must appear
+  in the allowlist's `composes` rows — pinned by file content, not filename. That
+  set includes housekeeping and models left from earlier deployments.
+  **One hostname is a pool.** `glm-5-2.completions.near.ai` fronts two CVMs with
+  different compose histories sharing a signing address, so the verdict cache
+  keys on `Report.identity()` (signing address + instance id + actions_hash);
+  otherwise a load balancer is the bypass. Pinning is therefore a sampling job —
+  `test_live_pins_cover_the_whole_instance_pool` fetches repeatedly.
+  Still unclosed: a compose names images by digest, and digest → reviewed source
+  needs the build's Sigstore/SLSA provenance (`cosign verify-attestation`). Until
+  then the pins say which bytes ran, not what was in them, and NEAR is both image
+  publisher and machine operator.
+- `backend/audit.py` — the web tier's record of what a person changed: one SQLite
+  row per sign-in, setting, document edit, plan flip and deletion, under `state/`
+  at 0600. Deliberately not the co-signer's log and sharing no code with it,
+  because `cosigner/` must not learn who its users are; the duplicated connection
+  boilerplate is the price of that boundary. Rows are written by the account
+  mutators in `backend/accounts/account.py`, not the route handlers, so a second
+  caller of a manifest writer cannot forget to log. Request origin is ambient:
+  `frontend/web_server.py` wraps each request in `audit.request_context()`, so
+  nine mutators do not grow a parameter, and anything outside a request
+  (background voice generation, billing webhook, seed) writes a row with no
+  origin. Nothing in a row can carry content: `detail` takes short name tokens
+  checked against `TOKEN` (`timezone`, `chars:2048`, `provider:deepseek`).
+  `RETENTION_DAYS` is the only bound on how long a departed user's address stays
+  — deleting an account does not delete its rows, since the row saying it was
+  deleted is the one most worth keeping — and the prune rides on `record()`
+  behind `PRUNE_INTERVAL` with `secure_delete` on.
+- `backend/integrations/telegram.py` — `TelegramTarget`, sends, chat linking.
+  `send_telegram(msg, target)` always takes an explicit target;
+  `operator_target()` (env) is only for box-level failures, never a user's mail.
+  Deliberately no env fallback on the per-account path.
 - `draft_replies.drafting_instructions()` — everything the drafter is told about
-  an account before it sees an email: the voice profile, then the owner's
-  personal information. One assembly, so the auto-reply path and the
-  forwarded-email path cannot hand the model different briefs. It replaced
-  `voice_profile_for()`, which knew about one document only.
-- `backend/drafting/voice_dna.py` — every voice profile question: where a
-  profile lives, which one applies (`resolve()`), and how one is generated from
-  the account's own sent mail. The operator's personal profile is reachable only
-  through their own manifest entry; everyone else gets
-  `backend/drafting/default_voice.md` until they generate or write their own,
-  which lands in `database/<id>/voice-dna.md` (never in `config/`, which the
-  deploy overwrites). `DEFAULT_CONSTRAINTS` is the Constraints section a profile
-  starts with, written into the document by `with_constraints()` when one is
-  first created, never appended at prompt time: `resolve()` hands the drafter
-  exactly what the /voice box shows, so a rule the user edits or deletes is a
-  rule the drafter stops following. The em-dash ban is deliberately not one of
-  them, because it rejects finished drafts rather than merely asking: it is the
-  `ban_dashes` Settings switch, and `agentic_drafter.dashes_banned(account)` is
-  the only reader, consulted in `draft()` (which is also what puts the
-  PUNCTUATION RULE in the prompt), `draft_replies` and `manual_draft` alike. So
-  the model is told the rule exactly when we enforce it.
+  an account before it sees an email: voice profile, then personal information.
+  One assembly, so the auto-reply and forwarded-email paths cannot hand the model
+  different briefs.
+- `backend/drafting/voice_dna.py` — every voice profile question: where a profile
+  lives, which one applies (`resolve()`), and how one is generated from the
+  account's own sent mail. The operator's profile is reachable only through their
+  manifest entry; everyone else gets `backend/drafting/default_voice.md` until
+  they generate or write their own, which lands encrypted in
+  `database/<id>/voice-dna.enc` (never `config/`, which the deploy overwrites).
+  `load()` decides which pointer it holds by comparing against `profile_path()`:
+  the account's own document is decrypted, the operator's `config/` file is read
+  in the clear, since encrypting a file rsync replaces with plaintext is theatre.
+  `DEFAULT_CONSTRAINTS` is written into a document by `with_constraints()` when
+  it is first created, never appended at prompt time, so a rule the user edits or
+  deletes is a rule the drafter stops following. The em-dash ban is deliberately
+  not one of them, because it rejects finished drafts rather than asking: it is
+  the `ban_dashes` Settings switch, read only by
+  `agentic_drafter.dashes_banned(account)`, consulted in `draft()` (which also
+  puts the PUNCTUATION RULE in the prompt), `draft_replies` and `manual_draft`.
   `account.set_voice()` is the sole writer of the manifest pointer.
 - `backend/drafting/personal_context.py` — the second document: facts the owner
-  writes about themselves (scheduling preferences, where they are, what they do),
-  read into every draft prompt beneath the voice profile. Separate from the voice
-  document because `voice_dna.generate()` overwrites that one wholesale and these
-  facts must survive it. The path is derived (`database/<id>/personal-context.md`),
-  with no manifest pointer, which is why `account._owned_paths()` owns the
-  account's directory rather than a list of manifest keys: a key list would have
-  left a deleted user's personal information on disk.
-- `agentic_drafter.untrusted()` — the fence put around anything that came from
-  outside the account (email bodies, tool results) before it reaches the model,
-  paired with `INJECTION_RULE` in the system prompt.
+  writes about themselves, read into every draft prompt beneath the voice
+  profile. Separate because `voice_dna.generate()` overwrites that one wholesale.
+  The path is derived (`database/<id>/personal-context.enc`) with no manifest
+  pointer, which is why `account._owned_paths()` owns the account's directory
+  rather than a list of manifest keys: a key list would have left a deleted
+  user's personal information on disk.
+- `agentic_drafter.Fence` — the fence around anything from outside the account
+  (email bodies, tool results) before it reaches the model. One fence per model
+  conversation: `new_fence()` mints it, `wrap()` fences the content, and `rule`
+  is the sentence naming those delimiters that goes in the system message. The
+  two travel together because either alone is nothing — a rule quoting markers
+  the prompt does not carry describes no text, and markers no rule explains are
+  punctuation. `draft()` takes the caller's fence rather than making its own for
+  exactly that reason, and asserts it was given one.
+
+  The delimiters carry a per-conversation nonce (`new_nonce()`, 16 uppercase
+  alphanumerics, never leading with a digit) and `wrap()` removes the nonce from
+  the content before fencing it. Both halves are needed. The delimiters used to
+  be two fixed strings in this file, so the closing marker was published in this
+  repository and a sender who wrote it in an email body put the rest of their
+  message outside the fence: the entire mitigation, defeated by a literal anyone
+  could read. The nonce makes that unguessable and the stripping makes a lucky
+  guess useless, which is the stronger of the two. The alphabet is not
+  cosmetic — the assembled prompt goes through `pseudonymizer`, and an all-digit
+  nonce is what `_PHONE_RUN` matches, so it would come back as a predictable
+  `[PHONE_NUMBER_1]`. `tests/test_prompt_fence.py` pins all of it, including
+  that both masking modes leave the nonce alone and that nothing outside
+  `agentic_drafter` builds a marker by hand; `harness.stable_fence_nonces()` is
+  what lets the golden files hold a prompt whose delimiters are random.
 - `backend/masking/pseudonymizer.py` — masking runs in one of two modes and
-  `new_state()` is where that is decided. With the Presidio + spaCy analyzer
-  installed it does NER; without it, or for an account that switched it off in
-  Settings, `_pseudonymize_patterns()` covers the same text with the secret,
-  email and phone regexes. Both modes run the deterministic layers first
-  (`identity.mask_user()`, `_scrub_contacts()`, `_mask_names()`) and both
-  allocate tags through `_tag_value()`, so a restore works either way.
-  `analyzer_available()` answers by module lookup and never imports:
-  `import presidio_analyzer` drags spaCy in at ~470 MB before a model loads,
-  and `en_core_web_lg` is another ~1.1 GB at first use, which is what makes the
-  mode worth choosing on a small box. Measured recall on the public corpus is
-  96% with the analyzer and 74% without, the whole gap being PERSON. The
-  account's stated preference is stored even where it cannot run, so installing
-  the model later restores the behaviour without touching the manifest.
-- `billing.PLAN_PRICE_EUR` — the quoted price, rendered as
-  `web_server.PRICE`. The landing copy, pricing page, comparison table, sign-up
-  button and billing table each held their own literal and drifted from the
-  Polar product, quoting €20 for a €25 subscription. Polar is what actually
+  `new_state()` decides which. With the Presidio + spaCy analyzer installed it
+  does NER; without it, or for an account that switched it off,
+  `_pseudonymize_patterns()` covers the same text with secret, email and phone
+  regexes. Both modes run the deterministic layers first (`identity.mask_user()`,
+  `_scrub_contacts()`, `_mask_names()`) and both allocate tags through
+  `_tag_value()`, so a restore works either way. `analyzer_available()` answers by
+  module lookup and never imports (`import presidio_analyzer` drags in ~470 MB
+  before a model loads; `en_core_web_lg` is another ~1.1 GB). Measured recall is
+  96% with the analyzer and 74% without, the whole gap being PERSON. The stated
+  preference is stored even where it cannot run.
+- `billing.PLAN_PRICE_EUR` — the quoted price, rendered as `web_server.PRICE`.
+  Landing copy, pricing page, comparison table, sign-up button and billing table
+  each held their own literal and drifted from the Polar product. Polar is what
   charges, so changing the product there means changing this constant too.
 - `PolarBilling.resolve_account()` — which local account a Polar object belongs
-  to, for the webhook, the reconcile poller and the checkout return alike. It
-  resolves in one direction only, from Polar's copy to an account, which is what
-  lets the checkout return use it as an ownership test on an id the browser
-  handed it: `confirm_checkout()` refuses a checkout that does not resolve back
-  to the signed-in account, before it links a customer or flips a plan. Without
-  that test any signed-in user who learned a paid checkout id took the
-  subscription and got `portal_url()` pointed at that buyer's Polar customer.
-  `checkout_url()` stamps `billing.CHECKOUT_ACCOUNT_KEY` into the session's
-  metadata to make the binding exact; `customer_email` is a field the buyer edits
-  on Polar's form, so it is the fallback, not the test.
-- `draft_replies.build_draft_payload()` — canonical draft payload shape. All
-  draft callers route through this.
-- `draft_replies.submit_draft(account, payload, draft_id=None)` — sole boundary
-  to `gmail_gcal.drafts`. Pass `draft_id` to update in place.
+  to, for webhook, reconcile poller and checkout return alike. It resolves in one
+  direction only, which is what lets the checkout return use it as an ownership
+  test on an id the browser handed it: `confirm_checkout()` refuses a checkout
+  that does not resolve back to the signed-in account, before linking a customer
+  or flipping a plan. Without it any signed-in user who learned a paid checkout
+  id took the subscription. `checkout_url()` stamps
+  `billing.CHECKOUT_ACCOUNT_KEY` into the session metadata to make the binding
+  exact; `customer_email` is buyer-editable, so it is the fallback, not the test.
+- `draft_replies.build_draft_payload()` — canonical draft payload shape.
+- `draft_replies.submit_draft(account, payload, draft_id=None)` — sole boundary to
+  `gmail_gcal.drafts`. Pass `draft_id` to update in place.
 - `draft_replies.gmail_thread_link()` — Gmail deep-link builder.
-- `draft_replies.format_draft_line()` — Telegram notification line item
-  (linked sender + subject, optional reason + trace url).
-- `tools/render_brand.py` — the brand mark (envelope + padlock) and every icon
-  cut from it. Geometry and the two brand colours live there; run
-  `python -m tools.render_brand` to rewrite `frontend/static/`. The generated
-  PNGs and the `.ico` are committed, so the server never renders at runtime and
-  Pillow is not a deploy dependency. `frontend/web_server.STATIC_TYPES` is the
-  allow-list of what `/static/` will serve; add an asset to both.
-- `requirements.txt` — the one dependency list, for the box and for the measured
-  enclave image alike. `deploy/requirements.py` parses it and
-  `deploy/render_pyproject.py` renders `deploy/phala/pyproject.toml` from it, so
-  a pin cannot be present on Hetzner and absent from the image. Maintained
-  separately they had already drifted: the image carried presidio and spaCy,
-  which are off by default because they do not fit a 2 GB confidential VM, and
-  lacked `standardwebhooks` and `certifi`. `deploy/requirements.py` also owns
-  the name-stripping (`names()`), so the weekly unpinned job asks its question
-  through the parser that decided what a pin is rather than through a `sed` in a
-  workflow file.
-- `deploy/audit.py` — what counts as a known vulnerability and what counts as a
-  deliberate exception. One module answers both, and `deploy/audit_ignores.toml`
-  is the only place an advisory can be excused, with an expiry date that fails
-  the audit once it passes. `tests/test_dependency_audit.py` and the daily
-  workflow are both callers; neither has its own idea of the rules.
-- `deploy/testenv.sh` — how CI installs this project, for all three workflows.
-  `locked` is the image's closure, `latest` is the same distributions unpinned.
+- `draft_replies.format_draft_line()` — Telegram notification line item.
+- `tools/render_brand.py` — the brand mark (envelope + padlock) and every icon cut
+  from it; geometry and the two brand colours live there. Run
+  `python -m tools.render_brand` to rewrite `frontend/static/`. The PNGs and
+  `.ico` are committed, so the server never renders at runtime and Pillow is not
+  a deploy dependency. `frontend/web_server.STATIC_TYPES` is the allow-list of
+  what `/static/` serves; add an asset to both.
 
 ## Progressive drafts
 
 `manual_draft.process_draft_request()` creates a placeholder Gmail draft
-immediately, then overwrites it on every `agentic_drafter` iteration with
-a status body (tools called + partial output + queued next tool), then
-overwrites once more with the final reply. `drafts.submit()` takes an optional
-`draft_id` to make this work via `drafts.update`.
+immediately, overwrites it on every `agentic_drafter` iteration with a status
+body (tools called + partial output + queued next tool), then overwrites once
+more with the final reply. `drafts.submit()` takes an optional `draft_id` to make
+this work via `drafts.update`.

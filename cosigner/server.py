@@ -130,6 +130,20 @@ def sign_request(body, verdict):
     return None, {protocol.F_PROOF: keys.dpop_proof(htm, htu, nonce)}
 
 
+def _open(uid, outer):
+    """The outer layer stripped, or a refusal that says nothing about why.
+
+    Deliberately silent about the ciphertext. A tag failure means the record was
+    tampered with, was wrapped under a master key this box no longer loads, or
+    belongs to another uid; none of those want detail on the wire, and all three
+    read the same to a caller guessing."""
+    try:
+        return keys.unwrap(uid, outer)
+    except Exception as err:
+        log(f"unwrap failed for uid={uid}: {type(err).__name__}")
+        raise RequestError(400, "outer record did not open")
+
+
 def unwrap_request(body, verdict):
     uid = field(body, protocol.F_UID)
     outer = binary_field(body, protocol.F_OUTER)
@@ -138,18 +152,48 @@ def unwrap_request(body, verdict):
     refusal = policy.authorize(uid, policy.ACTION_UNWRAP, verdict, precheck)
     if refusal is not None:
         return refusal, None
-    try:
-        inner = keys.unwrap(uid, outer)
-    except Exception as err:
-        # Deliberately says nothing about the ciphertext. A tag failure means
-        # the record was tampered with, was wrapped under a different master
-        # key, or belongs to another uid; none of those want detail on the wire.
-        log(f"unwrap failed for uid={uid}: {type(err).__name__}")
-        raise RequestError(400, "outer record did not open")
     return None, {
-        protocol.F_INNER: protocol.b64(inner),
+        protocol.F_INNER: protocol.b64(_open(uid, outer)),
         protocol.F_PROOF: keys.dpop_proof(htm, htu, nonce),
     }
+
+
+def unwrap_data_request(body, verdict):
+    """The same unwrap without a proof, for reading an account's own documents.
+
+    Metered separately from `/unwrap-and-sign` because the legitimate rates
+    differ, and counted with it by the sweep rule because an attacker choosing
+    between the two must not get twice the breadth."""
+    uid = field(body, protocol.F_UID)
+    outer = binary_field(body, protocol.F_OUTER)
+    refusal = policy.authorize(uid, policy.ACTION_UNWRAP_DATA, verdict,
+                               None if outer else "empty outer")
+    if refusal is not None:
+        return refusal, None
+    return None, {protocol.F_INNER: protocol.b64(_open(uid, outer))}
+
+
+def rewrap_request(body, verdict):
+    """One record moved onto the current outer key version.
+
+    This releases nothing: it takes ciphertext the caller already holds and
+    returns the same ciphertext under a different key of ours. Presenting an
+    `outer` that opens is the authorization, which is why there is no wrap-once
+    rule here -- unlike `/wrap` it cannot bring a record into existence for an
+    account that had none."""
+    uid = field(body, protocol.F_UID)
+    outer = binary_field(body, protocol.F_OUTER)
+    refusal = policy.authorize(uid, policy.ACTION_REWRAP, verdict,
+                               None if outer else "empty outer")
+    if refusal is not None:
+        return refusal, None
+    try:
+        return None, {protocol.F_OUTER: protocol.b64(keys.rewrap(uid, outer))}
+    except RequestError:
+        raise
+    except Exception as err:
+        log(f"rewrap failed for uid={uid}: {type(err).__name__}")
+        raise RequestError(400, "outer record did not open")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -178,6 +222,8 @@ class Handler(BaseHTTPRequestHandler):
             handler = {
                 protocol.WRAP_PATH: wrap_request,
                 protocol.UNWRAP_AND_SIGN_PATH: unwrap_request,
+                protocol.UNWRAP_PATH: unwrap_data_request,
+                protocol.REWRAP_PATH: rewrap_request,
                 protocol.SIGN_DPOP_PATH: sign_request,
             }.get(self.path)
             if handler is None:

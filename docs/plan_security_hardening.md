@@ -1,7 +1,8 @@
 # Security hardening plan
 
-Status: proposed, except the item in "Already done" below and Tracks B, C and
-D, which are implemented. Each finished track says so in its own heading.
+Status: Tracks A through G are implemented, along with the item in "Already
+done" below. Tracks H and I remain deferred behind their triggers. Each finished
+track says so in its own heading.
 Written 2026-08-07. Owner: Morgan.
 
 ## How to read this
@@ -100,9 +101,9 @@ that makes it true or false. Never speculatively, never ahead of the code.
 | Claim | Where | Why it is wrong today | Corrected in |
 |---|---|---|---|
 | ~~"no UPDATE and no DELETE appears anywhere in this package"~~ | `cosigner/audit.py` | ~~B3 adds a prune~~ | **done in B3**: the claim is now "no UPDATE anywhere, and deletion only by `retention.py`, only by age" |
-| compromising this box yields a wrapping key with nothing to unwrap and a signing key that signs no secrets | `backend/custody/client.py:6-9` | both halves are true, but it omits that the box also holds the customer list and a per-user activity timeline | **F4**, which makes `uid` opaque |
-| the version prefix exists so the master key can be rotated | `cosigner/keys.py:54` | `keys.py:129` and `:157` both assert `version == KEY_VERSION`, so rotation cannot execute | **G4**, which implements rotation |
-| per-uid derivation makes a future per-user revocation meaningful | `cosigner/keys.py:12-15` | `KEY_VERSION` is a module constant (`keys.py:56`), not a per-account field, so there is nothing to advance for one user | **G5**, where the per-account DEK makes it true |
+| ~~compromising this box yields a wrapping key with nothing to unwrap and a signing key that signs no secrets~~ | `backend/custody/client.py` | ~~it omits that the box also holds the customer list and a per-user activity timeline~~ | **done in F4**: the docstring now names the log as the third thing a breach yields, and the identifier on the wire is an opaque handle |
+| ~~the version prefix exists so the master key can be rotated~~ | `cosigner/keys.py` | ~~`outer_key` and `unwrap` both assert `version == KEY_VERSION`, so rotation cannot execute~~ | **done in G4**: `known_versions()`, `/rewrap`, and the procedure written out in the module docstring |
+| ~~per-uid derivation makes a future per-user revocation meaningful~~ | `cosigner/keys.py` | ~~`KEY_VERSION` is a module constant, not a per-account field, so there is nothing to advance for one user~~ | **done in G5**: `keyring.destroy()` removes the one object that opens an account's data |
 | the co-signer holds a key you cannot get | `cosigner/__init__.py`, `keys.py:1` | true today; becomes false if Track H moves key material to an HSM, after which the box's value is policy plus audit | **H**, if it happens |
 
 If a track slips far enough that a false claim would sit in `main` for months,
@@ -668,7 +669,7 @@ rest.
 
 # Track F. Opaque account handle
 
-**Blocks Track G.** Must land first. Touches `cosigner/protocol.py`,
+**Implemented.** Blocks Track G. Landed first. Touches `cosigner/protocol.py`,
 `cosigner/audit.py`, `cosigner/policy.py`, `backend/custody/client.py`,
 `backend/accounts/account.py`. Estimated effort: one day.
 
@@ -740,7 +741,7 @@ for it or you will regret this the first time you need it in a hurry.
 
 # Track G. Envelope encryption and per-account data encryption
 
-**Depends on F.** The long pole and the only track with design risk. Touches
+**Implemented.** Depended on F. The long pole and the only track with design risk. Touches
 `backend/custody/wrapping.py`, `backend/custody/tokens.py`,
 `backend/custody/client.py`, `cosigner/keys.py`, `backend/accounts/account.py`,
 `backend/drafting/voice_dna.py`, `backend/drafting/personal_context.py`.

@@ -5,7 +5,7 @@ place. It used to be copied into each account's creds directory, which turned a
 single leaked user directory into a leak of the whole app.
 
 This is the widest-blast-radius value the deployment holds, and it arrives as
-injected environment first (docs/plan_token_custody.md §8). Inside the enclave
+injected environment first. Inside the enclave
 that is the only route: the volume copy is a file the KMS does not gate and the
 measurement does not cover, so ``load_keys()`` refuses it under ``TEE_REQUIRED``
 and ``tee_boot.run_gate()`` will not boot with one present. On a plain box the
@@ -45,12 +45,39 @@ TOKEN_ENDPOINT = cosigner_protocol.TOKEN_ENDPOINT
 # Ask for nothing beyond what the code calls: gmail.settings.basic was requested
 # and never used, and an unused scope is only ever a bigger loss when a token
 # leaks.
+#
+# calendar.acls.readonly is the one scope here that buys a refusal rather than a
+# capability. Event bodies are written from the account's own mail, so writing
+# one to a calendar the world can read republishes that mail; without this scope
+# the app cannot tell a private calendar from a public one and would be trusting
+# rather than checking. It is the read-only half of the ACL pair, so it grants
+# no way to change who a calendar is shared with. See
+# `calendar_api.write_calendar_audience()`, the only caller.
 SCOPES = (
     "openid",
     "email",
     "profile",
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.acls.readonly",
+)
+
+# What a consent has to come back with, as opposed to what it asks for. Google's
+# screen lets a user untick individual permissions, and a sign-in that dropped
+# one used to succeed and fail later at whatever call needed it: a mailbox the
+# daemon cannot read, or -- since the calendar ACL check -- scheduling that
+# refuses every event. The identity scopes are absent on
+# purpose. Nothing breaks without them, because the address comes from the Gmail
+# profile and `split_name` falls back, so requiring them would refuse a consent
+# that works.
+REQUIRED_SCOPES = (
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.acls.readonly",
+)
+
+assert set(REQUIRED_SCOPES) <= set(SCOPES), (
+    "a scope is required of the consent but never asked for in it"
 )
 
 
@@ -99,3 +126,19 @@ def redirect_uri():
 
 def scope_param():
     return " ".join(SCOPES)
+
+
+def missing_scopes(granted):
+    """Which required scopes a consent did not come back with.
+
+    `granted` is the space separated list Google puts in the callback query and
+    again in the token response. Absent or empty counts as granting nothing,
+    which is the fail-closed reading and the correct one: a response that does
+    not say what was granted is not evidence that everything was."""
+    have = set((granted or "").split())
+    return tuple(scope for scope in REQUIRED_SCOPES if scope not in have)
+
+
+def describe_scopes(scopes):
+    """Scope names short enough to put in front of a person."""
+    return ", ".join(scope.rsplit("/", 1)[-1] for scope in scopes)

@@ -30,8 +30,14 @@ os.environ.setdefault("DEEPSEEK_API_KEY", "render-placeholder")
 os.environ.setdefault("SESSION_SECRET", "render-placeholder")
 os.environ["TELEGRAM_BOT_TOKEN"] = ""
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+# The synthetic person the repository uses in place of a real one lives with the
+# test suite, and this tool renders pages for that same person rather than
+# defining a second one. It is a development tool; nothing here ships.
+sys.path.insert(0, str(REPO_ROOT / "tests"))
 
+import identity_fixture                                      # noqa: E402
 from backend import paths                                    # noqa: E402
 from backend.accounts import account, state                  # noqa: E402
 from backend.integrations.telegram import TelegramTarget     # noqa: E402
@@ -61,7 +67,8 @@ def _account(id, *, plan_status="active", telegram=True, polar=None,
     """A synthetic Account. Never touches the manifest: these are display
     fixtures, not registrations."""
     identity = pseudonymizer.UserIdentity(
-        "Morgan", "Rivers", first_aliases=["Daniel"], emails=[id], account_id=id,
+        identity_fixture.OWNER_FIRST, identity_fixture.OWNER_LAST,
+        first_aliases=identity_fixture.OWNER_ALIASES, emails=[id], account_id=id,
     )
     return account.Account(
         id=id,

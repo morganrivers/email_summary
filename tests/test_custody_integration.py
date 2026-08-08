@@ -25,6 +25,7 @@ import pytest
 import harness
 from backend.accounts import account
 from backend.custody import client as cosigner
+from backend.custody import keyring
 from backend.custody import tokens
 from backend.custody import wrapping
 from backend.integrations.gmail_gcal import gmail_api, oauth_app
@@ -36,7 +37,16 @@ from cosigner import protocol
 
 REFRESH_TOKEN = "1//0gSuperSecretRefreshTokenValue"
 UID = "alice@example.com"
+HANDLE = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+
+
 ACCESS_TOKEN = "ya29.integration"
+
+
+def acct(uid=UID, handle=HANDLE):
+    """An account as custody sees one: the id names its directory on this box,
+    the handle is the only thing the co-signer ever learns."""
+    return type("A", (), {"id": uid, "handle": handle, "telegram": None})()
 
 
 class FakeGoogle:
@@ -50,9 +60,11 @@ class FakeGoogle:
 
     def issues_a_refresh_token(self):
         """What the authorization-code exchange gets back, as opposed to a
-        refresh grant: the refresh token itself plus the identity claims."""
+        refresh grant: the refresh token itself, the identity claims, and the
+        scopes the user actually granted, which provisioning refuses without."""
         self.payload = dict(self.payload, refresh_token=REFRESH_TOKEN,
-                            id_token=id_token("Alice", "Anderson"))
+                            id_token=id_token("Alice", "Anderson"),
+                            scope=oauth_app.scope_param())
         return self
 
     def post(self, url, data=None, headers=None, timeout=None):
@@ -125,10 +137,10 @@ def test_a_token_survives_the_whole_round_trip(split_custody):
     """Onboarding to refresh, with a real socket in the middle. This is the test
     that would have failed on the codec disagreement that both halves' own
     suites passed."""
-    tokens.take_custody(UID, REFRESH_TOKEN)
-    acct = type("A", (), {"id": UID})()
+    tokens.take_custody(acct(), REFRESH_TOKEN)
+    account_under_test = acct()
 
-    assert tokens.access_token_for(acct) == ACCESS_TOKEN
+    assert tokens.access_token_for(account_under_test) == ACCESS_TOKEN
     assert split_custody.calls[0]["form"]["refresh_token"] == REFRESH_TOKEN
     assert split_custody.calls[0]["form"]["grant_type"] == "refresh_token"
 
@@ -137,27 +149,35 @@ def test_neither_box_holds_enough_alone(split_custody):
     """The stored record is openable by neither half on its own: the enclave's
     key does not fit the outer layer, and the co-signer's unwrap yields
     ciphertext. Invariant 1, checked against the real outer key rather than a
-    fake one."""
-    path = tokens.take_custody(UID, REFRESH_TOKEN)
-    _, outer = tokens.decode_record(path.read_bytes())
+    fake one.
+
+    What the co-signer's unwrap yields is a *data key*, and a data key without
+    the account's files is worth nothing. That is the envelope: the layer order
+    reads the same way after Track G, over a smaller and more valuable
+    object."""
+    token_path = tokens.take_custody(acct(), REFRESH_TOKEN)
+    _, outer = keyring.decode_record(keyring.dek_path(UID).read_bytes())
     assert REFRESH_TOKEN.encode() not in outer
 
     with pytest.raises(wrapping.CustodyError):
-        wrapping.open_inner(UID, outer)
+        wrapping.open_dek(HANDLE, outer)
 
-    inner = cosigner_keys.unwrap(UID, outer)
+    inner = cosigner_keys.unwrap(HANDLE, outer)
     assert REFRESH_TOKEN.encode() not in inner, (
         "the co-signer's own unwrap produced a readable token; the layer order "
         "is inverted and that box can now read every mailbox"
     )
-    assert bytes(wrapping.open_inner(UID, inner)).decode() == REFRESH_TOKEN
+    dek = wrapping.open_dek(HANDLE, inner)
+    assert len(dek) == wrapping.KEY_LEN
+    stored = keyring.decrypt(dek, HANDLE, tokens.TOKEN_FILE, token_path.read_bytes())
+    assert stored.decode() == REFRESH_TOKEN
 
 
 def test_the_proof_google_receives_was_signed_by_the_cosigner(split_custody):
     """The enclave never holds the DPoP key, so the header it sends has to have
     come back over the wire. Its claims are checked as Google would see them."""
-    tokens.take_custody(UID, REFRESH_TOKEN)
-    tokens.access_token_for(type("A", (), {"id": UID})())
+    tokens.take_custody(acct(), REFRESH_TOKEN)
+    tokens.access_token_for(acct())
 
     claims = claims_of(split_custody.calls[0]["proof"])
     assert claims["htm"] == "POST"
@@ -180,9 +200,9 @@ def test_the_nonce_retry_costs_a_second_proof_and_no_second_unwrap(split_custody
     separately: paying for a second unwrap here would double every refresh
     against the per-user limit."""
     split_custody.demand_nonce = "n-from-google"
-    tokens.take_custody(UID, REFRESH_TOKEN)
+    tokens.take_custody(acct(), REFRESH_TOKEN)
 
-    assert tokens.access_token_for(type("A", (), {"id": UID})()) == ACCESS_TOKEN
+    assert tokens.access_token_for(acct()) == ACCESS_TOKEN
     assert len(split_custody.calls) == 2
     assert claims_of(split_custody.calls[1]["proof"])["nonce"] == "n-from-google"
 
@@ -194,29 +214,63 @@ def test_the_nonce_retry_costs_a_second_proof_and_no_second_unwrap(split_custody
 def test_the_cosigner_logs_the_refresh_and_stores_no_ciphertext(split_custody):
     """The audit log is the evidence half of the design (§J5). It has to show
     the refresh happened and must not show what crossed the wire."""
-    path = tokens.take_custody(UID, REFRESH_TOKEN)
-    tokens.access_token_for(type("A", (), {"id": UID})())
+    tokens.take_custody(acct(), REFRESH_TOKEN)
+    tokens.access_token_for(acct())
 
     rows = audit.recent()
     assert [(row["action"], row["decision"]) for row in rows] == [
         (policy.ACTION_UNWRAP, audit.ALLOW),
         (policy.ACTION_WRAP, audit.ALLOW),
     ]
-    assert all(row["uid"] == UID for row in rows)
 
     logged = audit.db_path().read_bytes()
-    _, outer = tokens.decode_record(path.read_bytes())
+    _, outer = keyring.decode_record(keyring.dek_path(UID).read_bytes())
     assert REFRESH_TOKEN.encode() not in logged
     assert outer not in logged
     assert protocol.b64(outer).encode() not in logged
 
 
-def test_a_second_onboarding_for_one_account_is_refused(split_custody):
+def test_the_log_names_the_handle_and_never_the_person(split_custody):
+    """Track F, checked where it is actually decided. The co-signer's own
+    database is the artifact: a copy of it must not be a customer list, so the
+    address must not appear in it anywhere -- not in a uid column, not in a
+    reason string, not in a measurement."""
+    tokens.take_custody(acct(), REFRESH_TOKEN)
+    tokens.access_token_for(acct())
+
+    rows = audit.recent()
+    assert rows and all(row["uid"] == HANDLE for row in rows)
+    assert UID.encode() not in audit.db_path().read_bytes(), (
+        "the co-signer's log holds an address; compromising that box now yields "
+        "the customer list its docstring says it does not have"
+    )
+
+
+def test_a_second_wrap_for_one_account_is_refused(split_custody):
     """`/wrap` is idempotent by refusal, decided from the log rather than from a
-    stored record, so invariant 4 holds while it holds."""
-    tokens.take_custody(UID, REFRESH_TOKEN)
+    stored record, so invariant 4 holds while it holds.
+
+    Onboarding no longer reaches it -- a re-consent reuses the account's data
+    key -- so this drives the wire directly. The rule still has to hold, because
+    what it prevents is an attacker persuading the co-signer to wrap a key of
+    their choosing for an account that already has one."""
+    tokens.take_custody(acct(), REFRESH_TOKEN)
+    inner = wrapping.seal_dek(HANDLE, wrapping.new_dek())
     with pytest.raises(cosigner.CoSignerUnavailable, match="already wrapped"):
-        tokens.take_custody(UID, "1//0gADifferentTokenEntirely")
+        cosigner.wrap(HANDLE, inner)
+
+
+def test_a_re_consent_costs_no_second_wrap(split_custody):
+    """Google issues a fresh refresh token on every consent, so this is the
+    ordinary path and not an edge case: signing in twice must work."""
+    tokens.take_custody(acct(), REFRESH_TOKEN)
+    tokens.take_custody(acct(), "1//0gADifferentTokenEntirely")
+
+    wraps = [row for row in audit.recent()
+             if row["action"] == policy.ACTION_WRAP and row["decision"] == audit.ALLOW]
+    assert len(wraps) == 1
+    assert tokens.access_token_for(acct()) == ACCESS_TOKEN
+    assert split_custody.calls[-1]["form"]["refresh_token"] == "1//0gADifferentTokenEntirely"
 
 
 def test_the_rate_limit_stops_mail_rather_than_being_worked_around(split_custody,
@@ -225,13 +279,13 @@ def test_the_rate_limit_stops_mail_rather_than_being_worked_around(split_custody
     caller as a failure. Anything that answers with a token past the limit has
     found a way to read mail with one box."""
     monkeypatch.setenv("COSIGNER_RATE_PER_USER_HOUR", "1")
-    tokens.take_custody(UID, REFRESH_TOKEN)
-    acct = type("A", (), {"id": UID})()
+    tokens.take_custody(acct(), REFRESH_TOKEN)
+    account_under_test = acct()
 
-    assert tokens.access_token_for(acct) == ACCESS_TOKEN
+    assert tokens.access_token_for(account_under_test) == ACCESS_TOKEN
     tokens.forget()
     with pytest.raises(cosigner.CoSignerUnavailable, match="rate limit"):
-        tokens.access_token_for(acct)
+        tokens.access_token_for(account_under_test)
     assert len(split_custody.calls) == 1, "a refused unwrap still reached Google"
 
 
@@ -248,11 +302,12 @@ def test_a_consent_provisions_an_account_across_both_boxes(split_custody, monkey
     monkeypatch.setattr(provisioning.watch_renew, "renew_account",
                         lambda acct, log=None: None)
 
-    acct = provisioning.provision("the-code", "https://app.example/auth/callback",
-                                  "the-state")
+    provisioned = provisioning.provision("the-code", "https://app.example/auth/callback",
+                                         "the-state")
 
-    assert acct.id == UID
-    assert acct.identity.first == "Alice"
+    assert provisioned.id == UID
+    assert provisioned.identity.first == "Alice"
+    assert account.HANDLE_RE.match(provisioned.handle)
     form = split_custody.calls[0]["form"]
     assert form["grant_type"] == "authorization_code"
     assert form["code_verifier"], "the exchange carried no PKCE verifier"
@@ -266,7 +321,7 @@ def test_a_consent_provisions_an_account_across_both_boxes(split_custody, monkey
     # And the account that came out of it can then refresh, which is the join
     # between the two halves of this file.
     split_custody.calls.clear()
-    assert tokens.access_token_for(acct) == ACCESS_TOKEN
+    assert tokens.access_token_for(provisioned) == ACCESS_TOKEN
     # A fresh signup is inactive until it pays, so it is looked up the way
     # billing does rather than the way routing does.
     assert account.account_for_email(UID).token_file, "the manifest lost the token pointer"
@@ -285,8 +340,8 @@ def test_the_consent_binds_googles_token_to_the_key_the_enclave_cannot_use(split
 def test_a_dead_cosigner_stops_mail(split_custody, monkeypatch):
     """Invariant 3 across the real boundary: the enclave has no local key to
     fall back to and must not grow one."""
-    tokens.take_custody(UID, REFRESH_TOKEN)
+    tokens.take_custody(acct(), REFRESH_TOKEN)
     monkeypatch.setenv("LETTERLOCK_COSIGNER_URL", "http://127.0.0.1:1")
     tokens.forget()
     with pytest.raises(cosigner.CoSignerUnavailable):
-        tokens.access_token_for(type("A", (), {"id": UID})())
+        tokens.access_token_for(acct())

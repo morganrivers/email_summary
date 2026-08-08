@@ -12,12 +12,19 @@ profile. Generating a profile from sent mail overwrites the whole voice document
 that. Keeping them apart also keeps "how you write" separate from "what is true
 of you" in the box the user edits.
 
-Where it lives is derived, not stored: database/<id>/personal-context.md, beside
-that account's credentials and state. There is no manifest pointer of the kind
+Where it lives is derived, not stored: database/<id>/personal-context.enc, beside
+that account's data key and state. There is no manifest pointer of the kind
 voice_file is, because there is no second place this document can be -- the
 operator's voice profile comes from config/, but nobody has an operator-supplied
 facts file. account._owned_paths() covers it by owning the directory rather than
 a list of keys, so a deleted account takes these facts with it.
+
+It is encrypted under that account's data key (backend.custody.keyring), which
+is what the `.enc` says. This is the document most likely to hold an address, a
+phone number or a medical fact, and it used to sit in plaintext behind file
+permissions alone -- which isolate nothing, because all six units run as the
+same uid. Reading it now costs a co-signer round trip that is rate limited and
+logged, so reading everybody's is visible rather than free.
 
 The text reaches the model through llm_client.complete like everything else, so
 the masking boundary applies to it: an address or phone number written here is
@@ -27,9 +34,9 @@ pseudonymized on the way out and restored on the way back.
 import sys
 
 from backend import audit
-from backend.accounts import account
+from backend.custody import keyring
 
-CONTEXT_NAME = "personal-context.md"
+CONTEXT_NAME = "personal-context.enc"
 
 MAX_CONTEXT_CHARS = 8000
 
@@ -57,19 +64,13 @@ class ContextError(Exception):
 
 def context_path(acct):
     """Where this account's personal information document lives."""
-    assert acct.id and not set(acct.id) & {"/", "\\"} and ".." not in acct.id, (
-        f"refusing to build a context path from account id {acct.id!r}"
-    )
-    return account.ACCOUNTS_DIR / acct.id / CONTEXT_NAME
+    return keyring.path_for(acct, CONTEXT_NAME)
 
 
 def load(acct):
     """The document as the user last saved it, or "" when there is none. Returns
     it verbatim: what is stored is what the drafter reads."""
-    path = context_path(acct)
-    if not path.exists():
-        return ""
-    return path.read_text().strip()
+    return (keyring.read_encrypted(acct, CONTEXT_NAME, default="") or "").strip()
 
 
 def save(acct, text):
@@ -90,10 +91,7 @@ def save(acct, text):
     if not text:
         clear(acct)
         return
-    path = context_path(acct)
-    account.secure_dir(path.parent)
-    path.write_text(text + "\n")
-    path.chmod(0o600)
+    keyring.write_encrypted(acct, CONTEXT_NAME, text + "\n")
     log(f"saved personal information for {acct.id} ({len(text)} chars)")
     audit.record(acct.id, audit.PERSONAL, "saved", (f"chars:{len(text)}",))
 
@@ -102,9 +100,7 @@ def clear(acct):
     """Drop the document. The drafter is then told nothing about the owner
     beyond their voice profile. Audited only when there was something to drop,
     so the log never reports an edit that changed nothing."""
-    path = context_path(acct)
-    if path.exists():
-        path.unlink()
+    if keyring.clear_encrypted(acct, CONTEXT_NAME):
         log(f"cleared personal information for {acct.id}")
         audit.record(acct.id, audit.PERSONAL, "cleared")
 

@@ -25,22 +25,26 @@ fake_email = {
     "from": "Alice Example <alice@example.com>",
     "date": "Mon, Jun 30, 2026 at 10:00 AM",
     "subject": "Coffee this Thursday or Friday?",
-    "body": "Hi Morgan, I'd love to grab coffee. Could you do Thursday afternoon (after 2pm) or Friday morning this week? Either works for me. Best, Alice",
+    "body": f"Hi {acct.display_name}, I'd love to grab coffee. Could you do Thursday afternoon (after 2pm) or Friday morning this week? Either works for me. Best, Alice",
 }
 
 sys_prompt = instructions + DRAFTER_INSTRUCTION
+fence = agentic_drafter.new_fence()
 user_prompt = (
-    f"Original email:\n"
-    f"From: {fake_email['from']}\n"
-    f"Date: {fake_email['date']}\n"
-    f"Subject: {fake_email['subject']}\n\n"
-    f"{fake_email['body']}\n\n"
-    "Draft a reply."
+    "Original email:\n"
+    + fence.wrap(
+        f"From: {fake_email['from']}\n"
+        f"Date: {fake_email['date']}\n"
+        f"Subject: {fake_email['subject']}\n\n"
+        f"{fake_email['body']}"
+    )
+    + "\n\nDraft a reply."
 )
 
 client = agentic_drafter.make_client(acct)
 print("--- Calling agentic_drafter.draft ---", flush=True)
-body, url = agentic_drafter.draft(client, sys_prompt, user_prompt, account=acct)
+body, url = agentic_drafter.draft(client, sys_prompt, user_prompt, account=acct,
+                                  fence=fence)
 print("\n=== DRAFT BODY ===")
 print(body)
 print("\n=== RUN URL ===")

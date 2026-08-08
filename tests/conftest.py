@@ -32,6 +32,13 @@ app_secrets._loaded = True
 import pytest
 
 import harness
+import identity_fixture
+
+# owner_identity() reads these through secrets.get at call time, so they can be
+# set after the app modules import. There is deliberately no default in the
+# code: a box with no owner configured must fail loudly rather than mask every
+# account's mail under whatever name shipped in the repository.
+os.environ.update(identity_fixture.OWNER_ENV)
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +59,6 @@ def audit_log(tmp_path):
 def wire(monkeypatch, tmp_path):
     import requests
     from backend.integrations import llm_client
-    from backend.masking import pseudonymizer
     from backend.accounts import state
     from backend.accounts import account
     from backend.drafting import draft_replies
@@ -65,8 +71,9 @@ def wire(monkeypatch, tmp_path):
     # Pin the masking mode before the account is built, so what the goldens
     # record does not depend on whether Presidio and spaCy happen to be
     # installed on the machine running pytest. See harness.without_analyzer.
-    monkeypatch.setattr(pseudonymizer, "DEFAULT_IDENTITY",
-                        harness.without_analyzer(pseudonymizer.DEFAULT_IDENTITY))
+    real_owner_identity = account.owner_identity
+    monkeypatch.setattr(account, "owner_identity",
+                        lambda: harness.without_analyzer(real_owner_identity()))
 
     # The voice profile is per account now; the fixture stands in for the
     # neutral default that any account without its own profile gets.
@@ -84,6 +91,12 @@ def wire(monkeypatch, tmp_path):
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps({"accounts": [{
         "id": acct.id,
+        # The same handle the in-memory account carries. Every registered
+        # account has one, and the paths that read a user's own documents name
+        # their key by it; a manifest entry without one is an account whose
+        # personal context cannot be opened, which the sweep swallows as a
+        # per-account failure rather than reporting.
+        "handle": acct.handle,
         "identity": {
             "first": acct.identity.first,
             "last": acct.identity.last,
@@ -111,4 +124,9 @@ def wire(monkeypatch, tmp_path):
         monkeypatch.setattr(requests, "post", harness.make_fake_post(rec))
         return rec
 
-    return SimpleNamespace(rec=rec, install=install, tmp_path=tmp_path, account=acct)
+    # The drafting path reads two per-account documents, and since Track G both
+    # are encrypted under that account's data key. Without custody in place they
+    # do not read as empty -- they raise -- so every fixture that drafts needs
+    # both halves present, which is the change working as intended.
+    with harness.custody_available(tmp_path, monkeypatch):
+        yield SimpleNamespace(rec=rec, install=install, tmp_path=tmp_path, account=acct)

@@ -17,6 +17,7 @@ import datetime
 import sys
 
 from backend import secrets
+from backend import site
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal import calendar_api
 from backend.integrations.telegram import send_telegram, notify_error
@@ -53,7 +54,7 @@ def _log(msg):
     sys.stderr.write(f"[schedule_from_sent] {msg}\n")
 
 
-def extract_events(client, email, identity=None, timezone="UTC"):
+def extract_events(client, email, identity, timezone="UTC"):
     today = datetime.date.today()
     user_content = (
         f"Today: {today.isoformat()} ({today.strftime('%A')}). "
@@ -140,12 +141,30 @@ def render_telegram(created):
     return "\n".join(lines)
 
 
-def run(account, sent_emails):
-    assert isinstance(sent_emails, list), "sent_emails must be a list"
-    if not sent_emails:
-        return []
-    client = llm_client.make_client(account)
-    created = []
+def render_not_private(err):
+    if isinstance(err, calendar_api.CalendarSharingUnknown):
+        remedy = (
+            "Letterlock could not check who can read that calendar, so it wrote "
+            f"nothing. Sign in again to refresh its permissions: "
+            f"{site.app_url('/auth/login')}"
+        )
+    else:
+        remedy = (
+            "Nothing was written, because an event built from your mail would be "
+            "readable by everyone that calendar is shared with. Make it private "
+            "in Google Calendar, or switch off scheduling from sent mail."
+        )
+    return (
+        "📅 <b>Scheduling stopped: your calendar is not known to be private</b>\n\n"
+        f"{html.escape(str(err))}\n\n{remedy}"
+    )
+
+
+def _schedule_all(account, sent_emails, client, created):
+    """Every event this batch produces, appended to `created` as it is written.
+
+    Written into a list the caller owns rather than returned, so a refusal
+    partway through still reports what was already scheduled."""
     for email in sent_emails:
         try:
             events = extract_events(client, email, account.identity,
@@ -160,11 +179,29 @@ def run(account, sent_emails):
                 continue
             try:
                 res = create_event(account, event)
+            except calendar_api.CalendarNotPrivate:
+                raise
             except Exception as err:
                 _log(f"create failed for {event['summary']!r}: {err}")
                 notify_error(f"schedule_from_sent: calendar event creation failed for {event['summary']!r}", err, account.telegram)
                 continue
             created.append({**event, "htmlLink": res.get("htmlLink")})
+
+
+def run(account, sent_emails):
+    assert isinstance(sent_emails, list), "sent_emails must be a list"
+    if not sent_emails:
+        return []
+    client = llm_client.make_client(account)
+    created = []
+    try:
+        _schedule_all(account, sent_emails, client, created)
+    except calendar_api.CalendarNotPrivate as err:
+        # A shared calendar is a property of the account, not of one event, so
+        # every remaining event in the batch would be refused for the same
+        # reason. Stopping here makes it one message rather than one per event.
+        _log(f"calendar is not private: {err}")
+        send_telegram(render_not_private(err), account.telegram)
     if created:
         send_telegram(render_telegram(created), account.telegram)
     return created

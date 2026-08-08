@@ -6,17 +6,26 @@ the neutral default. This module keeps that resolution and adds the missing
 generator, and it is the only thing that writes a user's profile.
 
 Where a generated profile lands matters. It goes to
-`database/<id>/voice-dna.md`, alongside that user's credentials and state, and
-the manifest's `voice_file` is repointed at it. Never into `config/`: deploy.sh
+`database/<id>/voice-dna.enc`, alongside that user's data key and state, and the
+manifest's `voice_file` is repointed at it. Never into `config/`: deploy.sh
 overwrites that directory from the operator's `~/.system_files` on every push, so
 a profile written there would disappear on the next deploy.
+
+A user's own profile is encrypted under that account's data key
+(backend.custody.keyring), which is what the `.enc` says: it is a sample of how
+that person writes, reconstructed from their sent mail, and it was plaintext on
+disk until now. The operator's `config/` profile is the one document deliberately
+left in the clear -- it is operator content rather than user content, and the
+deploy overwrites it, so encrypting it would mean encrypting a file rsync
+replaces with a plaintext copy on the next push. `load()` decides which of the
+two it is holding by comparing against the account's own path.
 
 Samples are the account's own Sent label, most recent first, filtered to messages
 that carry enough of the user's own prose to be evidence of a voice: quoted
 replies and trailing signatures cut, one-liners and forwards dropped, and at most
 `PER_RECIPIENT` per correspondent so a single thread cannot define the profile.
 They reach the model masked (llm_client.complete) and fenced
-(agentic_drafter.untrusted), because a sent message quotes whatever was sent to
+(agentic_drafter.Fence), because a sent message quotes whatever was sent to
 the user and is therefore not all the user's own words.
 
 `DEFAULT_CONSTRAINTS` is the starting Constraints section: the plain-text rules
@@ -44,6 +53,7 @@ from pathlib import Path
 
 from backend import paths
 from backend.accounts import account
+from backend.custody import keyring
 from backend.drafting import agentic_drafter
 from backend.drafting import tool_executors
 from backend.integrations import llm_client
@@ -58,7 +68,7 @@ from backend.integrations import llm_client
 DEFAULT_PROFILE = Path(__file__).parent / "default_voice.md"
 OWNER_PROFILE = paths.config_file("voice-dna-email.md")
 
-PROFILE_NAME = "voice-dna.md"
+PROFILE_NAME = "voice-dna.enc"
 
 # Recent, and the user's own words: Gmail chats and drafts are neither.
 SENT_QUERY = "in:sent -in:chats -in:trash -in:spam newer_than:1y"
@@ -156,10 +166,7 @@ def log(msg):
 
 def profile_path(acct):
     """Where this account's own profile lives, generated or hand-edited."""
-    assert acct.id and not set(acct.id) & {"/", "\\"} and ".." not in acct.id, (
-        f"refusing to build a profile path from account id {acct.id!r}"
-    )
-    return account.ACCOUNTS_DIR / acct.id / PROFILE_NAME
+    return keyring.path_for(acct, PROFILE_NAME)
 
 
 def with_constraints(text):
@@ -181,11 +188,22 @@ def default_text():
 
 def load(acct):
     """This account's own profile document, or None when it has none. Returns it
-    verbatim: what is stored is what the drafter reads."""
+    verbatim: what is stored is what the drafter reads.
+
+    Two kinds of pointer, and which one this is decides how it is read. A
+    profile in the account's own directory is that user's writing and is
+    encrypted under their data key. Anything else is the operator's file under
+    `config/`, which the deploy owns and writes in the clear."""
     candidate = getattr(acct, "voice_file", None)
     if not candidate:
         return None
     path = Path(candidate)
+    if path == profile_path(acct):
+        text = keyring.read_encrypted(acct, PROFILE_NAME)
+        if text is None:
+            log(f"{acct.id} points at a missing profile {path}")
+            return None
+        return text.strip()
     if not path.exists():
         log(f"{acct.id} points at a missing profile {path}")
         return None
@@ -213,10 +231,7 @@ def save(acct, text):
         raise VoiceError(
             f"That profile is {len(text)} characters; the limit is {MAX_PROFILE_CHARS}."
         )
-    path = profile_path(acct)
-    account.secure_dir(path.parent)
-    path.write_text(text + "\n")
-    path.chmod(0o600)
+    path = keyring.write_encrypted(acct, PROFILE_NAME, text + "\n")
     log(f"saved profile for {acct.id} ({len(text)} chars)")
     return account.set_voice(acct.id, paths.relative_if_inside(path))
 
@@ -225,9 +240,7 @@ def clear(acct):
     """Drop this account's profile, putting it back on the default. Removes the
     generated document; a pointer at a file outside the account's own directory
     (the operator's config copy) is unlinked from but never deleted."""
-    path = profile_path(acct)
-    if path.exists():
-        path.unlink()
+    keyring.clear_encrypted(acct, PROFILE_NAME)
     return account.set_voice(acct.id, clear=True)
 
 
@@ -306,15 +319,16 @@ def synthesize(acct, samples):
     is pasted into every future draft prompt for this account."""
     assert samples, "synthesize needs at least one sample"
     client = llm_client.make_client(acct)
+    fence = agentic_drafter.new_fence()
     resp = llm_client.complete(
         client,
         messages=[
             {"role": "system",
-             "content": f"{SYNTHESIS_PROMPT}\n\n{agentic_drafter.INJECTION_RULE}"},
+             "content": f"{SYNTHESIS_PROMPT}\n\n{fence.rule}"},
             {"role": "user",
              "content": (
                  f"{len(samples)} emails the account owner sent, most recent first.\n\n"
-                 f"{agentic_drafter.untrusted(_render_samples(samples))}"
+                 f"{fence.wrap(_render_samples(samples))}"
              )},
         ],
         max_tokens=MAX_TOKENS,

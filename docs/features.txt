@@ -1,3 +1,10 @@
-I want to add a feature for drafting auto-fix on a special #fixmyemail string. that string will be detected and trigger loading of the draft, and an agentic feature will commence which keeps the meaning but rewrites sentences to be grammatically correct. Users can specify their own hash tags and relevant instructions
+Feature: I want to add a feature for drafting auto-fix on a special #fixmyemail string. that string will be detected and trigger loading of the draft, and an agentic feature will commence which keeps the meaning but rewrites sentences to be grammatically correct. Users can specify their own hash tags and relevant instructions
+actually, @letterlockfix or @llfix might be a good trigger. or if too slow, save draft. can either replace, or copy underneath existing email (probably good as a default)
+"and fixes grammar or spelling while fact-checking your email drafts as soon as you type @llfix.""
+
+Another feature: ask the bot what's in your email lately (security challenge!)
 
 Another feature: images. All the way through the pipeline.
+
+
+Another  feature: in addition to telegram, support sms, and potentially google-chat (seems potentially critical for MVP?)

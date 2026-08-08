@@ -6,6 +6,8 @@ Unit-level (not golden) because these pin who decides a rule, not the outbound
 payloads the golden tests already cover.
 """
 
+from identity_fixture import OWNER_ALT_EMAIL, OWNER_FIRST
+
 from backend.drafting import agentic_drafter
 from backend.drafting import draft_replies
 from backend.drafting import personal_context
@@ -61,7 +63,7 @@ def test_personal_information_over_the_limit_is_refused(wire):
 
 def test_draft_with_a_dash_is_kept_when_the_setting_is_off(wire, monkeypatch):
     wire.account.ban_dashes = False
-    dash_body = "Hi Alice — lunch works.\n\nBest,\nMorgan"
+    dash_body = f"Hi Alice — lunch works.\n\nBest,\n{OWNER_FIRST}"
     rec = wire.install(
         responses=[
             {"content": '{"decisions": [{"index": 0, "needs_reply": true, '
@@ -82,10 +84,10 @@ def _auto_email():
     return {
         "id": "e1", "threadId": "t1",
         "from": "Alice Adams <alice@contoso.com>",
-        "to": "orgmanrivers@gmail.com",
+        "to": OWNER_ALT_EMAIL,
         "date": "Mon, 20 Jul 2026 09:00:00 +0000",
         "subject": "Lunch next week?",
-        "body": "Hi Morgan, want to grab lunch next week? Best, Alice Adams",
+        "body": f"Hi {OWNER_FIRST}, want to grab lunch next week? Best, Alice Adams",
         "messageIdHeader": "<msg-e1@mail>",
         "referencesHeader": "",
     }

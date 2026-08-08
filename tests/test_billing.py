@@ -7,30 +7,11 @@ while an activated one becomes routable. Polar's API is never hit: every path
 tested resolves the account from data carried in the event itself.
 """
 
-import json
+from harness import account_entry as _entry, write_manifest as _manifest
 
 from backend.accounts import account
 from backend.billing import billing
 from backend.billing import polar_api
-
-
-def _manifest(tmp_path, entries):
-    p = tmp_path / "accounts.json"
-    p.write_text(json.dumps({"accounts": entries}))
-    return p
-
-
-def _entry(email, status="active", polar_customer_id=None, emails=None):
-    e = {
-        "id": email,
-        "identity": {"first": "A", "last": "B",
-                     "emails": emails if emails is not None else [email]},
-        "telegram": {"chat_id": "c", "token": "t"},
-        "plan_status": status,
-    }
-    if polar_customer_id:
-        e["polar_customer_id"] = polar_customer_id
-    return e
 
 
 def _billing(monkeypatch):

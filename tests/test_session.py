@@ -47,6 +47,23 @@ def test_a_session_round_trips():
     assert sess.get_email(headers_for(cookie)) == "dana@example.com"
 
 
+def test_both_cookies_carry_the_attributes_that_do_the_defending():
+    """There is no CSRF token anywhere in the web tier, and there does not need
+    to be one -- but only because `SameSite=Lax` means a cross-site POST arrives
+    without the session cookie. That makes these three attributes the whole of
+    the defence rather than hardening on top of it: dropping SameSite silently
+    turns every mutating handler into a CSRF target, dropping Secure puts the
+    cookie on the first plaintext request, and dropping HttpOnly hands it to any
+    script that reaches the page."""
+    for cookie in (sess.make_cookie("dana@example.com"),
+                   sess.state_cookie(sess.new_state(), {})):
+        attributes = {part.strip().lower() for part in cookie.split(";")[1:]}
+        assert "httponly" in attributes, cookie
+        assert "secure" in attributes, cookie
+        assert "samesite=lax" in attributes, cookie
+        assert "path=/" in attributes, cookie
+
+
 def test_a_tampered_session_is_not_accepted():
     cookie = sess.make_cookie("dana@example.com")
     forged = cookie.replace("dana@example.com", "mallory@example.com", 1)

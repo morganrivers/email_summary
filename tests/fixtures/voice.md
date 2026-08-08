@@ -1,4 +1,4 @@
-Voice profile for Morgan Rivers.
+Voice profile for Jordan Avery.
 
 Write warmly and concisely. Be direct. Prefer short sentences.
-Open with a friendly greeting. Sign off as Morgan.
+Open with a friendly greeting. Sign off as Jordan.

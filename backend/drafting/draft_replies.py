@@ -85,10 +85,14 @@ def thread_participation_line(email):
     return "Thread: no earlier message from the recipient in this thread"
 
 
-def classify(client, emails, identity=None):
+def classify(client, emails, identity):
+    # One fence for the whole listing, and its rule in the system message. The
+    # listing was fenced without the rule ever being stated, so the model got
+    # delimiters that nothing had explained the meaning of.
+    fence = agentic_drafter.new_fence()
     listing = "\n\n".join(
         f"[{i}] {thread_participation_line(e)}\n"
-        + agentic_drafter.untrusted(
+        + fence.wrap(
             f"From: {e['from']}\nSubject: {e['subject']}\nBody: {e['body'][:1500]}"
         )
         for i, e in enumerate(emails)
@@ -96,7 +100,7 @@ def classify(client, emails, identity=None):
     parsed = llm_client.complete_json(
         client,
         messages=[
-            {"role": "system", "content": CLASSIFIER_PROMPT},
+            {"role": "system", "content": f"{CLASSIFIER_PROMPT}\n\n{fence.rule}"},
             {"role": "user", "content": listing},
         ],
         identity=identity,
@@ -106,9 +110,12 @@ def classify(client, emails, identity=None):
 
 def draft_body(client, instructions, email, account):
     sys_prompt = instructions + DRAFTER_INSTRUCTION
+    # Made here rather than in draft(): this is where the email is fenced, and
+    # draft() states the rule for the same fence in the system message.
+    fence = agentic_drafter.new_fence()
     user_prompt = (
         "Original email:\n"
-        + agentic_drafter.untrusted(
+        + fence.wrap(
             f"From: {email['from']}\n"
             f"Date: {email['date']}\n"
             f"Subject: {email['subject']}\n\n"
@@ -118,7 +125,7 @@ def draft_body(client, instructions, email, account):
     )
     return agentic_drafter.draft(
         client, sys_prompt, user_prompt,
-        thread_id=f"auto-{email['id']}", account=account,
+        thread_id=f"auto-{email['id']}", account=account, fence=fence,
     )  # returns (body, run_url)
 
 

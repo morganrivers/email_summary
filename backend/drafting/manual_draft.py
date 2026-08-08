@@ -147,7 +147,9 @@ def draft_with_context(client, instructions, parsed, account, thread_id=None,
     sys_prompt = instructions + DRAFTER_WITH_CONTEXT
     owner = account.display_name
     # The owner's own instructions are trusted; the forwarded email is not, so
-    # only the latter is fenced.
+    # only the latter is fenced. The fence is made here and handed to draft(),
+    # which states its rule in the system message.
+    fence = agentic_drafter.new_fence()
     context_section = (
         f"{owner}'s context for this reply:\n{parsed['context']}\n\n"
         if parsed["context"] else
@@ -156,7 +158,7 @@ def draft_with_context(client, instructions, parsed, account, thread_id=None,
     )
     user_prompt = (
         f"Original email {owner} received:\n"
-        + agentic_drafter.untrusted(
+        + fence.wrap(
             f"From: {parsed['original_from']}\n"
             f"Date: {parsed['original_date']}\n"
             f"Subject: {parsed['original_subject']}\n\n"
@@ -168,7 +170,7 @@ def draft_with_context(client, instructions, parsed, account, thread_id=None,
     )
     return agentic_drafter.draft(client, sys_prompt, user_prompt,
                                  thread_id=thread_id, on_iteration=on_iteration,
-                                 account=account)
+                                 account=account, fence=fence)
 
 
 def render_progress_body(iter_num, msg, tool_history, final):

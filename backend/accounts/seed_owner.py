@@ -11,6 +11,11 @@ will not clobber a plan_status that billing has since changed -- except for
 forcing the owner active, which is the point (the owner runs the box; they are
 not a Polar customer).
 
+Who the owner is comes from the environment, not from the source: set
+LETTERLOCK_OWNER_EMAIL, LETTERLOCK_OWNER_FIRST and LETTERLOCK_OWNER_LAST (and
+LETTERLOCK_OWNER_FIRST_ALIASES, comma separated, if mail addresses them by a
+different first name) in .env before running this. See account.owner_identity().
+
     python -m backend.accounts.seed_owner          # write it
     python -m backend.accounts.seed_owner --show   # print what it would write
 """
@@ -39,7 +44,7 @@ def owner_entry_args():
     owner = account.owner_account()
     identity = owner.identity
     assert identity.emails, (
-        "owner identity has no email address; pseudonymizer.USER_EMAILS is empty"
+        f"owner identity has no email address; set {account.OWNER_EMAIL_ENV}"
     )
     args = {
         "email": identity.emails[0],

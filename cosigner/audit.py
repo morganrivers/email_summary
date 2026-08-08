@@ -181,15 +181,28 @@ def record(uid, action, decision, reason=None, fingerprint=None, measurement=Non
             )
 
 
+def _action_clause(action):
+    """`(sql, args)` restricting a count to one action or to a set of them.
+
+    A set rather than one string because a limiter whose subject is "the ways to
+    get a key" has to count them together; written here rather than as a second
+    query in the caller so both counters ask the same question the same way."""
+    if action is None:
+        return "", []
+    if isinstance(action, str):
+        return " AND action = ?", [action]
+    actions = list(action)
+    assert actions, "an empty action set counts nothing and is never what a caller meant"
+    return f" AND action IN ({','.join('?' * len(actions))})", actions
+
+
 def granted_since(since, action=None, uid=None):
     """How many requests were allowed in a window. The rate limiter's only
     source of counts, so what it enforced and what this log shows cannot
-    disagree."""
-    sql = "SELECT COUNT(*) FROM requests WHERE decision = ? AND ts >= ?"
-    args = [ALLOW, float(since)]
-    if action is not None:
-        sql += " AND action = ?"
-        args.append(action)
+    disagree. `action` is one action, a set of them, or None for all."""
+    clause, action_args = _action_clause(action)
+    sql = "SELECT COUNT(*) FROM requests WHERE decision = ? AND ts >= ?" + clause
+    args = [ALLOW, float(since)] + action_args
     if uid is not None:
         sql += " AND uid = ?"
         args.append(uid)
@@ -198,18 +211,19 @@ def granted_since(since, action=None, uid=None):
 
 
 def distinct_uids_since(since, action):
-    """How many different accounts were allowed this action in a window.
+    """How many different accounts were allowed these actions in a window.
 
     The shape the per-user and aggregate ceilings both miss: a sweep that
     touches every account once each is, per account, indistinguishable from
     normal use. Counting accounts rather than requests is what tells the two
     apart, and `requests_ts` already indexes it."""
-    assert action, "distinct_uids_since is only meaningful for one action"
+    assert action, "distinct_uids_since is only meaningful for a named action"
+    clause, action_args = _action_clause(action)
     with _LOCK:
         return connect().execute(
             "SELECT COUNT(DISTINCT uid) FROM requests "
-            "WHERE decision = ? AND action = ? AND ts >= ?",
-            (ALLOW, action, float(since)),
+            "WHERE decision = ? AND ts >= ?" + clause,
+            [ALLOW, float(since)] + action_args,
         ).fetchone()[0]
 
 

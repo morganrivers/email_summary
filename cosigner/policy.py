@@ -38,9 +38,21 @@ from cosigner import protocol
 
 ACTION_WRAP = "wrap"
 ACTION_UNWRAP = "unwrap-and-sign"
+ACTION_UNWRAP_DATA = "unwrap"
 ACTION_SIGN = "sign-dpop"
+ACTION_REWRAP = "rewrap"
 
-ACTIONS = (ACTION_WRAP, ACTION_UNWRAP, ACTION_SIGN)
+ACTIONS = (ACTION_WRAP, ACTION_UNWRAP, ACTION_UNWRAP_DATA, ACTION_SIGN, ACTION_REWRAP)
+
+# The actions that hand an account's key material back to the enclave. Named
+# once, because every rule about blast radius is a rule about this set and not
+# about one endpoint: an attacker choosing between two unwrap paths must not be
+# able to halve a ceiling by using both.
+#
+# `rewrap` is deliberately not one of them. It returns ciphertext under a
+# different key, which is worth no more to a caller than the ciphertext they
+# already had to present to ask.
+KEY_RELEASING = (ACTION_UNWRAP, ACTION_UNWRAP_DATA)
 
 # Why a request was refused, in a form the HTTP layer can turn into a status
 # code without pattern-matching on prose.
@@ -88,6 +100,12 @@ SWEEP_REASON = "distinct-account ceiling reached"
 # plus onboarding, so the default matches the unwrap ceiling rather than
 # doubling it.
 DEFAULT_SIGN_HOUR = DEFAULT_TOTAL_HOUR
+
+# A full rotation is one request per account and the box holds at most
+# MAX_ACCOUNTS of them, so this is several complete passes an hour. It exists
+# because an endpoint with no ceiling is one an attacker can use as an oracle
+# for free, not because a legitimate rotation is expected to come near it.
+DEFAULT_REWRAP_HOUR = 500
 
 # One alert per reason per interval. A breach produces the same refusal over
 # and over, and a Telegram channel that gets a thousand of them is a channel
@@ -141,6 +159,10 @@ def sign_limit():
     return _limit("COSIGNER_RATE_SIGN_HOUR", DEFAULT_SIGN_HOUR)
 
 
+def rewrap_limit():
+    return _limit("COSIGNER_RATE_REWRAP_HOUR", DEFAULT_REWRAP_HOUR)
+
+
 def distinct_uid_limit():
     """How many different accounts may be unwrapped inside one
     `DISTINCT_WINDOW_SECONDS`."""
@@ -188,11 +210,18 @@ def _sweep_refusal(uid, action):
     narrow the breach nor bound anything -- it would only take ordinary mail
     processing down for whoever was busiest when a sweep started. What the rule
     stops is the next *new* account, which is the only direction a sweep can
-    go."""
+    go.
+
+    Counted across every key-releasing action rather than per endpoint. There
+    are two ways to obtain an account's data key, and a rule that metered each
+    separately would let a sweep take half its accounts down one path and half
+    down the other, staying under both ceilings while touching twice as many
+    people as either allows."""
+    assert action in KEY_RELEASING, f"{action} does not release key material"
     since = time.time() - DISTINCT_WINDOW_SECONDS
-    if audit.granted_since(since, action=action, uid=uid):
+    if audit.granted_since(since, action=KEY_RELEASING, uid=uid):
         return None
-    seen = audit.distinct_uids_since(since, action=action)
+    seen = audit.distinct_uids_since(since, action=KEY_RELEASING)
     if seen >= distinct_uid_limit():
         minutes = DISTINCT_WINDOW_SECONDS // 60
         return Refusal(KIND_RATE, f"{SWEEP_REASON} ({seen}/{distinct_uid_limit()} accounts "
@@ -220,6 +249,17 @@ def _rate_refusal(uid, action):
         if signed >= sign_limit():
             return Refusal(KIND_RATE,
                            f"sign ceiling reached ({signed}/{sign_limit()} per hour)")
+        return None
+    if action == ACTION_REWRAP:
+        # No per-account rule and no sweep rule: touching every account once is
+        # what a rotation *is*, so the shape this box treats as an incident
+        # everywhere else is the expected shape here. What bounds it is that it
+        # releases nothing -- the caller ends up holding ciphertext they already
+        # held, under a different key.
+        rewrapped = audit.granted_since(since, action=action)
+        if rewrapped >= rewrap_limit():
+            return Refusal(KIND_RATE,
+                           f"rewrap ceiling reached ({rewrapped}/{rewrap_limit()} per hour)")
         return None
     used = audit.granted_since(since, action=action, uid=uid)
     if used >= per_user_limit():

@@ -80,6 +80,22 @@ def _challenge(verifier):
     return _b64u(hashlib.sha256(verifier.encode()).digest())
 
 
+def scope_refusal(missing):
+    """What a user who unticked a box on the consent screen is told. One wording
+    for both places the grant is checked."""
+    return (
+        f"this sign-in did not grant everything Letterlock needs "
+        f"({oauth_app.describe_scopes(missing)}); sign in again and leave every "
+        f"permission ticked"
+    )
+
+
+def _require_full_grant(granted):
+    missing = oauth_app.missing_scopes(granted)
+    if missing:
+        raise ProvisionError(403, scope_refusal(missing))
+
+
 def build_auth_url(state, redirect_uri):
     """The Google consent URL. `dpop_jkt` names the co-signer's public key, which
     is what Google will bind the issued refresh token to; without it the token
@@ -157,6 +173,11 @@ def exchange_code(code, redirect_uri, state):
         )
     except wrapping.CustodyError as err:
         raise ProvisionError(502, f"code exchange failed: {err}") from err
+    # The grant as Google recorded it, which is the authoritative answer; the
+    # callback query said the same thing a moment earlier, but that parameter is
+    # a convenience of the redirect and this is the token itself. Checked before
+    # anything is stored, so a partial consent leaves nothing behind.
+    _require_full_grant(payload.get("scope"))
     refresh_token = payload.get("refresh_token")
     if not refresh_token:
         raise ProvisionError(
@@ -188,14 +209,20 @@ def provision(code, redirect_uri, state):
     entry are two different facts, and this is the only one that says we now
     hold a way into somebody's mailbox."""
     profile = exchange_code(code, redirect_uri, state)
-    # Checked here as well as in token_path, so a uid that cannot be stored is
+    # Checked here as well as in account_dir, so an id that cannot be stored is
     # refused before the co-signer is asked to wrap anything for it -- but
     # through the same function, because two spellings of a path-traversal guard
     # is one that can be relaxed without the other noticing.
-    email = tokens.check_uid(profile["email"])
+    email = account.check_id(profile["email"])
+    # A returning user keeps the handle they already have: every record they own
+    # is encrypted with it as the salt and the AAD, and the co-signer's
+    # wrap-once rule is keyed on it. Custody is taken before the manifest entry
+    # is written, so the pair is carried explicitly rather than read back off an
+    # account that does not exist yet.
+    handle = account.handle_for_email(email) or account.new_handle()
     account.secure_dir(account.ACCOUNTS_DIR)
     try:
-        token_file = tokens.take_custody(email, profile["refresh_token"])
+        token_file = tokens.take_custody((email, handle), profile["refresh_token"])
     except wrapping.CustodyError as err:
         # Fail closed: without the co-signer there is no way to store a token
         # that both boxes are needed to open, and storing one any other way is
@@ -205,18 +232,19 @@ def provision(code, redirect_uri, state):
         acct = account.register_account(
             email, profile["first"], profile["last"],
             token_file=paths.relative_if_inside(token_file),
+            handle=handle,
         )
     except account.AccountLimitReached as err:
         # The token we just took custody of is unusable now, so it does not stay
         # on disk. Refusing after the exchange is the only place we can refuse:
         # the identity is not known before it.
-        tokens.discard(email)
+        tokens.discard((email, handle))
         audit.record(email, audit.CONSENT, "refused", ("account-limit",))
         raise ProvisionError(503, f"signup refused: {err}") from err
     audit.record(acct.id, audit.CONSENT, "granted")
     # A re-consent replaces the custody this account's credentials derive from,
     # so anything cached against the old one has to go with it.
-    tokens.forget(email)
+    tokens.forget(acct)
     google_client.forget_services(email)
     watch_renew.renew_account(acct, log=log)
     log(f"provisioned account {acct.id}")
@@ -252,5 +280,12 @@ def handle_callback(query, state_is_ours, redirect_uri, fallback="/dashboard"):
     if not state_is_ours(state):
         raise ProvisionError(
             403, "this sign-in did not start in this browser, or took too long")
+    # Google puts the granted scopes on the redirect, so a consent with a box
+    # unticked is refused here, before the code is exchanged and before the
+    # co-signer is asked to wrap anything. Only when the parameter is present:
+    # absent, this is not the grant and says nothing, and `exchange_code` checks
+    # the token response, which is.
+    if query.get("scope"):
+        _require_full_grant(query["scope"])
     acct = provision(code, redirect_uri, state)
     return acct, fallback

@@ -10,7 +10,11 @@ shows up as a golden diff.
 
 import json
 
-from harness import assert_golden
+from harness import assert_golden, NEUTRAL_IDENTITY
+from identity_fixture import (
+    OTHER_ALIASES, OTHER_EMAIL, OTHER_FIRST, OTHER_LAST,
+    OWNER_ALT_EMAIL, OWNER_BOT_ALIAS, OWNER_FIRST, OWNER_FROM,
+)
 
 
 def record(rec, **extra):
@@ -29,10 +33,10 @@ def auto_email():
     return {
         "id": "e1", "threadId": "t1",
         "from": "Alice Adams <alice@contoso.com>",
-        "to": "orgmanrivers@gmail.com",
+        "to": OWNER_ALT_EMAIL,
         "date": "Mon, 20 Jul 2026 09:00:00 +0000",
         "subject": "Lunch next week?",
-        "body": "Hi Morgan, want to grab lunch next week? Best, Alice Adams",
+        "body": f"Hi {OWNER_FIRST}, want to grab lunch next week? Best, Alice Adams",
         "messageIdHeader": "<msg-e1@mail>",
         "referencesHeader": "",
     }
@@ -41,8 +45,8 @@ def auto_email():
 def bot_email():
     return {
         "id": "b1", "threadId": "t9",
-        "to": "danielmorganrivers+bot@gmail.com",
-        "from": "Morgan Rivers <orgmanrivers@gmail.com>",
+        "to": OWNER_BOT_ALIAS,
+        "from": OWNER_FROM,
         "subject": "Fwd: Project sync",
         "date": "Mon, 20 Jul 2026 10:00:00 +0000",
         "body": (
@@ -51,7 +55,7 @@ def bot_email():
             "From: Bob Baker <bob@contoso.com>\n"
             "Subject: Project sync\n"
             "Date: Mon, 20 Jul 2026 08:00:00 +0000\n\n"
-            "Hi Morgan, can we sync on the project this week?"
+            f"Hi {OWNER_FIRST}, can we sync on the project this week?"
         ),
     }
 
@@ -59,8 +63,8 @@ def bot_email():
 def bot_email_no_marker():
     return {
         "id": "b2", "threadId": "t8",
-        "to": "danielmorganrivers+bot@gmail.com",
-        "from": "Morgan Rivers <orgmanrivers@gmail.com>",
+        "to": OWNER_BOT_ALIAS,
+        "from": OWNER_FROM,
         "subject": "Fwd: Budget",
         "date": "Mon, 20 Jul 2026 11:00:00 +0000",
         "body": "Can you reply to this thread for me?",
@@ -91,7 +95,7 @@ def test_auto_reply_no_tools(wire):
     rec = wire.install(
         responses=[
             {"content": decisions({"index": 0, "needs_reply": True, "reason": "Personal lunch request"})},
-            {"content": "Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\nMorgan"},
+            {"content": f"Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\n{OWNER_FIRST}"},
         ],
         gmail_outputs=DRAFT_OUT,
     )
@@ -106,7 +110,7 @@ def test_auto_reply_with_calendar_tool(wire):
             {"content": decisions({"index": 0, "needs_reply": True, "reason": "Asks about meeting"})},
             {"tool_calls": [{"name": "get_calendar_events", "arguments": json.dumps(
                 {"start_iso": "2026-07-23T00:00:00Z", "end_iso": "2026-07-24T00:00:00Z"})}]},
-            {"content": "Hi Alice,\n\nThursday afternoon works. Say 3pm?\n\nBest,\nMorgan"},
+            {"content": f"Hi Alice,\n\nThursday afternoon works. Say 3pm?\n\nBest,\n{OWNER_FIRST}"},
         ],
         gmail_outputs={"list_events": [], **DRAFT_OUT},
     )
@@ -128,7 +132,7 @@ def test_auto_reply_declined(wire):
 
 def test_auto_reply_em_dash_rejected(wire):
     from backend.drafting import draft_replies
-    dash_body = "Hi Alice — lunch works.\n\nBest,\nMorgan"
+    dash_body = f"Hi Alice — lunch works.\n\nBest,\n{OWNER_FIRST}"
     rec = wire.install(
         responses=[
             {"content": decisions({"index": 0, "needs_reply": True, "reason": "Personal"})},
@@ -149,7 +153,7 @@ def test_bot_request_forward_marker(wire):
         responses=[
             {"tool_calls": [{"name": "get_calendar_events", "arguments": json.dumps(
                 {"start_iso": "2026-07-24T00:00:00Z", "end_iso": "2026-07-25T00:00:00Z"})}]},
-            {"content": "Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan"},
+            {"content": f"Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\n{OWNER_FIRST}"},
         ],
         gmail_outputs={
             "find_thread_by_from_subject": {"found": True, "threadId": "t9",
@@ -167,16 +171,16 @@ def test_bot_request_thread_fallback(wire):
     from backend.drafting import manual_draft
     rec = wire.install(
         responses=[
-            {"content": "Hi Carol,\n\nThe budget looks good to me.\n\nBest,\nMorgan"},
+            {"content": f"Hi Carol,\n\nThe budget looks good to me.\n\nBest,\n{OWNER_FIRST}"},
         ],
         gmail_outputs={
             "get_thread": {"messages": [
                 {"id": "m1", "from": "Carol Clark <carol@contoso.com>",
-                 "to": "orgmanrivers@gmail.com", "subject": "Budget",
+                 "to": OWNER_ALT_EMAIL, "subject": "Budget",
                  "date": "Mon, 20 Jul 2026 07:00:00 +0000",
-                 "body": "Hi Morgan, thoughts on the budget?"},
-                {"id": "b2", "from": "Morgan Rivers <orgmanrivers@gmail.com>",
-                 "to": "danielmorganrivers+bot@gmail.com", "subject": "Fwd: Budget",
+                 "body": f"Hi {OWNER_FIRST}, thoughts on the budget?"},
+                {"id": "b2", "from": OWNER_FROM,
+                 "to": OWNER_BOT_ALIAS, "subject": "Fwd: Budget",
                  "date": "Mon, 20 Jul 2026 11:00:00 +0000", "body": "Can you reply?"},
             ]},
             "find_thread_by_from_subject": {"found": True, "threadId": "t8",
@@ -202,7 +206,7 @@ def test_schedule_from_sent_concrete(wire):
         gmail_outputs={"create_event": {"htmlLink": "https://cal/evt1", "id": "evt1"}},
     )
     created = schedule_from_sent.run(wire.account, [sent_email(
-        "Hi Dave, confirming our meeting Tuesday July 21 at 3pm. Morgan")])
+        f"Hi Dave, confirming our meeting Tuesday July 21 at 3pm. {OWNER_FIRST}")])
     assert_golden("schedule_from_sent_concrete", record(rec, returned=created))
 
 
@@ -213,7 +217,7 @@ def test_schedule_from_sent_vague(wire):
         gmail_outputs={},
     )
     created = schedule_from_sent.run(wire.account, [sent_email(
-        "Hi Dave, let's meet sometime next week. Morgan")])
+        f"Hi Dave, let's meet sometime next week. {OWNER_FIRST}")])
     assert_golden("schedule_from_sent_vague", record(rec, returned=created))
 
 
@@ -224,10 +228,10 @@ def test_pii_masking_leaving_payload(wire):
     pii_email = {
         "id": "p1", "threadId": "tp",
         "from": "Nadia Fowler <nadia.fowler@acme.io>",
-        "to": "orgmanrivers@gmail.com",
+        "to": OWNER_ALT_EMAIL,
         "date": "Mon, 20 Jul 2026 09:00:00 +0000",
         "subject": "Access details",
-        "body": ("Hi Morgan, my number is 415-555-0199 and the key is "
+        "body": (f"Hi {OWNER_FIRST}, my number is 415-555-0199 and the key is "
                  "sk-ant-abcd1234efgh5678ijklmnop. Reach Priya Sharma too. "
                  "Thanks, Nadia Fowler"),
         "messageIdHeader": "<msg-p1@mail>", "referencesHeader": "",
@@ -235,7 +239,7 @@ def test_pii_masking_leaving_payload(wire):
     rec = wire.install(
         responses=[
             {"content": decisions({"index": 0, "needs_reply": True, "reason": "Personal"})},
-            {"content": "Hi Nadia,\n\nGot it, thanks.\n\nBest,\nMorgan"},
+            {"content": f"Hi Nadia,\n\nGot it, thanks.\n\nBest,\n{OWNER_FIRST}"},
         ],
         gmail_outputs=DRAFT_OUT,
     )
@@ -254,7 +258,7 @@ def test_pii_masking_leaving_payload(wire):
 def test_pseudonymize_roundtrip():
     from backend.masking import pseudonymizer
     original = "Email Priya Sharma at priya@acme.io or call 415-555-0199."
-    st = pseudonymizer.new_state()
+    st = pseudonymizer.new_state(NEUTRAL_IDENTITY)
     masked = pseudonymizer.pseudonymize(original, st)
     assert "priya@acme.io" not in masked
     assert "415-555-0199" not in masked
@@ -268,14 +272,14 @@ def test_pseudonymize_roundtrip():
 def test_literal_scrub_owner_phone_and_contacts():
     from backend.masking import pseudonymizer
     ident = pseudonymizer.UserIdentity(
-        "Morgan", "Rivers", ["Daniel"], ["danielmorganrivers@gmail.com"],
+        OTHER_FIRST, OTHER_LAST, OTHER_ALIASES, [OTHER_EMAIL],
         phones=["+1 (415) 555-0142"], contacts=["Priya Sharma", "Bob"],
     )
     st = pseudonymizer.new_state(ident)
-    text = ("Morgan here. Cell 415.555.0142 or +14155550142. "
+    text = (f"{OTHER_FIRST} here. Cell 415.555.0142 or +14155550142. "
             "Ping priya sharma and Bob. Ref number 12.")
     masked = pseudonymizer.pseudonymize(text, st)
-    for leak in ["415", "0142", "Priya", "Sharma", "Morgan", "Rivers"]:
+    for leak in ["415", "0142", "Priya", "Sharma", OTHER_FIRST, OTHER_LAST]:
         assert leak not in masked, leak
     assert masked.count("[USER_PHONE]") == 2
     assert "Ref number 12." in masked
@@ -292,17 +296,17 @@ def test_process_once_end_to_end(wire):
     store.save({"lastHistoryId": "100", "watchExpiration": None})
     fetch_payload = {
         "emails": [auto_email(), bot_email()],
-        "sent": [sent_email("Hi Dave, confirming Tuesday July 21 at 3pm. Morgan")],
+        "sent": [sent_email(f"Hi Dave, confirming Tuesday July 21 at 3pm. {OWNER_FIRST}")],
         "historyId": "200",
         "stale": False,
     }
     rec = wire.install(
         responses=[
             # bot request draft (no tools)
-            {"content": "Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\nMorgan"},
+            {"content": f"Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\n{OWNER_FIRST}"},
             # auto classify + draft
             {"content": decisions({"index": 0, "needs_reply": True, "reason": "Personal lunch request"})},
-            {"content": "Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\nMorgan"},
+            {"content": f"Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\n{OWNER_FIRST}"},
             # schedule extract
             {"content": json.dumps({"events": [
                 {"summary": "Meeting with Dave", "start": "2026-07-21T15:00:00",

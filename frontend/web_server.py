@@ -271,7 +271,7 @@ def _layout(title, body, active=None, user_email=None, refresh=None):
   <div id="titlebar">
     <div class="brand">
       <a href="/"><img class="mark" src="/static/mark.png" alt="" width="23" height="14"> Letterlock</a>
-      <span class="tagline">the most secure AI assistant for Gmail</span>
+      <span class="tagline">The most secure AI assistant for Gmail</span>
     </div>
   </div>
   <div id="navbar">{nav_html}</div>
@@ -279,7 +279,7 @@ def _layout(title, body, active=None, user_email=None, refresh=None):
 {body}
   </div>
   <div id="footer">
-    <span>&copy; 2026 Letterlock</span>
+    <span>&copy; 2026 Letterlock | Website hosted using a secure enclave | Open source code here | Code attestation here | Based in Berlin, Germany </span>
     <span class="footer-right">
       <span id="utc-clock"></span>
     </span>
@@ -327,24 +327,30 @@ store your email data.</p>
 
 <h2>Why doesn't Letterlock send emails?</h2>
 
-<p>The world doesn't need more AI slop. Letterlock provides useful information in a draft
-form, but doesn't send. By default, letterlock matches the length of your emails, and is
-configured to avoid overclaiming or hallucinating email content.</p>
+<p>The world doesn't need more AI slop. Letterlock never sends email, and never will. 
+Instead, Letterlock does 80% of the work so you can do the remaining 20%.
+The Letterlock assistant securely gathers relevant information from your email and provides a draft email, lets you know when you missed 
+an important email, makes sure all your appointments get on your calendar, and fixes grammar or spelling while fact-checking your email drafts as soon as you type @llfix in your email draft.
+Lastly, Letterlock matches the length of your emails, and is configured to avoid overclaiming or hallucinating email content. 
+If Letterlock doesn't know something, it won't write it.</p>
 
 <h2>Features</h2>
 
 <ul style="font-size:11px;line-height:1.9;padding-left:18px;">
   <li>Automatic draft creation: Letterlock reads the thread, searches your email history for context, and writes a reply in your voice</li>
   <li>Google Calendar integration: checks your availability, and creates events from your sent mail when auto-scheduling is enabled</li>
-  <li>Telegram notifications when a draft is ready</li>
+  <li>Telegram notifications when a draft is ready as well as the steps of the process</li>
   <li>Daily summary of your inbox and calendar when configured, skipping unimportant emails and highlighting urgent ones</li>
+  <li>Forward an email thread to [your email]+ll@gmail.com. A reply will be automatically drafted in the thread following your instructions</li>
 </ul>
 
 <div class="tee-box">
-<strong>What is a TEE?</strong> A Trusted Execution Environment is a locked compartment inside a
-processor chip. Code running inside cannot be read or modified by the host operating system,
-the cloud provider, or us. At boot, the enclave produces a signed attestation report containing
+A Trusted Execution Environment is a locked compartment inside a
+processor chip. Code or data inside cannot be seen or modified by the host operating system,
+the cloud provider.
+At boot, the enclave produces a signed attestation report containing
 a hash of the code it is running. Anyone can verify that hash against the published source code.
+Letterlock goes a step beyond: Even within the TEE, all data are encrypted using a separate signing server. Even processes within the enclave cannot see enclave data without permission from a separate, monitored signing server.
 </div>
 
 <hr>
@@ -369,18 +375,16 @@ summarises your inbox.</p>
 personally identifying information from your email before any text reaches the AI model.</p>
 
 <h2>How the security works</h2>
-
-<div class="tee-box">
-<strong>What is a TEE?</strong><br>
-A Trusted Execution Environment is a hardware-enforced region of a processor. Code running
+<h3>Attestation</h3>
+<p>As described on the <a href="/">home</a> page, a Trusted Execution Environment is a hardware-enforced region of a processor. Code running
 there cannot be read or modified by the operating system, the cloud provider, or the server
 operator. At boot it produces an attestation report: a signed statement of which code is
 running, chaining back to the chip manufacturer (Intel, for TDX). Compare that hash against
-our published source and you know what the server is running. If it doesn't match, the Key
-Management Service withholds the secrets and the server doesn't start.
-</div>
+our published source and you know what the server is running. If it doesn't match, the server doesn't start. </p>
 
-<h2>The masking pipeline</h2>
+<p></p>
+
+<h3>The masking pipeline</h3>
 
 <p>Before your email content leaves the enclave, a masking step replaces identifying
 information (your name, email addresses, phone numbers, and contact names from your OAuth
@@ -392,24 +396,39 @@ the draft is written to Gmail.</p>
 100%, but your own name and email addresses are matched literally rather than only by the
 NER model, so those are always caught.</p>
 
-<h2>Your OAuth token</h2>
 
-<p>Your Gmail refresh token grants read/write access to your mailbox, so it is kept under two
-locks rather than one. The enclave seals it with a key the KMS releases only after the
-attestation report passes verification, and a separate co-signer service wraps that sealed
-blob again under a key the enclave never holds. Neither half is enough on its own: the
+<h3>Secure inference</h3>
+Letterlock uses Near.ai attested inference.
+Each update of the Near AI codebase is given a security audit to ensure your emails cannot be
+ read by the inference provider. From then on, Near AI's attested inference cluser is used to 
+ securely call open-weight models. Near AI has been verified by Letterlock to never store or 
+ transmit AI prompts to external providers.
+
+<h3>All user data is doubly encrypted</h3>
+
+<p>Letterlock uses a signing server in combination with a secure enclave, so accessing your 
+configurations within letterlock and OAuth token for Gmail read+write access would have to be
+compromised simultaneously. </p>
+<p> The enclave seals user configuration data only after the
+attestation report passes verification. Neither half is enough on its own: the
 co-signer has never seen your token and cannot read what it unwraps, and the enclave cannot
 get past the outer layer. Neither key is on the host filesystem.</p>
 
-<p>You can revoke it at any time from your
-<a href="https://myaccount.google.com/permissions">Google account permissions</a> page, and
-deleting your Letterlock account removes all encrypted data.</p>
+<h3> Agent sandbox </h3>
+<p>Agents within letterlock are kept on a short leash. They cannot access the open internet, and cannot execute code.
+They can't even write emails with HTML. They have no calendar write tool at all, and the one code path that does
+write an event writes to your own calendar and to no other, after reading that calendar's sharing settings and
+refusing if anyone else can read it.
+Letterlock takes no chances with AI and treats them as untrusted outsiders.</p>
 
 <h2>Open source</h2>
+<p>All code for Letterlock is public, including the TEE and the signing server. That includes the server for this website, which is itself run on a TEE.
+A reproducible Nix build means anyone can rebuild from source and derive the same image hash that the attestation report contains.</p>
 
-<p>All code is public: the masking logic, the draft pipeline, the attestation setup, the
-billing integration, and this web server. A reproducible Nix build means anyone can rebuild
-from source and derive the same image hash that the attestation report contains.</p>
+<h2>Based in Germany</h2>
+<p>Letterlock is an EU entity based in Germany and enthusiastically complies with GDPR regulations.
+The CLOUD act therefore cannot compel Letterlock to release user data. Even if it did, Letterlock
+could not provide the US government a single signed-up email address or contents of any email or configuration data.</p>
 
 <hr>
 
@@ -428,32 +447,29 @@ _MASKING_ANSWER = """
 <p>
 Before any message leaves the enclave, Letterlock scans it for personally identifying
 information (provider API keys, names, email addresses, phone numbers, government IDs, etc);
-and replaces each value with a session token. Only the tokenised text reaches the AI model.
-When the response comes back, the tokens are swapped back to your real values before you see
+and replaces each value with a numbered placeholder. Only the placeholder text reaches the AI model.
+When the response comes back, the placeholders are swapped back to your real values before you see
 anything. The AI provider never sees your actual data.
 </p>
 
 <pre>  Your mailbox              Letterlock enclave      AI model
   ────────────              ──────────────────      ────────
   "Hi, I'm Alice      ──&#9658;  scan &amp; replace    ──&#9658;  "Hi, I'm [NAME_1].
-   Johnson. SSN:            PII with tokens          SSN [SSN_1]."
-   123-45-6789."            store in vault
+   Johnson. SSN:            PII with placeholder       SSN [SSN_1]."
+   123-45-6789."            text
                                                         <svg width="14" height="28" viewBox="0 0 20 40">
                                                           <line x1="10" y1="0" x2="10" y2="25" stroke="currentColor" />
                                                           <polygon points="5,25 15,25 10,35" fill="currentColor" />
                                                         </svg>
-  "OK Alice Johnson,  &#9664;──  restore tokens    &#9664;──    "OK [NAME_1],
-   your SSN                from vault                your SSN
+  "OK Alice Johnson,  &#9664;──  restore PII    &#9664;──    "OK [NAME_1],
+   your SSN                                          your SSN
    123-45-6789 is                                    [SSN_1] is
    on file."                                         on file."</pre>
 
 <p>
-The vault is seeded from your Google profile and grows as new personally identifying
-information is detected during a draft; a named-entity recogniser catches what the seeded
-list misses. Values that match common patterns (email addresses, phone numbers, card
-numbers) but are not already in the vault are given a fresh numbered token of their type, so
-they are never sent in the clear. See <a href="/about">About</a> for what recall the open
-test corpus measures.
+Values that match common patterns (email addresses, phone numbers, card
+numbers) are given placeholder text of their type, so
+they are never sent in the clear.
 </p>
 <p>Edit the sample message below to see redaction live:</p>
 
@@ -476,8 +492,6 @@ test corpus measures.
     <div class="pii-output" id="pii-restored"></div>
   </div>
 </div>
-
-<p>The vault is built fresh for each draft and never persisted beyond it.</p>
 
 <script>
 (function(){
@@ -594,8 +608,8 @@ def _page_faq():
 <details>
 <summary>What is a TEE and why does it matter for email privacy?</summary>
 <div class="answer">
-<p>A TEE (Trusted Execution Environment) is a locked compartment inside the processor that the cloud
-provider with our servers, the inference provider for the AI agent, and Letterlock itself cannot read into.
+<p>A TEE (Trusted Execution Environment) is a locked compartment inside of a web server that no-one can read data or monitor processes on. 
+Email is the property of you and your sender, not an AI company. The TEE provides a verifiable guarantee that no-one else will read your data. 
 </details>
 
 <details>
@@ -613,9 +627,9 @@ provider with our servers, the inference provider for the AI agent, and Letterlo
 <ul>{_model_list()}</ul>
 <p>The confidential options run on NEAR AI, on Intel TDX machines with NVIDIA
 confidential computing. Before each session this server fetches that enclave's
-attestation, checks the hardware signature back to Intel, and compares the
-measurement against a list of images we have reviewed and committed to our
-repository. A machine that does not match is refused rather than used.</p>
+attestation, checks the hardware signature back to Intel, and ensures the
+measurement is one of a list of images Letterlock reviewed and committed to our
+repository.</p>
 </div>
 </details>
 
@@ -763,7 +777,7 @@ approximate and may change.
 </table>
 
 <p style="font-size:11px;color:#555;">
-The key distinction: Letterlock's security is verifiable. The attestation report shows that
+The key distinction: Letterlock's security is verifiable and uses attested AI providers, carefully checking that they don't store and cannot look at your data. The attestation report shows that
 the server runs the published open-source code, which can be verified. Other tools require you to trust they are telling you the truth.
 </p>
 
@@ -772,7 +786,7 @@ the server runs the published open-source code, which can be verified. Other too
 <ul style="font-size:11px;line-height:1.9;padding-left:18px;">
   <li>Automatic draft creation with email history search for context</li>
   <li>Google Calendar read, plus event creation from your sent mail when enabled</li>
-  <li>All open-source EU-hosted models (Llama 3, Mistral, DeepSeek R1, Qwen)</li>
+  <li>Verifiably secure hosted models (Llama 3, Mistral, DeepSeek R1, Qwen)</li>
   <li>An optional per-account voice profile, so drafts sound are written with your writing style</li>
   <li>Optional Telegram notifications</li>
   <li>Optional daily inbox summary</li>
@@ -801,10 +815,6 @@ def _page_contact(msg=None, error=None):
     <div class="form-row">
       <label for="name">Name</label>
       <input type="text" id="name" name="name" maxlength="100">
-    </div>
-    <div class="form-row">
-      <label for="email">Email</label>
-      <input type="email" id="email" name="email" maxlength="200">
     </div>
     <div class="form-row">
       <label for="message">Message *</label>
@@ -905,8 +915,7 @@ def _page_voice(acct, error=None, notice=None):
 <div class="info-box">
   <p><b>Reading your sent mail and writing your profile.</b></p>
   <p>
-    This takes a minute or two: we sample recent emails you have written, then
-    build the profile from them. The page refreshes itself.
+    This takes a minute or two, as recent emails you have written are sampled to build your unique writing voice profile. The page refreshes itself.
   </p>
 </div>
 <hr>
@@ -1212,6 +1221,15 @@ def _page_settings(acct, saved=False, link_code=None, error=None, notice=None,
       <span style="font-size:10px;color:#666;">
         When an email you send commits to a date and time, add it to your primary
         calendar. Off by default. No invitations are sent.
+      </span>
+    </div>
+    <div class="form-row">
+      <label for="community_calendar">Second calendar in your daily summary</label>
+      <input type="text" id="community_calendar" name="community_calendar"
+             value="{_h(acct.community_calendar or '')}" maxlength="160">
+      <span style="font-size:10px;color:#666;">
+        Optional. The id of another calendar you are subscribed to, in the shape
+        of an address, read alongside your own. Leave empty for none.
       </span>
     </div>
     <div class="form-row">
@@ -1677,10 +1695,19 @@ class Handler(BaseHTTPRequestHandler):
                     acct, settings_error=f"{provider} is not an available inference provider."))
             analyzer = (bool(form.get("pii_analyzer"))
                         if pseudonymizer.analyzer_available() else None)
+            # "" is a real value here (clear the calendar), so it is checked for
+            # shape only when it is not empty. account.set_settings asserts the
+            # same rule, which is what makes this a message rather than a 500.
+            calendar = form.get("community_calendar", "").strip().lower()
+            if calendar and not account.CALENDAR_ID_RE.fullmatch(calendar):
+                return self._send(200, _page_settings(acct, settings_error=(
+                    f"{calendar} is not a calendar id; it looks like an address, "
+                    "for example something@group.calendar.google.com.")))
             acct = account.set_settings(
                 acct.id, timezone=tz, auto_schedule=bool(form.get("auto_schedule")),
                 inference_provider=provider, pii_analyzer=analyzer,
                 ban_dashes=bool(form.get("ban_dashes")),
+                community_calendar=calendar,
             )
             return self._send(200, _page_settings(acct, saved=True))
 

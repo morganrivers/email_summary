@@ -14,25 +14,74 @@ web UI collapses the quoted text the way a native reply does.
 from __future__ import annotations
 
 import base64
+import html
 import re
 import secrets
 
 from backend.integrations.gmail_gcal.gmail_api import gmail
 
 NON_ASCII = re.compile(r"[^\x20-\x7e]")
+CRLF = re.compile(r"[\r\n]")
+ADDRESS = re.compile(r"^\s*(?P<phrase>.*?)\s*<(?P<addr>[^<>]*)>\s*$")
+MESSAGE_ID = re.compile(r"<[^<>\s]{1,512}>")
+
+
+def strip_folding(value):
+    """Collapse CR and LF in a value destined for a header.
+
+    Every value that reaches a header here came out of Gmail's parser already
+    unfolded, so a line break in one is not a legal fold: it is a sender's
+    attempt to end our header and start their own. Nothing downstream needs to
+    tell the two apart, so both become a space."""
+    return CRLF.sub(" ", value or "")
 
 
 def encode_header(value):
-    """RFC 2047 encoded-word for a header that is not plain ASCII."""
-    value = value or ""
+    """RFC 2047 encoded-word for a header phrase that is not plain ASCII."""
+    value = strip_folding(value)
     if NON_ASCII.search(value):
         encoded = base64.b64encode(value.encode()).decode()
-        return f"=?UTF-8?B?{encoded}?="
+        value = f"=?UTF-8?B?{encoded}?="
+    assert not CRLF.search(value), "a header value kept a line break"
     return value
 
 
+def encode_address(value):
+    """An address header. RFC 2047 encoded-words are legal in the display
+    phrase and nowhere else, so encoding `Zoe Muller <zoe@x.com>` whole
+    produces a header no mail server will route. The two halves are encoded
+    apart, and a value with no angle brackets is a bare addr-spec."""
+    value = strip_folding(value)
+    match = ADDRESS.match(value)
+    if not match:
+        return encode_header(value)
+    addr = match.group("addr").strip()
+    assert not NON_ASCII.search(addr), f"non-ASCII address: {addr!r}"
+    phrase = match.group("phrase").strip().strip('"')
+    return f"{encode_header(phrase)} <{addr}>" if phrase else f"<{addr}>"
+
+
+def message_ids(value):
+    """The msg-id tokens of In-Reply-To / References, and nothing else.
+
+    These are copied from the incoming mail's own headers, so their content is
+    chosen by whoever sent it. Keeping only well-formed <...> tokens is what
+    stops one from carrying a line break and appending a header of its own,
+    a Bcc for instance, to a draft the account owner is about to send."""
+    return " ".join(MESSAGE_ID.findall(value or ""))
+
+
 def escape_html(text):
-    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    """Escape text for HTML, quotes included.
+
+    Everything this escapes today lands in element content, where a quote is
+    already inert, so `quote=True` buys nothing at present. It is what keeps
+    the function safe for the caller who has not been written yet: put one of
+    these values in an attribute (a `title`, an `href`) with only `&<>`
+    escaped and the value closes the attribute and opens another. The escaping
+    is stdlib rather than a chain of `.replace()` calls so the ordering `&`
+    depends on is not ours to get wrong."""
+    return html.escape(text or "", quote=True)
 
 
 def plain_to_html(text):
@@ -91,15 +140,18 @@ def build_rfc822(payload, boundary=None):
     output; in use it is random per message, as a MIME boundary must be."""
     boundary = boundary or "BOUND_" + secrets.token_hex(12)
     headers = [
-        f"To: {encode_header(payload['to'])}",
+        f"To: {encode_address(payload['to'])}",
         f"Subject: {encode_header(payload['subject'])}",
         "MIME-Version: 1.0",
         f'Content-Type: multipart/alternative; boundary="{boundary}"',
     ]
-    if payload.get("inReplyTo"):
-        headers.append(f"In-Reply-To: {payload['inReplyTo']}")
-    if payload.get("references"):
-        headers.append(f"References: {payload['references']}")
+    in_reply_to = message_ids(payload.get("inReplyTo"))
+    if in_reply_to:
+        headers.append(f"In-Reply-To: {in_reply_to}")
+    references = message_ids(payload.get("references"))
+    if references:
+        headers.append(f"References: {references}")
+    assert not any(CRLF.search(h) for h in headers), "a header carried a line break"
 
     plain_part = (
         f"--{boundary}\r\n"

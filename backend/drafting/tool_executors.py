@@ -77,7 +77,7 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "search_emails",
             "description": (
-                "Full-text search across Morgan's Gmail. Returns matching messages with from, "
+                "Full-text search across the account owner's Gmail. Returns matching messages with from, "
                 "subject, date, snippet, and body (up to 2000 chars). Useful for finding past "
                 "correspondence with a sender, prior discussion of a topic, or to verify what "
                 "was previously promised. Use Gmail search syntax: from:alice@example.com, "
@@ -105,8 +105,9 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "get_calendar_events",
             "description": (
-                "List calendar events between two ISO 8601 timestamps. Use to check Morgan's "
-                "availability before proposing meeting times, or to see what is on his schedule. "
+                "List calendar events between two ISO 8601 timestamps. Use to check the account "
+                "owner's availability before proposing meeting times, or to see what is on their "
+                "schedule. "
                 "Returns event summary, start/end times, location, attendees, description."
             ),
             "parameters": {

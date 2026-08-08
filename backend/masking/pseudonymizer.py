@@ -10,6 +10,14 @@ The mapping is the sensitive artifact: it lives in memory for the
 duration of a single draft() call and is discarded after restore. It is
 never persisted and never sent to the model.
 
+No identity is defined here. Whose name, addresses, phone numbers and
+contacts get the fixed [USER_*] tags is per account, and the only source
+of that is the account store (account._account_from_entry builds the
+UserIdentity from the manifest entry Google's consent wrote). This module
+holds the machinery and none of the data, so nothing in the repository
+carries one person's identifiers and no caller can mask one user's mail
+under another user's identity by omitting an argument.
+
 Flip PSEUDONYMIZE_ENABLED to turn the whole layer on. When off, every
 function here is a passthrough and Presidio is never imported.
 """
@@ -22,15 +30,6 @@ from collections import defaultdict
 PSEUDONYMIZE_ENABLED = True
 
 SPACY_MODEL = "en_core_web_lg"
-
-USER_FIRST = "Morgan"
-USER_LAST = "Rivers"
-USER_FIRST_ALIASES = ["Daniel"]
-USER_EMAILS = ["danielmorganrivers@gmail.com"]
-# Placeholders the multi-tenant account store (B1) fills from the OAuth
-# profile + address book. Empty in single-tenant so DEFAULT_IDENTITY is unchanged.
-USER_PHONES = []
-USER_CONTACTS = []
 
 USER_FIRST_TAG = "[USER_FIRST]"
 USER_LAST_TAG = "[USER_LAST]"
@@ -133,10 +132,6 @@ class UserIdentity:
             mapping[USER_PHONE_TAG] = self._phone_digits[0]
         return mapping
 
-
-DEFAULT_IDENTITY = UserIdentity(
-    USER_FIRST, USER_LAST, USER_FIRST_ALIASES, USER_EMAILS, USER_PHONES, USER_CONTACTS
-)
 
 # Presidio-detected PII (spaCy NER + built-in recognizers).
 NER_ENTITIES = ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD", "IBAN_CODE"]
@@ -279,17 +274,22 @@ def _pseudonymize_patterns(text, state):
     return _PHONE_RUN.sub(phone, text)
 
 
-def new_state(identity=None):
+def new_state(identity):
     """Fresh shared mapping for one draft, or None when disabled.
 
-    identity is the account owner whose own name/email get fixed tags; defaults
-    to DEFAULT_IDENTITY so single-tenant callers need pass nothing. It also
-    carries whether this account runs the analyzer; an account that asked for it
-    on a box without it installed gets the regex-only path rather than a crash,
-    which is why the flag is resolved here and not at the call site."""
+    identity is the account owner whose own name, addresses and phone numbers
+    get fixed tags, and it is required: there is no stand-in. A default would
+    be one person's identifiers applied to everyone's mail, which masks the
+    wrong name out of the prompt and restores that name back into a draft the
+    model wrote for someone else.
+
+    It also carries whether this account runs the analyzer; an account that
+    asked for it on a box without it installed gets the regex-only path rather
+    than a crash, which is why the flag is resolved here and not at the call
+    site."""
+    assert identity is not None, "masking needs the identity of the account it masks for"
     if not PSEUDONYMIZE_ENABLED:
         return None
-    identity = identity or DEFAULT_IDENTITY
     return {
         "account_id": identity.account_id,
         "identity": identity,

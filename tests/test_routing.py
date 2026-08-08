@@ -8,6 +8,8 @@ spool coalesces, and that unparseable pushes fall back to a full sweep.
 import base64
 import json
 
+from identity_fixture import OWNER_EMAIL
+
 from backend.accounts import account
 from backend.daemons import wake_queue
 from backend.daemons import gmail_hook_server as hook
@@ -54,7 +56,7 @@ def test_missing_manifest_refuses_rather_than_inventing_an_account(tmp_path, mon
     the owner from routing without a word."""
     monkeypatch.setattr(account, "MANIFEST", tmp_path / "does_not_exist.json")
     try:
-        account.get_account("danielmorganrivers@gmail.com")
+        account.get_account(OWNER_EMAIL)
     except AssertionError as err:
         assert "seed_owner" in str(err)
     else:
@@ -72,14 +74,14 @@ def test_seeded_owner_is_row_one_and_survives_a_later_signup(tmp_path, monkeypat
     monkeypatch.setattr(account, "MANIFEST", tmp_path / "accounts.json")
 
     owner = seed_owner.seed()
-    assert owner.id == "danielmorganrivers@gmail.com"
+    assert owner.id == OWNER_EMAIL
     assert owner.plan_status == "active"
-    assert account.get_account("danielmorganrivers@gmail.com").id == owner.id
+    assert account.get_account(OWNER_EMAIL).id == owner.id
 
     account.register_account("stranger@x.com", "Stranger", "Danger",
                              telegram_chat_id="999")
     assert [a.id for a in account.load_accounts()] == [owner.id]      # signup is inactive
-    assert account.get_account("danielmorganrivers@gmail.com") is not None
+    assert account.get_account(OWNER_EMAIL) is not None
 
 
 def test_wake_queue_roundtrip_and_dedup(tmp_path, monkeypatch):

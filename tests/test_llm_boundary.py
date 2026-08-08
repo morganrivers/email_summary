@@ -6,39 +6,14 @@ The source is read as an AST, not as text: prose about the responses API (there
 is some, in llm_client's own docstring) is not a use of it.
 """
 
-import ast
-from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
 
+from harness import NEUTRAL_IDENTITY, attribute_chains, python_sources, relative
+
 from backend.integrations import llm_client
 from backend.integrations import telegram
-
-REPO_ROOT = Path(__file__).parent.parent
-SEARCHED = ("backend", "frontend", "cosigner", "tools")
-
-
-def python_sources():
-    for top in SEARCHED:
-        for path in sorted((REPO_ROOT / top).rglob("*.py")):
-            if "__pycache__" not in path.parts:
-                yield path
-
-
-def attribute_chains(path):
-    """Every dotted attribute access in a file, as `a.b.c` strings."""
-    for node in ast.walk(ast.parse(path.read_text())):
-        if not isinstance(node, ast.Attribute):
-            continue
-        parts = [node.attr]
-        current = node.value
-        while isinstance(current, ast.Attribute):
-            parts.append(current.attr)
-            current = current.value
-        if isinstance(current, ast.Name):
-            parts.append(current.id)
-        yield ".".join(reversed(parts))
 
 
 def test_nothing_uses_the_responses_api():
@@ -46,7 +21,7 @@ def test_nothing_uses_the_responses_api():
     that chose a confidential provider chose the opposite of that, so the
     endpoint is banned outright rather than avoided by habit."""
     offenders = sorted({
-        str(path.relative_to(REPO_ROOT)) for path in python_sources()
+        relative(path) for path in python_sources()
         for chain in attribute_chains(path)
         if chain.endswith("responses.create") or chain.endswith("responses.parse")
     })
@@ -58,7 +33,7 @@ def test_nothing_uses_the_responses_api():
 
 def test_chat_completions_is_called_in_exactly_one_place():
     hits = sorted({
-        str(path.relative_to(REPO_ROOT)) for path in python_sources()
+        relative(path) for path in python_sources()
         for chain in attribute_chains(path)
         if chain.endswith("chat.completions.create")
     })
@@ -101,8 +76,13 @@ def refusing(monkeypatch):
 
 
 def call(client):
+    """Exercised with masking on, the way every production caller runs it.
+
+    complete() refuses to mask without an identity, and passing
+    pseudonymize=False here to dodge that would test a call shape nothing
+    uses."""
     return llm_client.complete(client, [{"role": "user", "content": "hi"}],
-                               max_tokens=10)
+                               max_tokens=10, identity=NEUTRAL_IDENTITY)
 
 
 @pytest.mark.parametrize("status", llm_client.PROVISIONING_STATUSES)

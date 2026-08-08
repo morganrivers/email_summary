@@ -291,10 +291,16 @@ def _restore_response(resp, state):
 def complete(client, messages, max_tokens, pseudonymize=True, identity=None, **kwargs):
     """Single LLM boundary. By default, PII is masked out of every message
     before the call (so external traces carry only tags) and restored in the
-    response afterward. identity is the account owner whose own name/email get
-    fixed tags; defaults to the single-tenant identity. Multi-turn callers that
-    manage their own pseudonymizer state (agentic_drafter) pass pseudonymize=False."""
+    response afterward. identity is the account owner whose own name and
+    addresses get fixed tags, and masking cannot proceed without it: there is no
+    default identity to fall back to, because falling back would mask some other
+    person's name out of this user's mail. Multi-turn callers that manage their
+    own pseudonymizer state (agentic_drafter) pass pseudonymize=False."""
     assert messages, "messages must be non-empty"
+    assert identity is not None or not pseudonymize, (
+        "complete() needs the account's identity to mask for; pass identity= or "
+        "pseudonymize=False if the caller already holds its own masking state"
+    )
     provider = getattr(client, "_ll_provider", None)
     assert provider is not None, (
         "client must come from make_client(); a bare OpenAI() carries no provider "

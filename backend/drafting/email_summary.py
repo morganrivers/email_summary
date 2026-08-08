@@ -21,7 +21,7 @@ from backend import secrets
 from backend.accounts import account as account_mod
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal import mailbox
-from backend.drafting.agentic_drafter import untrusted
+from backend.drafting.agentic_drafter import new_fence
 from backend.drafting.draft_replies import gmail_thread_link
 from backend.integrations.telegram import send_telegram, notify_error
 
@@ -71,8 +71,13 @@ def summarise(account, emails, events, community_events) -> str:
     prompt = _prompt_text()
     client = llm_client.make_client(account)
 
+    # The rule goes in the system message beside the operator's own prompt. The
+    # mail was fenced here from the start but the rule never was, because the
+    # system prompt is a file an operator edits: stating it here is what makes
+    # the fence mean something without asking that file to carry it.
+    fence = new_fence()
     email_text = "\n\n".join(
-        untrusted(
+        fence.wrap(
             f"From: {e['from']}\nSubject: {e['subject']}\n"
             f"Link: {gmail_thread_link(e['threadId'])}\n"
             f"{e['body']}"
@@ -101,7 +106,7 @@ def summarise(account, emails, events, community_events) -> str:
     resp = llm_client.complete(
         client,
         messages=[
-            {"role": "system", "content": prompt},
+            {"role": "system", "content": f"{prompt}\n\n{fence.rule}"},
             {"role": "user", "content": user_content},
         ],
         max_tokens=16000,

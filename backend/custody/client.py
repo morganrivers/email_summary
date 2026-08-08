@@ -1,12 +1,27 @@
 """The enclave's only channel to the co-signer. Sole network boundary of Track I.
 
 The co-signer is a second box under a different operator. It holds the outer
-wrapping key and the DPoP private key, stores nothing, and has never seen a
-refresh token: everything crossing this wire is either ciphertext it cannot open
-(`inner`), ciphertext it can only re-wrap (`outer`), or a signature over an HTTP
-request description (`htm`, `htu`, `iat`, `jti`, `nonce`). Compromising it
-yields a wrapping key with nothing to unwrap and a signing key that signs no
-secrets.
+wrapping key and the DPoP private key, stores no ciphertext, and has never seen
+a refresh token or a data key: everything crossing this wire is either
+ciphertext it cannot open (`inner`), ciphertext it can only re-wrap (`outer`),
+or a signature over an HTTP request description (`htm`, `htu`, `iat`, `jti`,
+`nonce`).
+
+What compromising it yields, stated exactly, because the short version of this
+sentence used to omit the third item:
+
+  * a wrapping key with nothing to unwrap,
+  * a signing key that signs no secrets,
+  * and its audit log -- how many accounts exist, and when each one's mail was
+    processed, for as long as `cosigner/retention.py` keeps the rows.
+
+The third is why the identifier on this wire is an opaque handle rather than an
+address (`backend.accounts.account.new_handle`). The activity timeline survives;
+what it is attached to is a random 128-bit value that this box cannot turn back
+into a person, and the mapping exists in one file on the enclave. That is a real
+reduction and not an elimination: an attacker who holds the co-signer's log and
+the enclave's manifest has both halves, but that is two boxes, which is the
+whole design.
 
 The wire contract is not written down here. It lives in `cosigner/protocol.py`,
 next to the server that implements it, and this module imports paths, field
@@ -227,29 +242,31 @@ def sign_dpop(htm, htu, nonce=None):
     return proof
 
 
-def wrap(uid, inner):
-    """Onboarding only: put the co-signer's layer around a freshly sealed token.
-    The co-signer refuses a second wrap for a uid it has already wrapped, so a
-    replay here surfaces as a failed provision rather than a silent overwrite."""
-    assert uid and inner, "wrap needs a uid and an inner ciphertext"
+def wrap(handle, inner):
+    """Onboarding only: put the co-signer's layer around a freshly sealed data
+    key. The co-signer refuses a second wrap for a handle it has already
+    wrapped, so a replay here surfaces as a failed provision rather than a
+    silent overwrite. A re-consent does not come through here at all: the
+    account's data key already exists and is reused."""
+    assert handle and inner, "wrap needs a handle and an inner ciphertext"
     outer = _request(
         "POST", protocol.WRAP_PATH,
-        {protocol.F_UID: uid, protocol.F_INNER: protocol.b64(inner)},
+        {protocol.F_UID: handle, protocol.F_INNER: protocol.b64(inner)},
     ).get(protocol.F_OUTER)
     assert outer, "co-signer returned an empty outer ciphertext"
     return protocol.unb64(outer)
 
 
-def unwrap_and_sign(uid, outer, htm, htu, nonce=None):
+def unwrap_and_sign(handle, outer, htm, htu, nonce=None):
     """One refresh: strip the outer layer and sign the proof that goes with it.
 
     Returns (inner, proof). `inner` is still ciphertext -- the co-signer cannot
     open it and neither can anyone reading this wire. Only the enclave's
-    wrapping.open_inner() turns it into a token."""
-    assert uid and outer, "unwrap_and_sign needs a uid and an outer ciphertext"
+    wrapping.open_dek() turns it into a key."""
+    assert handle and outer, "unwrap_and_sign needs a handle and an outer ciphertext"
     assert htm and htu, "unwrap_and_sign needs an HTTP method and URI"
     body = {
-        protocol.F_UID: uid, protocol.F_OUTER: protocol.b64(outer),
+        protocol.F_UID: handle, protocol.F_OUTER: protocol.b64(outer),
         protocol.F_HTM: htm, protocol.F_HTU: htu,
     }
     if nonce:
@@ -261,6 +278,66 @@ def unwrap_and_sign(uid, outer, htm, htu, nonce=None):
         f"inner={bool(inner)} proof={bool(proof)}"
     )
     return protocol.unb64(inner), proof
+
+
+def unwrap(handle, outer):
+    """Release an account's data key with no proof beside it, for reading the
+    documents that account owns.
+
+    Separate from `unwrap_and_sign` because a proof is a capability: minting one
+    to render a settings page would hand the enclave a signature it has no
+    request to attach it to, and would write a row on the co-signer claiming a
+    mail refresh that never happened."""
+    assert handle and outer, "unwrap needs a handle and an outer ciphertext"
+    inner = _request(
+        "POST", protocol.UNWRAP_PATH,
+        {protocol.F_UID: handle, protocol.F_OUTER: protocol.b64(outer)},
+    ).get(protocol.F_INNER)
+    assert inner, "co-signer answered /unwrap with no inner ciphertext"
+    return protocol.unb64(inner)
+
+
+def rewrap(handle, outer):
+    """Move one record onto the co-signer's current outer key version.
+
+    Nothing is released: ciphertext in, ciphertext out. The enclave never learns
+    which version it landed on, which is correct -- the outer version is the
+    co-signer's to know, and the record that comes back opens under whatever it
+    chose."""
+    assert handle and outer, "rewrap needs a handle and an outer ciphertext"
+    rewrapped = _request(
+        "POST", protocol.REWRAP_PATH,
+        {protocol.F_UID: handle, protocol.F_OUTER: protocol.b64(outer)},
+    ).get(protocol.F_OUTER)
+    assert rewrapped, "co-signer answered /rewrap with no outer ciphertext"
+    return protocol.unb64(rewrapped)
+
+
+def unwrap(handle, outer):
+    """An account's data key released without a proof, for reading the documents
+    that account owns. Same refusals, same log, its own ceiling; the proof is
+    what is missing, and a capability nobody needs is one not to mint."""
+    assert handle and outer, "unwrap needs a handle and an outer ciphertext"
+    inner = _request(
+        "POST", protocol.UNWRAP_PATH,
+        {protocol.F_UID: handle, protocol.F_OUTER: protocol.b64(outer)},
+    ).get(protocol.F_INNER)
+    assert inner, "co-signer returned an empty inner ciphertext"
+    return protocol.unb64(inner)
+
+
+def rewrap(handle, outer):
+    """One record moved onto the co-signer's current outer key version. Returns
+    the new `outer`. Nothing is opened on this box: the enclave hands over
+    ciphertext and gets ciphertext back, which is what makes rotating the
+    operator's key cost no access to anyone's data."""
+    assert handle and outer, "rewrap needs a handle and an outer ciphertext"
+    fresh = _request(
+        "POST", protocol.REWRAP_PATH,
+        {protocol.F_UID: handle, protocol.F_OUTER: protocol.b64(outer)},
+    ).get(protocol.F_OUTER)
+    assert fresh, "co-signer returned an empty outer ciphertext"
+    return protocol.unb64(fresh)
 
 
 def reset_cache():

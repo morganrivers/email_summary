@@ -21,6 +21,7 @@ Store schema (database/accounts.json), one object per user:
       "telegram": {"chat_id": "...", "token": "<optional; shared bot otherwise>"},
       "timezone": "Europe/Berlin",
       "auto_schedule": false,
+      "community_calendar": "<optional; a second calendar id read into the summary>",
       "inference_provider": "<optional; llm_client provider name, default deepseek>",
       "pii_analyzer": true,
       "ban_dashes": true,
@@ -49,11 +50,13 @@ its own.
 
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
 from backend import audit
 from backend import paths
+from backend import secrets
 from backend.integrations import llm_client
 from backend.integrations.telegram import TelegramTarget, bot_token, operator_target
 from backend.masking import pseudonymizer
@@ -63,6 +66,39 @@ ACCOUNTS_DIR = paths.DATABASE_DIR
 MANIFEST = ACCOUNTS_DIR / "accounts.json"
 
 DEFAULT_TIMEZONE = "UTC"
+
+# What a Google calendar id looks like: an address, which is what both a shared
+# calendar and an imported one are named by. Checked rather than trusted because
+# the value is typed by a user and then handed to the Calendar API as a path
+# segment. Defined here rather than in calendar_api because that module imports
+# the Google client, which imports custody, which imports this one.
+CALENDAR_ID_RE = re.compile(r"[a-z0-9][a-z0-9._%+-]{0,127}@[a-z0-9.-]{1,128}\.[a-z]{2,24}")
+
+# The name an account is known by off this box.
+#
+# The co-signer needs a stable per-user value to enforce its per-uid ceiling and
+# its wrap-once rule. It does not need that value to be a name, and while it was
+# one, the co-signer's audit table was a copy of the customer list plus a
+# timestamped record of when each of those people's mail was processed -- on the
+# box whose stated premise is that compromising it yields nothing worth having.
+#
+# 128 bits from the system CSPRNG, stored rather than derived: there is no key
+# to lose and no function to invert, so the mapping back to a person exists in
+# exactly one file (this manifest) and nowhere else. Only the enclave can make
+# it, which is what `whois` is for.
+HANDLE_BYTES = 16
+HANDLE_RE = re.compile(r"\A[0-9a-f]{%d}\Z" % (HANDLE_BYTES * 2))
+
+# The box owner's own identity, for the one-time seed. It is configuration and
+# not a constant, because the operator of a given box is not a fact about this
+# software: hardcoding a name and an address here would ship one person's PII in
+# an open source repository and mask every other account's mail under it. Read
+# through secrets.get so a .env on the box is enough, the same route the
+# operator's Telegram chat takes.
+OWNER_EMAIL_ENV = "LETTERLOCK_OWNER_EMAIL"
+OWNER_FIRST_ENV = "LETTERLOCK_OWNER_FIRST"
+OWNER_LAST_ENV = "LETTERLOCK_OWNER_LAST"
+OWNER_FIRST_ALIASES_ENV = "LETTERLOCK_OWNER_FIRST_ALIASES"
 
 # Google caps an unverified OAuth app at 100 users, and every signup costs a
 # creds directory plus a Gmail watch registration. Signup is unauthenticated, so
@@ -78,12 +114,18 @@ class Account:
     def __init__(self, id, identity, state, telegram=None, token_file=None,
                  plan_status="active", polar_customer_id=None,
                  timezone=DEFAULT_TIMEZONE, auto_schedule=False, voice_file=None,
-                 inference_provider=None, pii_analyzer=True, ban_dashes=True):
+                 inference_provider=None, pii_analyzer=True, ban_dashes=True,
+                 handle=None, community_calendar=None):
         assert id and identity and state, "account requires id, identity, state"
         assert identity.account_id == id, (
             f"identity account_id {identity.account_id!r} does not match account id {id!r}"
         )
         self.id = id
+        # None for an account that predates the opaque handle, and for the
+        # unstored owner_account(). Custody refuses to work without one rather
+        # than falling back to the id, because a fallback would put an address
+        # back on the co-signer's wire the first time an entry was hand-edited.
+        self.handle = handle
         self.identity = identity
         self.state = state
         # None until the user links a chat. Notifications are skipped rather
@@ -98,6 +140,11 @@ class Account:
         self.polar_customer_id = polar_customer_id
         self.timezone = timezone or DEFAULT_TIMEZONE
         self.auto_schedule = auto_schedule
+        # A second calendar this user wants read into their daily summary, or
+        # None. Per account and never a box-wide default: a calendar id names
+        # one person's subscription, so a constant here would put the operator's
+        # own community events into every other user's summary.
+        self.community_calendar = community_calendar or None
         self.voice_file = voice_file
         # None means "whatever llm_client defaults to". Stored rather than
         # resolved here so the provider catalog stays in llm_client and an
@@ -129,6 +176,56 @@ class Account:
         return self.identity.emails[0] if self.identity.emails else self.id
 
 
+def new_handle():
+    """A fresh opaque account handle. Sole generator, so the length and the
+    alphabet are stated once and `HANDLE_RE` can be trusted to describe every
+    handle that exists."""
+    return os.urandom(HANDLE_BYTES).hex()
+
+
+def check_handle(handle):
+    """The handle, or an assertion. Everything that sends one to the co-signer
+    or derives a key from one calls this first: a caller that passed an account
+    id by mistake would otherwise put the address back on the wire and, worse,
+    derive a different key with it, so the mistake would surface as unopenable
+    records rather than as a leak anyone noticed."""
+    assert handle and HANDLE_RE.match(str(handle)), (
+        f"not an account handle: {handle!r}. An account registered before "
+        "handles existed has none; re-onboard it through /auth/callback."
+    )
+    return str(handle)
+
+
+def handle_for_email(email):
+    """This account's handle, or None when there is no such account and when
+    there is no manifest at all.
+
+    Tolerates a missing manifest because the first signup on a fresh box happens
+    before one exists, and `all_accounts()` deliberately refuses that case."""
+    data = _read_manifest()
+    if data is None:
+        return None
+    wanted = (email or "").strip().lower()
+    for entry in data["accounts"]:
+        if entry["id"].strip().lower() == wanted:
+            return entry.get("handle")
+    return None
+
+
+def email_for_handle(handle):
+    """The person behind an opaque handle, or None. The enclave is the only
+    place this mapping exists; `backend.accounts.whois` is the operator command
+    that reads it, and it is why making the co-signer's log opaque does not make
+    an incident unactionable."""
+    data = _read_manifest()
+    if data is None:
+        return None
+    for entry in data["accounts"]:
+        if entry.get("handle") == handle:
+            return entry["id"]
+    return None
+
+
 def _resolve(path):
     p = Path(path)
     return p if p.is_absolute() else (paths.REPO_ROOT / p)
@@ -143,6 +240,34 @@ def secure_dir(path):
     return path
 
 
+def check_id(account_id):
+    """Refuse an id that would name a path outside the account's own directory.
+
+    The id is a directory name under the store and it arrives from Google's
+    profile response, so a separator in one puts an account's files outside its
+    own home or reads another account's. Exported because custody, onboarding
+    and the document modules all build paths from it; one guard is one that
+    cannot be relaxed for a single caller."""
+    assert account_id and "/" not in account_id and "\\" not in account_id \
+        and ".." not in account_id, (
+        f"refusing to build an account path from {account_id!r}"
+    )
+    return account_id
+
+
+def account_dir(account_id):
+    """The one directory an account owns: its wrapped data key, its refresh
+    token, its documents, its state file.
+
+    Sole definition, so `_owned_paths` (and therefore `delete_account`) cannot
+    fall out of step with the modules that write into it."""
+    home = ACCOUNTS_DIR / check_id(account_id)
+    assert home.parent == ACCOUNTS_DIR, (
+        f"account id {account_id!r} does not name a directory in the store"
+    )
+    return home
+
+
 def _write_manifest(data):
     """Sole manifest write. 0600 for the same reason as secure_dir: the file
     carries per-user identity, chat ids, and billing links."""
@@ -153,10 +278,38 @@ def _write_manifest(data):
     tmp.replace(MANIFEST)
 
 
+def owner_identity():
+    """The masking identity of whoever runs this box, from the environment.
+
+    Nothing in the repository names a person, so this is the one place an
+    operator's own name and address enter the process, and it enters as
+    configuration they set. Aliases are comma separated: a Google profile often
+    carries a formal first name where the mail addresses a nickname, and the
+    masker has to tag both."""
+    email = (secrets.get(OWNER_EMAIL_ENV) or "").strip().lower()
+    first = (secrets.get(OWNER_FIRST_ENV) or "").strip()
+    last = (secrets.get(OWNER_LAST_ENV) or "").strip()
+    assert email and "@" in email, (
+        f"{OWNER_EMAIL_ENV} must be the owner's mailbox address; it is what the "
+        "seed registers and what masking tags as the account owner"
+    )
+    assert first and last, (
+        f"{OWNER_FIRST_ENV} and {OWNER_LAST_ENV} must be set; the masker tags the "
+        "owner's own name deterministically and cannot do it from an address"
+    )
+    aliases = [a.strip() for a in (secrets.get(OWNER_FIRST_ALIASES_ENV) or "").split(",")]
+    return pseudonymizer.UserIdentity(
+        first, last,
+        first_aliases=[a for a in aliases if a],
+        emails=[email],
+        account_id="default",
+    )
+
+
 def owner_account():
-    """The box owner's account built from module constants and the environment
-    rather than the manifest: DEFAULT_IDENTITY, the historical state.json, the
-    env Telegram target.
+    """The box owner's account built from the environment rather than the
+    manifest: owner_identity(), the historical state.json, the env Telegram
+    target.
 
     It carries no Gmail custody. The owner gets a token the same way everyone
     else does, by consenting through /auth/callback; there is no environment
@@ -174,13 +327,20 @@ def owner_account():
         "owner_account needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in the "
         "environment; those are the operator's own chat"
     )
+    # A fresh handle on every call, because this account is not in the manifest
+    # and there is nowhere for a stable one to come from. That is correct for
+    # both callers: the seed writes the one it is handed and the manifest owns it
+    # from then on, and the test harness never takes custody. An account whose
+    # handle changed between calls could not open its own records, which is why
+    # this is the only place one is minted outside register_account.
     return Account(
         id="default",
-        identity=pseudonymizer.DEFAULT_IDENTITY,
+        identity=owner_identity(),
         state=state.StateStore(state.DEFAULT_STATE_FILE),
         telegram=telegram,
         timezone=os.environ.get("LETTERLOCK_TIMEZONE", DEFAULT_TIMEZONE),
         auto_schedule=True,
+        handle=new_handle(),
     )
 
 
@@ -227,10 +387,12 @@ def _account_from_entry(entry):
         polar_customer_id=entry.get("polar_customer_id"),
         timezone=entry.get("timezone", DEFAULT_TIMEZONE),
         auto_schedule=bool(entry.get("auto_schedule", False)),
+        community_calendar=entry.get("community_calendar"),
         voice_file=_resolve(voice_file) if voice_file else None,
         inference_provider=entry.get("inference_provider"),
         pii_analyzer=pii_analyzer,
         ban_dashes=bool(entry.get("ban_dashes", True)),
+        handle=entry.get("handle"),
     )
 
 
@@ -259,6 +421,11 @@ def all_accounts():
     accounts = [_account_from_entry(e) for e in data["accounts"]]
     ids = [a.id for a in accounts]
     assert len(ids) == len(set(ids)), f"duplicate account ids in manifest: {ids}"
+    handles = [a.handle for a in accounts if a.handle]
+    assert len(handles) == len(set(handles)), (
+        "two accounts share an opaque handle, so one can open the other's "
+        "records and spend the other's co-signer budget"
+    )
     return accounts
 
 
@@ -316,7 +483,8 @@ def account_for_customer_id(customer_id):
 def register_account(email, first, last, *, token_file=None, first_aliases=(),
                      telegram_chat_id=None, telegram_token=None,
                      plan_status="inactive", state_file=None,
-                     timezone=None, auto_schedule=False, voice_file=None):
+                     timezone=None, auto_schedule=False, voice_file=None,
+                     handle=None):
     """Add (or update) a manifest entry for a freshly onboarded user and return
     the loaded Account. The sole writer that introduces users to the store,
     mirroring set_plan_status as the sole plan writer, so onboarding never
@@ -348,6 +516,10 @@ def register_account(email, first, last, *, token_file=None, first_aliases=(),
         telegram["token"] = telegram_token
     entry = {
         "id": email,
+        # Minted here when the caller has none. Onboarding passes the one it
+        # already looked up, because custody is taken before the entry is
+        # written and both halves have to name the same account.
+        "handle": check_handle(handle or new_handle()),
         "identity": {
             "first": first,
             "last": last,
@@ -373,10 +545,24 @@ def register_account(email, first, last, *, token_file=None, first_aliases=(),
     for i, existing in enumerate(accounts):
         if existing["id"].strip().lower() == email:
             # A returning user re-consenting must not lose what they configured.
+            # The handle least of all: every record this account owns is
+            # encrypted with it as the salt and the AAD, so a new one on a
+            # re-consent would leave the user's own data unreadable.
+            if existing.get("handle"):
+                entry["handle"] = check_handle(existing["handle"])
             entry["plan_status"] = existing.get("plan_status", plan_status)
             entry["telegram"] = {**existing.get("telegram", {}), **telegram}
             entry["timezone"] = existing.get("timezone", entry["timezone"])
             entry["auto_schedule"] = existing.get("auto_schedule", entry["auto_schedule"])
+            # The rest of what set_settings owns, carried by presence rather than
+            # by truthiness: a stored False is a choice the user made, and a
+            # truthiness test would silently reset it to the default on the next
+            # consent. A re-consent is a Google round trip, not a preferences
+            # reset.
+            for setting in ("inference_provider", "pii_analyzer", "ban_dashes",
+                            "community_calendar"):
+                if setting in existing:
+                    entry[setting] = existing[setting]
             # token_file is carried for the seed's sake: seeding the owner after
             # they have already signed in must not drop the custody record the
             # sign-in wrote, since nothing outside a consent can recreate it.
@@ -495,9 +681,14 @@ def set_voice(account_id, voice_file=None, clear=False):
 
 
 def set_settings(account_id, timezone=None, auto_schedule=None,
-                 inference_provider=None, pii_analyzer=None, ban_dashes=None):
+                 inference_provider=None, pii_analyzer=None, ban_dashes=None,
+                 community_calendar=None):
     """Persist the per-user preferences the web UI owns and return the loaded
     Account. Sole writer of them, for the same reason as set_telegram.
+
+    community_calendar is the one field a user can empty: "" clears it, None
+    means the caller did not ask. The others are a timezone that always has a
+    value, a radio group that always has one selected, and checkboxes.
 
     pii_analyzer is stored as asked even on a box that cannot run the analyzer:
     availability is a property of the box, the preference is the user's, and
@@ -510,7 +701,8 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
     assert (timezone is not None or auto_schedule is not None
             or inference_provider is not None
             or pii_analyzer is not None
-            or ban_dashes is not None), "set_settings needs something to set"
+            or ban_dashes is not None
+            or community_calendar is not None), "set_settings needs something to set"
     data = _read_manifest()
     assert data is not None, "cannot set settings without an accounts manifest"
     entry = _entry_for(data, account_id)
@@ -537,6 +729,18 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
     for field, value, _ in asked:
         if value is not None:
             entry[field] = value
+    if community_calendar is not None:
+        calendar = community_calendar.strip().lower()
+        assert not calendar or CALENDAR_ID_RE.fullmatch(calendar), (
+            f"{calendar!r} is not a calendar id; the caller validates this before "
+            "asking, so reaching here means an unchecked path"
+        )
+        if entry.get("community_calendar", "") != calendar:
+            changed += ("community_calendar",)
+        if calendar:
+            entry["community_calendar"] = calendar
+        else:
+            entry.pop("community_calendar", None)
     _write_manifest(data)
     audit.record(entry["id"], audit.SETTINGS,
                  "saved" if changed else "unchanged", changed)
@@ -559,10 +763,7 @@ def _owned_paths(entry):
     account must not wipe it. The same rule covers the voice profile: a
     generated one lives in the account's own directory and goes, while the
     operator's copy under config/ is only unlinked from."""
-    home = ACCOUNTS_DIR / entry["id"]
-    assert home.parent == ACCOUNTS_DIR, (
-        f"account id {entry['id']!r} does not name a directory in the store"
-    )
+    home = account_dir(entry["id"])
     return [home] if home.is_dir() else []
 
 
@@ -592,6 +793,19 @@ def delete_account(account_id):
     data["accounts"] = remaining
     _write_manifest(data)
     audit.record(removed[0]["id"], audit.ACCOUNT, "deleted")
+    # The data key first, then the files it opened. That order is what makes
+    # this a deletion rather than an unlinking: everything below becomes bytes
+    # nobody can read the moment the key is gone, so an rmtree interrupted
+    # halfway leaves ciphertext instead of a half-deleted account, and a backup
+    # of the directory taken this morning does not become readable again by
+    # being restored.
+    #
+    # Imported here rather than at the top because custody is built on this
+    # module and the reverse import would be a cycle. The direction is
+    # deliberate -- the store knows nothing about crypto -- and this one call is
+    # the exception deletion requires.
+    from backend.custody import keyring
+    keyring.destroy(removed[0]["id"])
     for path in _owned_paths(removed[0]):
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
