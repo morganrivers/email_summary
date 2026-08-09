@@ -34,7 +34,7 @@ def result_no_analyzer():
     base = evaluator.EVAL_IDENTITY
     identity = pseudonymizer.UserIdentity(
         base.first, base.last, base.first_aliases, base.emails, [],
-        base.contacts, base.account_id, analyzer=False,
+        base.contacts, account_id=base.account_id, analyzer=False,
     )
     return evaluator.evaluate(identity=identity)
 

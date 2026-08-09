@@ -23,7 +23,7 @@
   "gmail_calls": [
     {
       "op": "create_event",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "kwargs": {
         "summary": "Meeting with Dave",
         "start_iso": "2026-07-21T15:00:00",

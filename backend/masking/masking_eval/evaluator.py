@@ -27,6 +27,7 @@ EVAL_IDENTITY = pseudonymizer.UserIdentity(
     emails=["jordan.avery@example.com"],
     phones=["+1 (617) 555-0148"],
     contacts=["Priya Sharma", "Wei Chen", "Bob"],
+    account_id="eval",
 )
 
 # Types the deterministic literal-scrub owns: it must catch these regardless of

@@ -84,17 +84,38 @@ def process_billing():
     internet must not hold that. `PolarBilling` is constructed only when there
     is something to apply, so a box with no Polar token configured pays nothing
     for this call. One event's failure does not stop the rest, for the same
-    reason one mailbox's does not."""
-    events = billing_queue.drain()
-    if not events:
+    reason one mailbox's does not.
+
+    The client is built before the drain and not after. `drain()` clears the
+    spool, so a `PolarBilling()` that raises on the far side of it discards
+    every event it was about to apply -- silently, since the exception lands in
+    the loop's outer handler, and permanently on a box where the poller cannot
+    run either because it needs the same absent token.
+
+    An event that raises is put back rather than dropped. Polar was acked when
+    the receiver spooled it, so nothing upstream will send it again: without the
+    retry, one timed-out Polar call while resolving which account an event names
+    was a subscription that stayed unapplied until the next reconcile, and one
+    that the reconcile does not cover was a subscription that stayed unapplied.
+    Only the drop after MAX_ATTEMPTS alerts, because a failure the next pass
+    settles is not one to wake anybody for."""
+    if not billing_queue.pending():
         return
-    billing = PolarBilling()
-    for event in events:
+    try:
+        billing = PolarBilling()
+    except AssertionError as err:
+        log(f"billing events waiting but Polar is not configured: {err}")
+        return
+    for event, attempts in billing_queue.drain():
         try:
             log(f"billing: {billing.apply_event(event)}")
         except Exception as err:
-            log(f"billing event {event.get('type')!r} failed: {err}")
-            notify_error("billing event failed", err)
+            log(f"billing event {event.get('type')!r} failed "
+                f"(attempt {attempts + 1}/{billing_queue.MAX_ATTEMPTS}): {err}")
+            if not billing_queue.retry(event, attempts):
+                notify_error(
+                    f"billing event {event.get('type')!r} dropped after "
+                    f"{billing_queue.MAX_ATTEMPTS} attempts", err)
 
 
 def process_accounts(ids):

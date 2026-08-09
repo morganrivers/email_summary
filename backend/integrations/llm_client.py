@@ -151,6 +151,28 @@ def available_providers():
     return [p for p in PROVIDERS.values() if p.configured()]
 
 
+def available_provider_names():
+    """`available_providers()` as names, which is the form that crosses a
+    process boundary. A name is a catalog key and carries nothing secret; the
+    key that decided it stays in the process that holds it."""
+    return [p.name for p in available_providers()]
+
+
+def providers_named(names):
+    """Catalog entries for `names`, in catalog order, skipping any this build
+    does not carry.
+
+    The other half of `available_provider_names()`, for a caller that asked
+    another process which providers are configured and now needs the label and
+    the blurb to render them. The catalog is not the secret, so it is read
+    locally rather than sent over a wire; only "is this one's key present" had
+    to come from elsewhere. Skipping an unknown name means a web tier and a
+    daemon on different versions render the providers they agree about rather
+    than raising on the one they do not."""
+    wanted = set(names)
+    return [p for name, p in PROVIDERS.items() if name in wanted]
+
+
 def resolve(account=None):
     """Which provider serves this account.
 

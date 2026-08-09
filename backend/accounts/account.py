@@ -167,10 +167,10 @@ class Account:
 
     @property
     def primary_email(self):
-        """The mailbox this account owns. For a signup the id is that address,
-        but the seeded owner is keyed "default" with the real address in its
-        masking identity, so anything building a mail address goes through
-        here rather than assuming the id is one."""
+        """The mailbox this account owns. The id is that address for every
+        account, including the seeded owner, but callers building a mail
+        address go through here rather than assuming the id is one, since a
+        hand-edited manifest entry could still diverge."""
         return self.identity.emails[0] if self.identity.emails else self.id
 
 
@@ -308,14 +308,14 @@ def owner_identity():
         first, last,
         first_aliases=[a for a in aliases if a],
         emails=[email],
-        account_id="default",
+        account_id=email,
     )
 
 
 def owner_account():
     """The box owner's account built from the environment rather than the
-    manifest: owner_identity(), the historical state.json, the env Telegram
-    target.
+    manifest: owner_identity(), the standard per-account state.json, the env
+    Telegram target.
 
     It carries no Gmail custody. The owner gets a token the same way everyone
     else does, by consenting through /auth/callback; there is no environment
@@ -324,15 +324,19 @@ def owner_account():
 
     This is NOT a runtime fallback. all_accounts() requires a manifest, so an
     unseeded box refuses to route mail instead of inventing an account whose
-    existence silently ends the moment anyone signs up. Two callers only: the
-    one-time seed (backend.accounts.seed_owner), which turns this into a real
-    manifest entry, and the test harness, which needs an account without a
-    store."""
+    existence silently ends the moment anyone signs up. There is no implicit
+    "default" account: the id is the owner's own address, exactly what
+    register_account would assign, so this function and a normal signup build
+    the same shape of Account. Two callers only: the one-time seed
+    (backend.accounts.seed_owner), which turns this into a real manifest entry,
+    and the test harness, which needs an account without a store."""
     telegram = operator_target()
     assert telegram is not None, (
         "owner_account needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in the "
         "environment; those are the operator's own chat"
     )
+    identity = owner_identity()
+    aid = identity.account_id
     # A fresh handle on every call, because this account is not in the manifest
     # and there is nowhere for a stable one to come from. That is correct for
     # both callers: the seed writes the one it is handed and the manifest owns it
@@ -340,9 +344,9 @@ def owner_account():
     # handle changed between calls could not open its own records, which is why
     # this is the only place one is minted outside register_account.
     return Account(
-        id="default",
-        identity=owner_identity(),
-        state=state.StateStore(state.DEFAULT_STATE_FILE),
+        id=aid,
+        identity=identity,
+        state=state.StateStore(account_dir(aid) / "state.json"),
         telegram=telegram,
         timezone=os.environ.get("LETTERLOCK_TIMEZONE", DEFAULT_TIMEZONE),
         auto_schedule=True,
@@ -454,8 +458,8 @@ def _match(pool, email):
 
 def get_account(email):
     """The active account owning `email`, or None. Matches an account id or any
-    address in its masking identity, so the single-tenant default (id "default",
-    real address in identity.emails) resolves from a Pub/Sub emailAddress too.
+    address in its masking identity, so an entry with extra addresses in
+    identity.emails still resolves from a Pub/Sub emailAddress.
 
     The sole targeted accessor: routing (webhook, daemon) looks up users only
     through here, so callers never construct a creds/token path themselves and
@@ -541,9 +545,10 @@ def register_account(email, first, last, *, token_file=None, first_aliases=(),
         entry["token_file"] = str(token_file)
     if voice_file:
         entry["voice_file"] = str(voice_file)
-    # Omitted for a fresh signup, which gets database/<id>/state.json. Passed by
-    # the owner seed so the box keeps the Gmail history cursor it already has
-    # instead of restarting from an empty one.
+    # Omitted for the ordinary case, which gets database/<id>/state.json --
+    # including the owner seed, now that the owner has no special-cased path.
+    # A caller names one explicitly only to point at a location outside the
+    # account's own directory, which is why _owned_paths does not delete it.
     if state_file:
         entry["state_file"] = str(state_file)
     data = _read_manifest() or {"accounts": []}

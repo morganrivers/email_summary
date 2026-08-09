@@ -79,8 +79,15 @@ OP_CHAT_BEGIN = "chat-begin"
 OP_CHAT_FINISH = "chat-finish"
 OP_CHAT_FORGET = "chat-forget"
 
+# Which inference providers this deployment can actually reach. It crosses for
+# a third reason, neither a Google token nor a decision withheld from the web
+# tier: the answer is a function of the inference API keys, and holding two live
+# keys to answer a yes/no question is the whole of why the web tier had them.
+# The names that come back are catalogue keys, never a key or any part of one.
+OP_PROVIDERS = "providers"
+
 OPS = (OP_AUTH_URL, OP_SIGN_IN, OP_VOICE_START, OP_VOICE_STATUS, OP_VOICE_CLEAR,
-       OP_CHAT_BEGIN, OP_CHAT_FINISH, OP_CHAT_FORGET)
+       OP_CHAT_BEGIN, OP_CHAT_FINISH, OP_CHAT_FORGET, OP_PROVIDERS)
 
 # Which Telegram change is pending. Named here rather than beside the rule that
 # decides it, because the deciding is `chat_link`'s and this is only what the
@@ -227,3 +234,25 @@ def chat_finish(account_id):
 
 def chat_forget(account_id):
     call(OP_CHAT_FORGET, account_id=account_id)
+
+
+_providers_cache = None
+
+
+def providers():
+    """Names of the inference providers whose key this deployment holds.
+
+    Cached for the process lifetime rather than per request. A key arrives as
+    injected environment or in `.env`, and neither changes under a running
+    process: the answer can only move across a restart, so re-asking is a round
+    trip that cannot return anything new. It also keeps a page every signed-in
+    user loads from being a call per render.
+
+    `HandoffUnavailable` is left to the caller and deliberately not cached, so a
+    daemon that comes back is answered the next time somebody asks."""
+    global _providers_cache
+    if _providers_cache is None:
+        names = call(OP_PROVIDERS)
+        assert isinstance(names, list), f"providers returned {type(names).__name__}"
+        _providers_cache = tuple(names)
+    return _providers_cache

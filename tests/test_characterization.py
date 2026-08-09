@@ -275,6 +275,7 @@ def test_literal_scrub_owner_phone_and_contacts():
     ident = pseudonymizer.UserIdentity(
         OTHER_FIRST, OTHER_LAST, OTHER_ALIASES, [OTHER_EMAIL],
         phones=["+1 (415) 555-0142"], contacts=["Priya Sharma", "Bob"],
+        account_id=OTHER_EMAIL,
     )
     st = pseudonymizer.new_state(ident)
     text = (f"{OTHER_FIRST} here. Cell 415.555.0142 or +14155550142. "
@@ -291,9 +292,8 @@ def test_literal_scrub_owner_phone_and_contacts():
 # --- top-level integration -----------------------------------------------
 
 def test_process_once_end_to_end(wire):
-    from backend.accounts import state
     from backend.daemons import daemon_loop
-    store = state.StateStore(state.DEFAULT_STATE_FILE)
+    store = wire.account.state
     store.save({"lastHistoryId": "100", "watchExpiration": None})
     fetch_payload = {
         "emails": [auto_email(), bot_email()],

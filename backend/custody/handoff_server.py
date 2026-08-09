@@ -16,6 +16,7 @@ behind one another, and one handler raising cannot take the listener down.
 
 from __future__ import annotations
 
+import os
 import socket
 import struct
 import threading
@@ -26,23 +27,48 @@ from backend.accounts import account as account_mod
 from backend.accounts import chat_link
 from backend.custody import handoff
 from backend.drafting import voice_dna
+from backend.integrations import llm_client
 from backend.onboarding import provisioning
 
 BACKLOG = 16
 
 
 def _peer(conn):
-    """(pid, uid, gid) of the process at the other end, for the log line.
+    """(pid, uid, gid) of the process at the other end.
 
-    The grant itself is the socket's mode: it lives in a directory the shared
-    group owns and carries that group, so the only accounts that can connect are
-    the web uid and this one. This is who did it, not whether they may."""
+    (-1, -1, -1) when the kernel will not say, which `_may_connect` reads as a
+    refusal rather than as an unknown."""
     try:
         raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
                               struct.calcsize("3i"))
         return struct.unpack("3i", raw)
     except OSError:
         return (-1, -1, -1)
+
+
+def _may_connect(uid):
+    """Whether a peer at `uid` is one of the two accounts this socket is for.
+
+    The socket's mode is still the grant, and this is deliberately a second
+    check of the same fact rather than a replacement for it. The mode is set by
+    `bind()` from `paths.file_mode()`, which reads a group that may not exist
+    and a setgid bit that a future change to `state/` could drop; every one of
+    those failures widens the socket silently, and the operations behind it mint
+    consent URLs and exchange authorization codes. Asking the kernel who is
+    actually on the other end costs one getsockopt and turns that class of
+    mistake into a refused connection.
+
+    Two uids pass: our own, which is the mail account and also the laptop where
+    one person runs both halves, and `paths.web_uid()`. Anything else, including
+    root and including a kernel that declines to answer, is refused. Root being
+    refused is not a security claim -- root can read this process's memory --
+    it is that no correct caller is root."""
+    if uid < 0:
+        return False
+    if uid == os.getuid():
+        return True
+    web = paths.web_uid()
+    return web is not None and uid == web
 
 
 def _account(account_id):
@@ -96,6 +122,16 @@ def _chat_forget(account_id):
     return None
 
 
+def _providers():
+    """Which inference providers this deployment holds a key for.
+
+    Names only. The web tier renders the labels from its own copy of the
+    catalog, so nothing derived from a key crosses the socket, and no argument
+    is taken: the answer is a property of the deployment and not of an
+    account."""
+    return llm_client.available_provider_names()
+
+
 HANDLERS = {
     handoff.OP_AUTH_URL: _auth_url,
     handoff.OP_SIGN_IN: _sign_in,
@@ -105,6 +141,7 @@ HANDLERS = {
     handoff.OP_CHAT_BEGIN: _chat_begin,
     handoff.OP_CHAT_FINISH: _chat_finish,
     handoff.OP_CHAT_FORGET: _chat_forget,
+    handoff.OP_PROVIDERS: _providers,
 }
 
 assert set(HANDLERS) == set(handoff.OPS), (
@@ -145,10 +182,13 @@ def dispatch(request, log):
 def _serve_one(conn, log):
     try:
         conn.settimeout(handoff.TIMEOUT)
+        pid, uid, _gid = _peer(conn)
+        if not _may_connect(uid):
+            log(f"handoff refused connection from pid={pid} uid={uid}")
+            return
         request = handoff.read_line(conn)
         if request is None:
             return
-        pid, uid, _gid = _peer(conn)
         log(f"handoff {request.get(handoff.F_OP)!r} from pid={pid} uid={uid}")
         conn.sendall(handoff.encode(dispatch(request, log)))
     except (OSError, ValueError) as err:

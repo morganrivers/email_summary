@@ -377,7 +377,7 @@ def test_dev_mode_refuses_to_run_on_a_provisioned_box(tmp_path, monkeypatch):
     config.write_text(json.dumps({"mode": attest.DEV_INSECURE, "measurements": []}))
     attest.reset_for_test(config)
     monkeypatch.setenv("TEE_REQUIRED", "1")
-    with pytest.raises(AssertionError, match="TEE_REQUIRED"):
+    with pytest.raises(attest.AttestationRefused, match="TEE_REQUIRED"):
         attest.mode()
 
 

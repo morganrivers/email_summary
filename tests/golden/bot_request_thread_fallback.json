@@ -21,14 +21,14 @@
   "gmail_calls": [
     {
       "op": "get_thread",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         "t8"
       ]
     },
     {
       "op": "find_thread_by_from_subject",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         "carol@contoso.com",
         "Budget"
@@ -36,7 +36,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "carol@contoso.com",
@@ -53,7 +53,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "carol@contoso.com",
@@ -73,7 +73,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "carol@contoso.com",

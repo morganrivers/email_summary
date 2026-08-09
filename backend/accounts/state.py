@@ -4,16 +4,13 @@ Schema: {lastHistoryId: str|None, watchExpiration: str|None}
 
 StateStore is keyed by file path, one per account, so a shared process holds
 independent cursors per user. The backend is a plain JSON file today; a sealed
-store can subclass without touching callers. The default account keeps the
-historical `state.json` path so the deployed box's existing cursor is reused.
+store can subclass without touching callers. There is no default account and
+no default path: every account, including the box owner, gets
+`database/<id>/state.json` unless a caller names something else.
 """
 
 import json
 from pathlib import Path
-
-from backend import paths
-
-DEFAULT_STATE_FILE = paths.RUN_DIR / "state.json"
 
 
 class StateStore:

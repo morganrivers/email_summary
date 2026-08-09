@@ -249,3 +249,97 @@ def test_an_oversized_request_is_refused_rather_than_allocated(listening):
             pass
     finally:
         conn.close()
+
+
+def test_a_peer_that_is_neither_account_is_refused(listening, monkeypatch):
+    """The socket's mode is the grant and this is a second check of it.
+
+    Every way the mode can widen is silent: `paths.file_mode()` reads a group
+    that may not exist, the group itself comes from a setgid bit on `state/`
+    that a future change could drop, and `chmod_if_owned` does nothing at all
+    when the file belongs to somebody else. The operations behind this socket
+    mint consent URLs and exchange authorization codes, so the listener asks
+    the kernel who is actually connected rather than inferring it from a mode
+    it cannot re-check."""
+    monkeypatch.setattr(paths, "web_uid", lambda: 4242)
+    monkeypatch.setattr(handoff_server.os, "getuid", lambda: 4243)
+
+    with pytest.raises(handoff.HandoffUnavailable):
+        handoff.voice_status("a@example.com")
+
+    assert any("refused connection" in line for line in listening), listening
+
+
+def test_the_web_uid_is_admitted(listening, monkeypatch):
+    """The other direction, so the check cannot pass by refusing everyone.
+
+    The real uid is read before `getuid` is patched, so the peer is admitted by
+    the `web_uid()` branch rather than by matching our own."""
+    real = handoff_server.os.getuid()
+    monkeypatch.setattr(handoff_server.os, "getuid", lambda: real + 1)
+    monkeypatch.setattr(paths, "web_uid", lambda: real)
+    monkeypatch.setitem(handoff_server.HANDLERS, handoff.OP_VOICE_STATUS,
+                        lambda account_id: {"state": "done"})
+
+    assert handoff.voice_status("a@example.com") == {"state": "done"}
+
+
+def test_an_unreadable_peer_is_refused_rather_than_assumed(listening, monkeypatch):
+    """SO_PEERCRED failing is not an unknown to be resolved generously."""
+    monkeypatch.setattr(handoff_server, "_peer", lambda conn: (-1, -1, -1))
+
+    with pytest.raises(handoff.HandoffUnavailable):
+        handoff.voice_status("a@example.com")
+
+
+def test_providers_crosses_as_names_and_never_as_a_key(listening, monkeypatch):
+    """The web tier held two live inference keys to answer one yes/no question.
+
+    What comes back is catalog keys, which are public strings; the labels are
+    rendered from the web tier's own copy of the catalog, so nothing derived
+    from an API key is on this wire."""
+    from backend.integrations import llm_client
+
+    monkeypatch.setattr(llm_client, "available_provider_names",
+                        lambda: ["deepseek", "nearai-glm"])
+    handoff._providers_cache = None
+    try:
+        assert handoff.providers() == ("deepseek", "nearai-glm")
+    finally:
+        handoff._providers_cache = None
+
+
+def test_providers_is_cached_for_the_process(listening, monkeypatch):
+    """A key arrives as injected environment or in .env and neither changes
+    under a running process, so the answer can only move across a restart. The
+    settings page is loaded by every signed-in user; one round trip per render
+    would be a round trip that cannot return anything new."""
+    calls = []
+
+    def once():
+        calls.append(1)
+        return ["deepseek"]
+
+    from backend.integrations import llm_client
+    monkeypatch.setattr(llm_client, "available_provider_names", once)
+    handoff._providers_cache = None
+    try:
+        handoff.providers()
+        handoff.providers()
+        assert calls == [1]
+    finally:
+        handoff._providers_cache = None
+
+
+def test_an_unavailable_daemon_is_not_cached_as_an_empty_answer(tmp_path, monkeypatch):
+    """Caching an outage would render the settings page as though this
+    deployment had no provider configured, and keep doing so after the daemon
+    came back."""
+    monkeypatch.setattr(paths, "RUN_DIR", tmp_path / "state")
+    handoff._providers_cache = None
+    try:
+        with pytest.raises(handoff.HandoffUnavailable):
+            handoff.providers()
+        assert handoff._providers_cache is None
+    finally:
+        handoff._providers_cache = None

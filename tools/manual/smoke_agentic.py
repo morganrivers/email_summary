@@ -15,12 +15,6 @@ from backend.integrations import llm_client
 acct = account.owner_account()
 instructions = draft_replies.drafting_instructions(acct)
 
-DRAFTER_INSTRUCTION = (
-    "\n\nWrite a reply email that follows the voice profile above. "
-    "Output the email body only, including the greeting and sign-off as the profile dictates. "
-    "No subject line. No commentary. No markdown fences. Plain text only."
-)
-
 fake_email = {
     "from": "Alice Example <alice@example.com>",
     "date": "Mon, Jun 30, 2026 at 10:00 AM",
@@ -30,7 +24,7 @@ fake_email = {
             f"Best, Alice",
 }
 
-sys_prompt = instructions + DRAFTER_INSTRUCTION
+sys_prompt = instructions + draft_replies.DRAFTER_INSTRUCTION
 fence = agentic_drafter.new_fence()
 user_prompt = (
     "Original email:\n"

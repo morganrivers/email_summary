@@ -17,6 +17,7 @@
   "backend/audit.py"
   "backend/billing/__init__.py"
   "backend/billing/billing.py"
+  "backend/billing/billing_poller.py"
   "backend/billing/billing_queue.py"
   "backend/billing/polar_api.py"
   "backend/custody/__init__.py"

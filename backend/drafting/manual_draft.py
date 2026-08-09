@@ -31,7 +31,7 @@ DRAFTER_WITH_CONTEXT = (
     "The account owner has supplied their own context for how to respond, so let that guide "
     "tone and content, while staying true to the voice profile. "
     "Output the email body only, including the greeting and sign-off as the profile dictates. "
-    "No subject line. No commentary. No markdown fences. Plain text only."
+    f"{draft_replies.OUTPUT_FORMAT_RULE}"
 )
 
 

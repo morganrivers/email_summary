@@ -68,7 +68,7 @@ class UserIdentity:
     shared process can hold one identity per user without global coupling."""
 
     def __init__(self, first, last, first_aliases=(), emails=(), phones=(),
-                 contacts=(), account_id="default", analyzer=True):
+                 contacts=(), *, account_id, analyzer=True):
         assert first and last, "identity requires first and last name"
         assert account_id, "identity requires an account_id"
         self.account_id = account_id

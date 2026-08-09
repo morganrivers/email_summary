@@ -40,7 +40,7 @@
   "gmail_calls": [
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "nadia.fowler@acme.io",

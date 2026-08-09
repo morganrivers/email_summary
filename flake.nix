@@ -69,36 +69,122 @@
             lib.elem rel imageFiles;
       };
 
+      # The schedule the box states in deploy/hetzner/*.timer, restated because
+      # a systemd timer and a crontab are two deployment formats and neither can
+      # read the other. Keep the cadences in step: the reconcile is 00/3 there.
       crontab = pkgs.writeText "email-bot-crontab" ''
         0 5 * * * cd /app && python -m backend.drafting.email_summary
         0 4 * * 1 cd /app && python -m backend.onboarding.watch_renew
+        0 */3 * * * cd /app && python -m backend.billing.billing_poller
       '';
 
+      # The three accounts the enclave's containers run as, and the two groups
+      # they share. The names are `backend/paths.py`'s DATA_GROUP and
+      # WAKE_GROUP, spelled the same here on purpose: that module resolves them
+      # with `grp.getgrnam` and sets every mode from the answer, so baking these
+      # names in is what makes one piece of code decide file modes on the
+      # Hetzner box and inside the image. Numeric ids are fixed because the
+      # `database` and `state` volumes are shared between containers, and a uid
+      # is all a shared volume carries.
+      accounts = {
+        mail = { uid = 10001; groups = [ "letterlock-data" "letterlock-wake" ]; };
+        web = { uid = 10002; groups = [ "letterlock-data" ]; };
+        hook = { uid = 10003; groups = [ "letterlock-wake" ]; };
+      };
+      sharedGids = { letterlock-data = 10010; letterlock-wake = 10011; };
+
+      passwdFile = pkgs.writeText "passwd" (''
+        root:x:0:0:root:/root:/bin/sh
+      '' + lib.concatStrings (lib.mapAttrsToList (name: a: ''
+        letterlock-${name}:x:${toString a.uid}:${toString a.uid}::/app:/bin/sh
+      '') accounts));
+
+      groupFile = pkgs.writeText "group" (''
+        root:x:0:
+      '' + lib.concatStrings (lib.mapAttrsToList (name: a: ''
+        letterlock-${name}:x:${toString a.uid}:
+      '') accounts) + lib.concatStrings (lib.mapAttrsToList (group: gid: ''
+        ${group}:x:${toString gid}:${lib.concatStringsSep "," (
+          lib.mapAttrsToList (name: _: "letterlock-${name}") (
+            lib.filterAttrs (_: a: lib.elem group a.groups) accounts))}
+      '') sharedGids));
+
+      # One image, one entrypoint, three roles. Which role a container plays is
+      # a `command:` in docker-compose.yml, and that file's hash is the dstack
+      # `compose-hash` extended into RTMR3 -- so which process runs as which
+      # account, and which secrets each is handed, is measured rather than
+      # merely configured. An operator who moves SESSION_SECRET to the mail
+      # container changes the measurement and `cosigner/attest.py` stops
+      # accepting the client certificate.
+      #
+      # There is deliberately no role that starts everything. That was the shape
+      # before this split: four processes, one uid, one environment holding
+      # every secret, so a parsing bug in the web server was every mailbox in
+      # the enclave. The box stopped working that way in `01ba733`; this is the
+      # same change, and leaving the combined role in place would leave the
+      # thing it replaced one compose edit away.
       entrypoint = pkgs.writeShellApplication {
         name = "email-bot-entrypoint";
         runtimeInputs = [ venv pkgs.supercronic pkgs.coreutils ];
         text = ''
           cd /app
-          mkdir -p /app/.gmail-mcp /app/database
+          role="''${1:-}"
+
           # Track F3 attest-before-run gate. Under TEE_REQUIRED it fails closed
-          # (exit -> Restart=always retries) rather than touching mailboxes
+          # (exit -> restart:always retries) rather than touching mailboxes
           # without proof the CVM runs the published, attested measurement.
-          if ! python -m backend.tee.tee_boot; then
-            echo "tee_boot gate failed; refusing to start services" >&2
-            exit 1
-          fi
-          python -m backend.daemons.daemon_loop &
-          d=$!
-          python -m backend.daemons.gmail_hook_server &
-          w=$!
-          python -m frontend.web_server &
-          ui=$!
-          supercronic /app/crontab &
-          c=$!
-          trap 'kill "$d" "$w" "$ui" "$c" 2>/dev/null || true' TERM INT
-          wait -n
-          kill "$d" "$w" "$ui" "$c" 2>/dev/null || true
-          exit 1
+          # Every role that holds an account's data runs it for itself: these
+          # are separate containers now, so one container's gate says nothing
+          # about another's, and a shared one-shot would be a gate that passes
+          # for a process that never asked.
+          gate() {
+            if ! python -m backend.tee.tee_boot; then
+              echo "tee_boot gate failed; refusing to start $role" >&2
+              exit 1
+            fi
+          }
+
+          case "$role" in
+            mail)
+              # The only role holding a Google token or decrypted mail. Runs the
+              # scheduled work too: the daily summary and the watch renewal read
+              # mailboxes, so they belong to this account and no other. The
+              # billing reconcile is here for the other reason -- it writes
+              # plan_status into the manifest, and this is the role that writes
+              # the manifest. No image starts a Polar receiver, so in the
+              # enclave this sweep and the checkout return page are the whole of
+              # entitlement, which is why it must not be dropped from the
+              # crontab to save a container an API call.
+              gate
+              python -m backend.daemons.daemon_loop &
+              d=$!
+              supercronic /app/crontab &
+              c=$!
+              trap 'kill "$d" "$c" 2>/dev/null || true' TERM INT
+              wait -n
+              kill "$d" "$c" 2>/dev/null || true
+              exit 1
+              ;;
+            web)
+              # Holds a data key for document renders and so runs the gate, but
+              # never a Google token: token.bin is 0600 to the mail uid and the
+              # operations needing one cross backend/custody/handoff.py.
+              gate
+              exec python -m frontend.web_server
+              ;;
+            hook)
+              # Verifies a Pub/Sub JWT and appends an address to the wake spool.
+              # No gate, because this role is deliberately not given the
+              # guest-agent socket and the gate needs it -- and it needs neither:
+              # it opens no account, holds no secret, and the address it spools
+              # is resolved by the mail role, which is gated.
+              exec python -m backend.daemons.gmail_hook_server
+              ;;
+            *)
+              echo "usage: email-bot-entrypoint {mail|web|hook}" >&2
+              exit 2
+              ;;
+          esac
         '';
       };
 
@@ -107,11 +193,31 @@
         tag = "latest";
         contents = [ pkgs.cacert pkgs.coreutils pkgs.bashInteractive ];
         enableFakechroot = true;
+        # `database` and `state` are named volumes mounted over these paths.
+        # Docker seeds a volume from the image directory on first creation,
+        # ownership and mode included, so setting them here is what makes the
+        # shared volumes land as letterlock-data rather than root. Both are
+        # setgid, matching paths.DIR_MODE_SHARED / DIR_MODE_TRAVERSABLE: state/
+        # is traversable because the hook uid writes its spool there and is
+        # deliberately not in the data group, database/ is not because who has
+        # an account is itself worth keeping.
+        #
+        # No .gmail-mcp directory. It existed to carry gcp-oauth.keys.json, and
+        # under TEE_REQUIRED oauth_app refuses that file and the boot gate
+        # refuses to start with one present.
         fakeRootCommands = ''
-          mkdir -p ./app
+          mkdir -p ./app ./etc
           cp -R ${appCode}/. ./app/
           cp ${crontab} ./app/crontab
+          cp ${passwdFile} ./etc/passwd
+          cp ${groupFile} ./etc/group
           chmod -R u+w ./app
+          mkdir -p ./app/database ./app/state
+          chown -R 0:0 ./app
+          chown ${toString accounts.mail.uid}:${toString sharedGids.letterlock-data} ./app/database
+          chmod 2770 ./app/database
+          chown ${toString accounts.mail.uid}:${toString sharedGids.letterlock-data} ./app/state
+          chmod 2771 ./app/state
         '';
         config = {
           WorkingDir = "/app";

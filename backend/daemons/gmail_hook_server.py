@@ -4,17 +4,29 @@
 Port of the former gmail-hook.php. Caddy terminates TLS for the public
 hostname and reverse-proxies to this listener on 127.0.0.1:WEBHOOK_PORT.
 
-Google Pub/Sub attaches an OIDC bearer JWT to every push. We verify it via
-Google's tokeninfo endpoint (no local crypto), enforcing issuer, audience,
-the pushing service account, and expiry.
+Google Pub/Sub attaches an OIDC bearer JWT to every push. We verify its RS256
+signature locally against Google's published certificates
+(``google.auth.jwt.decode``, which also enforces ``iat``/``exp`` and rejects any
+algorithm but RS256/ES256, so neither ``none`` nor an HMAC substitution is
+reachable), then apply ``check_claims`` -- issuer, audience, the pushing service
+account, and that the address on the token is a verified one.
 
-The endpoint is public, so the claims are screened locally before that network
-call: anything whose payload does not already carry the right issuer, audience,
-service account, and an unexpired exp is rejected without touching Google. Only
-a token that could plausibly be genuine costs a request, which is what stops an
-anonymous flood from turning into an outbound flood and getting us throttled
-(and the real pushes rejected with it). Verified tokens are cached until they
-expire so Pub/Sub's own retries cost nothing either. We then decode the message body
+This used to be a call to Google's ``tokeninfo`` endpoint, which is a debugging
+aid rather than a validator, and it made verifying a token a network round trip:
+one outbound request per distinct token, so an anonymous flood at a public
+endpoint turned into an outbound flood. Two mitigations existed only because of
+that -- an unverified pre-screen of the JWT payload, and a cache of tokens
+tokeninfo had vouched for -- and both are gone with it. The one thing fetched
+now is the certificate set, cached for the lifetime the certs endpoint states,
+so a forged token costs a signature check and no network at all.
+
+The pre-screen also made ``check_claims`` judge two different wire formats,
+since tokeninfo returns every claim as a string where the JWT payload carries
+JSON types, and the coercions that straddled them (``str(...).lower() ==
+"true"``, ``int(claims.get("exp", 0))``) were weaker than either format needed.
+It now sees signature-verified JSON and compares exactly.
+
+We then decode the message body
 ({emailAddress, historyId}), enqueue that address on the wake spool, and poke the
 FIFO so the daemon processes only that user's mailbox. The historyId is not
 used: the daemon pulls the delta from that account's stored lastHistoryId
@@ -35,10 +47,13 @@ import base64
 import json
 import os
 import sys
+import threading
 import time
-import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from google.auth import exceptions as google_auth_exceptions
+from google.auth import jwt as google_jwt
 
 from backend import paths, secrets, site
 from backend.daemons import wake_queue
@@ -55,15 +70,29 @@ PUBSUB_SERVICE_ACCOUNT = os.environ.get(
     "PUBSUB_SERVICE_ACCOUNT",
     "pubsub-pusher-coastal-mender-4@coastal-mender-462719-q3.iam.gserviceaccount.com",
 )
-TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo?id_token="
+CERTS_URL = "https://www.googleapis.com/oauth2/v1/certs"
+CLOCK_SKEW_SECONDS = 30
+CERTS_TTL_MIN = 300
+CERTS_TTL_MAX = 6 * 3600
+CERTS_REFETCH_FLOOR = 60
+
+assert EXPECTED_AUD.startswith("https://"), f"aud is not a URL: {EXPECTED_AUD!r}"
+assert PUBSUB_SERVICE_ACCOUNT.endswith(
+    ".gserviceaccount.com"
+), f"pusher is not a service account: {PUBSUB_SERVICE_ACCOUNT!r}"
 
 # A Pub/Sub push envelope is a few kilobytes. Reading an attacker-declared
 # Content-Length unbounded is a free way to make us allocate.
 MAX_BODY = 256 * 1024
 
+# An unauthenticated caller decides the request path and the bytes of a parse
+# error, and both reach the journal. One line in means one line out.
+MAX_LOG = 500
+
 
 def log(msg):
-    sys.stderr.write(f"gmail-hook {msg}\n")
+    line = str(msg).replace("\r", " ").replace("\n", " ")[:MAX_LOG]
+    sys.stderr.write(f"gmail-hook {line}\n")
     sys.stderr.flush()
 
 
@@ -74,83 +103,130 @@ class HookError(Exception):
         self.msg = msg
 
 
-# jwt -> exp, for tokens tokeninfo has already vouched for. Pub/Sub retries the
-# same token on any non-2xx, and a token is good for an hour.
-_VERIFIED = {}
-_VERIFIED_MAX = 512
-
-
 def check_claims(claims):
-    """Every claim rule, in one place, so the local screen and the verified
-    response are judged identically. Returns None or the reason to reject."""
-    if not isinstance(claims, dict) or "error" in claims:
-        return "malformed claims"
+    """Every identity rule for a push token, in one place. Returns None or the
+    reason to reject.
+
+    What it does *not* cover is what `google.auth.jwt.decode` owns and owns
+    better: the signature, the algorithm, and the `iat`/`exp` window. This
+    function only ever sees a payload that has already survived those, which is
+    why each comparison here can be exact rather than coercing. `aud` is stated
+    here as well as passed to `decode`; both read the one constant, and an
+    audience rule written in only one of them is one a refactor can drop.
+
+    `email_verified` must be the JSON boolean. A string "true" would mean the
+    payload is not the shape a Google ID token has, and accepting both spellings
+    is how the old tokeninfo-era check came to accept `str(None).lower()`
+    reasoning about a claim that was absent."""
+    if not isinstance(claims, dict):
+        return f"claims are {type(claims).__name__}, not an object"
     if claims.get("iss") not in EXPECTED_ISSUERS:
-        return f"bad iss: {claims.get('iss')}"
+        return f"bad iss: {claims.get('iss')!r}"
     if claims.get("aud") != EXPECTED_AUD:
-        return f"bad aud: {claims.get('aud')}"
+        return f"bad aud: {claims.get('aud')!r}"
     if claims.get("email") != PUBSUB_SERVICE_ACCOUNT:
-        return f"bad email: {claims.get('email')}"
-    if str(claims.get("email_verified")).lower() != "true":
-        return "email not verified"
-    try:
-        exp = int(claims.get("exp", 0))
-    except (TypeError, ValueError):
-        return "bad exp"
-    if exp < time.time():
-        return "token expired"
+        return f"bad email: {claims.get('email')!r}"
+    if claims.get("email_verified") is not True:
+        return f"email not verified: {claims.get('email_verified')!r}"
     return None
 
 
-def peek_claims(jwt):
-    """The JWT's payload without verifying its signature. Only ever used to
-    reject early: a forged payload still has to survive tokeninfo afterwards."""
-    parts = jwt.split(".")
-    if len(parts) != 3:
-        return None
-    payload = parts[1]
-    payload += "=" * (-len(payload) % 4)
+class SigningCerts:
+    """Google's OIDC signing certificates, cached for the lifetime the certs
+    endpoint states.
+
+    The cache is what keeps verification off the network: without it a forged
+    token costs an outbound request, which is the amplification the old
+    unverified pre-screen existed to blunt.
+
+    A key id the cached set does not name is the one case worth a refetch, since
+    it is what a rotation looks like from here. That is also the one case an
+    anonymous caller can trigger at will, so it is rate limited to one fetch per
+    CERTS_REFETCH_FLOOR and a failed refetch leaves the unexpired set in place;
+    an *expired* set that cannot be refreshed is an error, because serving stale
+    keys forever is how a revoked key stays trusted."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._certs = {}
+        self._fetched = 0.0
+        self._expires = 0.0
+
+    def for_kid(self, kid):
+        with self._lock:
+            now = time.time()
+            if now >= self._expires:
+                self._refresh(now)
+            elif self._may_refetch(kid, now):
+                try:
+                    self._refresh(now)
+                except Exception as err:
+                    log(f"signing-cert refetch for unknown kid failed: {err}")
+            assert self._certs, "no signing certificates after refresh"
+            return self._certs
+
+    def _may_refetch(self, kid, now):
+        if kid is None or kid in self._certs:
+            return False
+        return now - self._fetched >= CERTS_REFETCH_FLOOR
+
+    def _refresh(self, now):
+        certs, ttl = download_certs()
+        self._certs = certs
+        self._fetched = now
+        self._expires = now + ttl
+
+
+def download_certs():
+    """The certificate set and how long Google says it is good for."""
+    with urllib.request.urlopen(CERTS_URL, timeout=5) as resp:
+        body = resp.read()
+        ttl = cache_lifetime(resp.headers.get("Cache-Control", ""))
+    certs = json.loads(body.decode())
+    assert isinstance(certs, dict) and certs, f"certs endpoint returned {certs!r}"
+    return certs, ttl
+
+
+def cache_lifetime(header):
+    """Google's stated max-age, clamped. The floor stops a max-age of zero from
+    making every verification a fetch; the ceiling stops a long one from
+    outliving a revocation by more than a few hours."""
+    for part in header.split(","):
+        name, _, value = part.strip().partition("=")
+        if name.lower() == "max-age" and value.isdigit():
+            return min(max(int(value), CERTS_TTL_MIN), CERTS_TTL_MAX)
+    return CERTS_TTL_MIN
+
+
+_CERTS = SigningCerts()
+
+
+def verify_jwt(token):
+    """Verify a push token and return its claims, or raise HookError.
+
+    401 is the verdict on the token, 503 is our own inability to reach a
+    verdict, and the split matters: Pub/Sub retries a 503 and drops a 401."""
+    assert isinstance(token, str), f"token is {type(token).__name__}"
     try:
-        return json.loads(base64.urlsafe_b64decode(payload).decode())
-    except Exception:
-        return None
-
-
-def _cache_verified(jwt, claims):
-    if len(_VERIFIED) >= _VERIFIED_MAX:
-        now = time.time()
-        for token, exp in list(_VERIFIED.items()):
-            if exp < now:
-                del _VERIFIED[token]
-        if len(_VERIFIED) >= _VERIFIED_MAX:
-            _VERIFIED.clear()
-    _VERIFIED[jwt] = int(claims.get("exp", 0))
-
-
-def verify_jwt(jwt):
-    cached_exp = _VERIFIED.get(jwt)
-    if cached_exp is not None:
-        if cached_exp > time.time():
-            return {"cached": True}
-        del _VERIFIED[jwt]
-
-    # Cheap screen first: no network for anything that cannot be genuine.
-    reason = check_claims(peek_claims(jwt))
-    if reason is not None:
-        raise HookError(401, f"rejected before tokeninfo ({reason})")
-
-    url = TOKENINFO_URL + urllib.parse.quote(jwt, safe="")
-    try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
-            claims = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as err:
-        raise HookError(401, f"tokeninfo rejected JWT: {err.code}")
+        kid = google_jwt.decode_header(token).get("kid")
     except Exception as err:
-        raise HookError(503, f"tokeninfo network failure: {err}")
+        raise HookError(401, f"unparseable JWT header: {err}")
+    try:
+        certs = _CERTS.for_kid(kid)
+    except Exception as err:
+        raise HookError(503, f"signing certificates unavailable: {err}")
+    try:
+        claims = google_jwt.decode(
+            token,
+            certs=certs,
+            audience=EXPECTED_AUD,
+            clock_skew_in_seconds=CLOCK_SKEW_SECONDS,
+        )
+    except (google_auth_exceptions.GoogleAuthError, ValueError, TypeError) as err:
+        raise HookError(401, f"JWT rejected: {err}")
     reason = check_claims(claims)
     if reason is not None:
         raise HookError(401, reason)
-    _cache_verified(jwt, claims)
     return claims
 
 
@@ -202,9 +278,9 @@ class Handler(BaseHTTPRequestHandler):
         hdr = self.headers.get("Authorization", "")
         if not hdr.lower().startswith("bearer "):
             return self._reject(401, "Missing Bearer token")
-        jwt = hdr[7:].strip()
+        token = hdr[7:].strip()
         try:
-            verify_jwt(jwt)
+            verify_jwt(token)
         except HookError as err:
             return self._reject(err.code, err.msg)
         try:

@@ -58,7 +58,7 @@ def audit_log(tmp_path):
 def wire(monkeypatch, tmp_path):
     import requests
 
-    from backend.accounts import account, state
+    from backend.accounts import account
     from backend.drafting import agentic_drafter, schedule_from_sent, voice_dna
     from backend.integrations import llm_client
 
@@ -74,17 +74,22 @@ def wire(monkeypatch, tmp_path):
     # The voice profile is per account now; the fixture stands in for the
     # neutral default that any account without its own profile gets.
     monkeypatch.setattr(voice_dna, "DEFAULT_PROFILE", harness.VOICE_FIXTURE)
-    monkeypatch.setattr(state, "DEFAULT_STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(agentic_drafter, "datetime", harness.FrozenDateTime)
     monkeypatch.setattr(schedule_from_sent, "datetime", harness.frozen_datetime_namespace())
 
-    # There is no implicit account any more: anything that enumerates users goes
-    # through the manifest, so the harness writes a throwaway one holding exactly
-    # the owner. Keyed "default" like owner_account() rather than by email, so
-    # the golden outputs stay pinned to the identity under test.
-    acct = account.owner_account()
+    # ACCOUNTS_DIR has to move before owner_account() is built: there is no
+    # default account and no default state path, so owner_account() derives
+    # its state file from ACCOUNTS_DIR the same way a signup would, and
+    # building it against the real store would sandbox-escape the test.
     manifest = tmp_path / "database" / "accounts.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(account, "ACCOUNTS_DIR", manifest.parent)
+    monkeypatch.setattr(account, "MANIFEST", manifest)
+
+    # There is no implicit account any more: anything that enumerates users goes
+    # through the manifest, so the harness writes a throwaway one holding exactly
+    # the owner, keyed by the owner's own address like any other account.
+    acct = account.owner_account()
     manifest.write_text(json.dumps({"accounts": [{
         "id": acct.id,
         # The same handle the in-memory account carries. Every registered
@@ -110,8 +115,6 @@ def wire(monkeypatch, tmp_path):
         # two disagree.
         "pii_analyzer": False,
     }]}))
-    monkeypatch.setattr(account, "ACCOUNTS_DIR", manifest.parent)
-    monkeypatch.setattr(account, "MANIFEST", manifest)
 
     def install(responses=(), gmail_outputs=None):
         dq = deque(responses)

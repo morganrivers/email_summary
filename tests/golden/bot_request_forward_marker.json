@@ -76,7 +76,7 @@
   "gmail_calls": [
     {
       "op": "find_thread_by_from_subject",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         "bob@contoso.com",
         "Project sync"
@@ -84,7 +84,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "bob@contoso.com",
@@ -101,7 +101,7 @@
     },
     {
       "op": "list_events",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         "2026-07-24T00:00:00Z",
         "2026-07-25T00:00:00Z",
@@ -110,7 +110,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "bob@contoso.com",
@@ -130,7 +130,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "bob@contoso.com",
@@ -150,7 +150,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "bob@contoso.com",

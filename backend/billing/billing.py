@@ -168,6 +168,13 @@ class PolarBilling:
         return (cust.get("email") or data.get("customer_email")
                 or (data.get("user") or {}).get("email"))
 
+    @staticmethod
+    def _order_subscription(data):
+        """The subscription a paid order belongs to, or None for a one-off
+        purchase. Only `reconcile` cares: entitlement it can re-derive is
+        entitlement a lost event costs nothing."""
+        return data.get("subscription_id") or (data.get("subscription") or {}).get("id")
+
     def _customer_email(self, customer_id):
         status, body = polar_api.get_customer(customer_id, self.token)
         if status != 200 or not isinstance(body, dict):
@@ -232,6 +239,19 @@ class PolarBilling:
         data = event.get("data") or {}
         if etype == "order.paid":
             target, why = "active", "order.paid"
+            if not self._order_subscription(data):
+                # Every other grant this system makes is re-derivable from
+                # Polar: `reconcile` reads subscription status and fixes an
+                # event that was lost, misrouted or never sent. A paid order
+                # with no subscription is the one grant that is not, because
+                # `entitlement_by_customer` lists subscriptions and this
+                # customer has none, so the event is the only record that this
+                # account should be active. Said out loud rather than refused:
+                # a one-off product is a decision someone may make in the Polar
+                # dashboard, and the thing to know is that its entitlement
+                # rests on one delivery instead of on a periodic sweep.
+                log("order.paid carries no subscription; the grant for "
+                    f"customer={self._customer_id(data)} is not reconcilable")
         elif etype and etype.startswith("subscription."):
             status = data.get("status")
             target = "active" if subscription_entitled(status) else "inactive"
@@ -323,9 +343,20 @@ class PolarBilling:
         return entitled
 
     def reconcile(self):
-        """Full sweep: bring every local account's plan_status in line with Polar.
-        The periodic safety net behind the instant webhook flip (catches missed
-        webhooks and lapsed subscriptions)."""
+        """Full sweep: bring plan_status in line with Polar for every customer
+        Polar names. The periodic safety net behind the two paths that settle a
+        single account -- `confirm_checkout` for the buyer on the return page,
+        and a webhook event the daemon applies -- catching a webhook that was
+        never delivered, one dropped after its retries, and a lapse that fires
+        no event anyone is listening for.
+
+        Scope, because it is narrower than "every local account": this iterates
+        Polar's subscriptions, so an account Polar has never heard of is left
+        exactly as it is. That is what keeps the sweep from deactivating the
+        accounts entitled by something other than a purchase -- the seeded owner
+        above all -- and it is also why a grant with no subscription behind it
+        is not repaired here. `list_subscriptions` passes no status filter, so a
+        canceled subscription is still returned and still deactivates."""
         entitled = self.entitlement_by_customer()
         activated = deactivated = skipped = unmatched = 0
         for customer_id, is_entitled in entitled.items():

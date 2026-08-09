@@ -263,3 +263,81 @@ def test_stamped_metadata_resolves_a_webhook_event(tmp_path, monkeypatch):
     }})
     assert "account=dan@x.com inactive->active" in res
     assert account.get_account("stranger@x.com") is None
+
+
+def test_order_paid_without_a_subscription_says_it_is_unreconcilable(
+        tmp_path, monkeypatch, capsys):
+    """Every other grant is re-derivable from Polar. This one is not: reconcile
+    reads subscriptions, and this customer has none, so the event is the only
+    record that the account should be active. It still activates -- a one-off
+    product is a decision someone may make in the dashboard -- but it says so."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("eve@x.com", status="inactive"),
+        _entry("frank@x.com", status="inactive"),
+    ]))
+    b = _billing(monkeypatch)
+
+    res = b.apply_event({"type": "order.paid", "data": {
+        "customer": {"email": "eve@x.com"}}})
+    assert "inactive->active" in res
+    assert "not reconcilable" in capsys.readouterr().err
+
+    res = b.apply_event({"type": "order.paid", "data": {
+        "customer": {"email": "frank@x.com"}, "subscription_id": "sub_1"}})
+    assert "inactive->active" in res
+    assert "not reconcilable" not in capsys.readouterr().err
+
+
+def _subscriptions(monkeypatch, pages):
+    """Stand in for Polar's paginated subscription list. `pages` is a list of
+    lists, one per page, so the pagination is exercised rather than assumed."""
+    def fake(organization_id, token, page=1, limit=100):
+        assert organization_id == "org" and token == "tok"
+        return 200, {"items": pages[page - 1],
+                     "pagination": {"max_page": len(pages)}}
+    monkeypatch.setattr(polar_api, "list_subscriptions", fake)
+
+
+def test_reconcile_settles_lapses_and_leaves_accounts_polar_never_named(
+        tmp_path, monkeypatch):
+    """The scope that matters twice over: this sweep is the only thing checking
+    entitlement against Polar for an event that was never delivered, and inside
+    the enclave it is the only thing checking entitlement at all. It must
+    deactivate a lapsed subscriber and must not touch an account Polar has never
+    heard of, which is what the seeded owner is."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("paid@x.com", status="inactive", polar_customer_id="cus_paid"),
+        _entry("lapsed@x.com", status="active", polar_customer_id="cus_lapsed"),
+        _entry("owner@x.com", status="active"),
+    ]))
+    _subscriptions(monkeypatch, [
+        [{"customer_id": "cus_paid", "status": "active"}],
+        [{"customer_id": "cus_lapsed", "status": "canceled"},
+         {"customer_id": "cus_gone", "status": "active"}],
+    ])
+
+    stats = _billing(monkeypatch).reconcile()
+
+    assert stats == {"customers": 3, "activated": 1, "deactivated": 1,
+                     "skipped": 0, "unmatched": 1}
+    assert account.get_account("paid@x.com") is not None
+    assert account.get_account("lapsed@x.com") is None
+    assert account.get_account("owner@x.com") is not None
+
+
+def test_reconcile_reads_a_customers_subscriptions_together(tmp_path, monkeypatch):
+    """One customer, two subscriptions, one of them entitled: entitled wins.
+    Deciding per row instead would let whichever row came last flip an account
+    that is paying for a second plan."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("gina@x.com", status="inactive", polar_customer_id="cus_g"),
+    ]))
+    _subscriptions(monkeypatch, [[
+        {"customer_id": "cus_g", "status": "canceled"},
+        {"customer_id": "cus_g", "status": "active"},
+    ]])
+
+    stats = _billing(monkeypatch).reconcile()
+
+    assert stats["activated"] == 1
+    assert account.get_account("gina@x.com") is not None

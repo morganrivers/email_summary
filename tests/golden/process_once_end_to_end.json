@@ -76,14 +76,14 @@
   "gmail_calls": [
     {
       "op": "fetch_since_history",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         "100"
       ]
     },
     {
       "op": "find_thread_by_from_subject",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         "bob@contoso.com",
         "Project sync"
@@ -91,7 +91,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "bob@contoso.com",
@@ -108,7 +108,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "bob@contoso.com",
@@ -128,7 +128,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "bob@contoso.com",
@@ -148,7 +148,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "alice@contoso.com",
@@ -165,7 +165,7 @@
     },
     {
       "op": "create_event",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "kwargs": {
         "summary": "Meeting with Dave",
         "start_iso": "2026-07-21T15:00:00",

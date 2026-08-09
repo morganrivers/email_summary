@@ -1216,11 +1216,26 @@ def _telegram_section(acct, pending=None, error=None, notice=None):
 """
 
 
+def _available_providers():
+    """Which inference providers this deployment can reach.
+
+    Asked of the daemon rather than answered here. The question is decided by
+    the inference API keys, and this process holding two live keys to answer a
+    yes/no question was the only reason it had them. The catalog itself is not
+    secret, so only the names cross and the labels come from our own copy.
+
+    `HandoffUnavailable` propagates. Returning an empty list on a daemon that is
+    down would render exactly like a deployment with one provider configured,
+    which is a silent lie on a settings page and, on the POST path, an accept of
+    a value nothing checked."""
+    return llm_client.providers_named(handoff.providers())
+
+
 def _provider_section(acct):
     """The inference-provider radio group. Rendered only when this box has keys
     for more than one provider: with a single option there is no choice to make,
     and showing a locked control invites support mail about it."""
-    providers = llm_client.available_providers()
+    providers = _available_providers()
     if len(providers) < 2:
         return ""
     current = acct.inference_provider or llm_client.DEFAULT_PROVIDER
@@ -1694,7 +1709,17 @@ class Handler(BaseHTTPRequestHandler):
             acct = self._require_auth()
             if acct is None:
                 return
-            return self._send(200, _page_settings(acct))
+            try:
+                return self._send(200, _page_settings(acct))
+            except handoff.HandoffUnavailable as e:
+                # The page asks the daemon which inference providers exist.
+                # Rendering without that answer would show the provider choice
+                # as though this deployment had one provider, so the page is
+                # withheld rather than quietly changed.
+                log(f"settings could not reach the daemon: {e}")
+                return self._send(503, _page_error(
+                    503, "Settings are temporarily unavailable. "
+                         "Please try again in a few minutes."))
 
         if path == "/billing":
             acct = self._require_auth()
@@ -1785,32 +1810,42 @@ class Handler(BaseHTTPRequestHandler):
             form = self._read_body()
             if form is None:
                 return self._send(400, _page_error(400, "Malformed request."))
-            tz = form.get("timezone", "").strip() or account.DEFAULT_TIMEZONE
-            if not _valid_timezone(tz):
-                return self._send(200, _page_settings(
-                    acct, settings_error=f"{tz} is not a known timezone name."))
-            provider = form.get("inference_provider", "").strip() or None
-            offered = {p.name for p in llm_client.available_providers()}
-            if provider is not None and provider not in offered:
-                return self._send(200, _page_settings(
-                    acct, settings_error=f"{provider} is not an available inference provider."))
-            analyzer = (bool(form.get("pii_analyzer"))
-                        if pseudonymizer.analyzer_available() else None)
-            # "" is a real value here (clear the calendar), so it is checked for
-            # shape only when it is not empty. account.set_settings asserts the
-            # same rule, which is what makes this a message rather than a 500.
-            calendar = form.get("community_calendar", "").strip().lower()
-            if calendar and not account.CALENDAR_ID_RE.fullmatch(calendar):
-                return self._send(200, _page_settings(acct, settings_error=(
-                    f"{calendar} is not a calendar id; it looks like an address, "
-                    "for example something@group.calendar.google.com.")))
-            acct = account.set_settings(
-                acct.id, timezone=tz, auto_schedule=bool(form.get("auto_schedule")),
-                inference_provider=provider, pii_analyzer=analyzer,
-                ban_dashes=bool(form.get("ban_dashes")),
-                community_calendar=calendar,
-            )
-            return self._send(200, _page_settings(acct, saved=True))
+            try:
+                tz = form.get("timezone", "").strip() or account.DEFAULT_TIMEZONE
+                if not _valid_timezone(tz):
+                    return self._send(200, _page_settings(
+                        acct, settings_error=f"{tz} is not a known timezone name."))
+                provider = form.get("inference_provider", "").strip() or None
+                # Fails closed with the rest of the form: the daemon decides
+                # which providers exist, and a saved preference it does not
+                # recognise is an account whose drafting raises rather than
+                # substitutes. Nothing is written until this passes.
+                offered = {p.name for p in _available_providers()}
+                if provider is not None and provider not in offered:
+                    return self._send(200, _page_settings(
+                        acct, settings_error=f"{provider} is not an available inference provider."))
+                analyzer = (bool(form.get("pii_analyzer"))
+                            if pseudonymizer.analyzer_available() else None)
+                # "" is a real value here (clear the calendar), so it is checked for
+                # shape only when it is not empty. account.set_settings asserts the
+                # same rule, which is what makes this a message rather than a 500.
+                calendar = form.get("community_calendar", "").strip().lower()
+                if calendar and not account.CALENDAR_ID_RE.fullmatch(calendar):
+                    return self._send(200, _page_settings(acct, settings_error=(
+                        f"{calendar} is not a calendar id; it looks like an address, "
+                        "for example something@group.calendar.google.com.")))
+                acct = account.set_settings(
+                    acct.id, timezone=tz, auto_schedule=bool(form.get("auto_schedule")),
+                    inference_provider=provider, pii_analyzer=analyzer,
+                    ban_dashes=bool(form.get("ban_dashes")),
+                    community_calendar=calendar,
+                )
+                return self._send(200, _page_settings(acct, saved=True))
+            except handoff.HandoffUnavailable as e:
+                log(f"settings save could not reach the daemon: {e}")
+                return self._send(503, _page_error(
+                    503, "Settings are temporarily unavailable. "
+                         "Please try again in a few minutes."))
 
         # One route for both directions. Which change this is comes back from
         # the daemon, read off the account it holds: a page that named the

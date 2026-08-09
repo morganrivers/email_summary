@@ -26,6 +26,7 @@ what say which of them may read a given file. See ``shared_dir`` below.
 
 import grp
 import os
+import pwd
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +61,14 @@ DATA_GROUP = "letterlock-data"
 # own group. Splitting the file itself, so the web tier never sees the
 # inference keys, is a separate change: this one is about mailbox access.
 SECRETS_GROUP = "letterlock-secrets"
+
+# The account the web UI runs as, named here because two things need to agree
+# about it: the deploy that creates it from `User=` in the drop-in, and
+# `custody/handoff_server.py`, which is the one place a uid is checked rather
+# than assumed. The socket's mode is still the grant; this name is what lets
+# the listener refuse a peer the mode should never have admitted, so a widening
+# from some future path change is a refusal in a log rather than an open door.
+WEB_USER = "letterlock-web"
 
 # The group holding the wake path: state/wake.fifo and the two wake_queue files.
 # Its members are the mail uid and the Gmail push receiver, and nobody else.
@@ -130,6 +139,20 @@ def wake_gid():
 
 def billing_queue_gid():
     return _gid(BILLING_QUEUE_GROUP)
+
+
+def web_uid():
+    """The web tier's uid, or None where that account does not exist.
+
+    None is a laptop, where the web UI and the daemon are the same person and
+    the handoff peer check passes on the caller's own uid instead. It is not a
+    reason to skip the check: an account that should exist and does not is a
+    box where nothing runs as `WEB_USER` either, so refusing everything but our
+    own uid is the correct answer in both cases."""
+    try:
+        return pwd.getpwnam(WEB_USER).pw_uid
+    except KeyError:
+        return None
 
 
 def _adopt_group(path, gid):

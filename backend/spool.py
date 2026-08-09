@@ -63,6 +63,20 @@ class Spool:
             with open(self._ready(self.path), "a") as qf:
                 qf.write(json.dumps(entry) + "\n")
 
+    def pending(self):
+        """Whether a drain would return anything, without consuming it.
+
+        `drain()` clears the spool, so a caller that cannot yet act on what it
+        drained has already lost it. This is the cheap check that lets such a
+        caller build what it needs first and leave the entries alone if it
+        cannot. Unlocked and approximate by design: it is a hint that work
+        exists, and every answer it gives is re-decided under the lock by the
+        drain that follows."""
+        try:
+            return self.path.stat().st_size > 0
+        except FileNotFoundError:
+            return False
+
     def drain(self):
         """Every entry written since the last drain, and clear the spool."""
         paths.ensure_run_dir()

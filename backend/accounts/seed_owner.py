@@ -3,8 +3,9 @@
 Before this existed, a box with no manifest fell back to an implicit account.
 That fallback ended the instant anyone signed up -- the manifest then existed,
 so the fallback stopped, and the owner (who had no entry) silently vanished from
-routing. The fix is to make the owner an ordinary entry: row one, active, with
-the same creds and history cursor the box is already using.
+routing. The fix is to make the owner an ordinary entry: row one, active,
+with no special-cased id or state path -- the owner is seeded the same shape
+of account a signup gets, keyed by the owner's own address.
 
 Idempotent. Running it twice is a no-op beyond rewriting the same values, and it
 will not clobber a plan_status that billing has since changed -- except for
@@ -51,7 +52,6 @@ def owner_entry_args():
         "last": identity.last,
         "first_aliases": tuple(identity.first_aliases),
         "telegram_chat_id": owner.telegram.chat_id,
-        "state_file": paths.relative_if_inside(owner.state.path),
         "plan_status": "active",
         "timezone": owner.timezone,
         "auto_schedule": owner.auto_schedule,

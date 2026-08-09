@@ -56,10 +56,12 @@ CLASSIFIER_PROMPT = (
     "Include one entry per input email. Keep each reason to one short sentence."
 )
 
+OUTPUT_FORMAT_RULE = "No subject line. No commentary. No markdown fences. Plain text only."
+
 DRAFTER_INSTRUCTION = (
     "\n\nWrite a reply email that follows the voice profile above. "
     "Output the email body only, including the greeting and sign-off as the profile dictates. "
-    "No subject line. No commentary. No markdown fences. Plain text only."
+    f"{OUTPUT_FORMAT_RULE}"
 )
 
 

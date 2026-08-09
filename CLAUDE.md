@@ -161,6 +161,58 @@ model to switch it on; `pseudonymizer.analyzer_available()` detects it. pip neve
 uninstalls, so a box that already has it keeps it until the venv is rebuilt. The
 image inherits the default, since a commented-out pin is not rendered.
 
+## How the enclave is split
+
+Three containers from one image, not four processes under one uid.
+`deploy/phala/docker-compose.yml` names a role per service (`mail`, `web`,
+`hook`), `flake.nix` bakes the three accounts and the two shared groups
+(`letterlock-data`, `letterlock-wake`) into `/etc/passwd` and `/etc/group` under
+the same names `backend/paths.py` resolves, so one piece of code sets modes on
+the box and in the image. TDX answers the host operator; it does nothing about a
+bug in our own code, which is what this answers.
+
+The compose file is the partition and not merely its description. dstack
+decrypts `.encrypted-env` to the guest filesystem, `app-compose.service` reads
+it with `EnvironmentFile=` and `app-compose.sh` runs `docker compose up` with no
+`--env-file`, so the full secret set lives in the compose *process* environment
+and a container gets exactly what its own `environment:` block interpolates.
+Since that file's hash is the dstack `compose-hash` measured into RTMR3, the
+partition is attested: move `SESSION_SECRET` to the mail container and
+`cosigner/attest.py` stops accepting the client certificate. Two rules follow —
+never bind-mount `/dstack/.host-shared` (it holds the whole decrypted set), and
+every interpolated name must also be in `allowed_envs` in `app-compose.json`.
+
+`hook` gets no `database/` and no guest-agent socket, and so runs no attestation
+gate: that socket is unauthenticated and `GetKey` takes a caller-supplied
+derivation path, so anything able to open it derives the app's sealing key
+whatever uid it is. `web` does need it — `open_dek` and the co-signer client
+cert are both a document render away — so its isolation is the box's:
+`token.bin` at 0600 to the mail uid. Membership is spelled as `group_add:`
+because a numeric `user:` skips the `/etc/group` lookup a username triggers.
+`tests/test_enclave_boundary.py` pins all of it, and there is deliberately no
+role that starts everything.
+
+No role is a Polar receiver, so entitlement inside the enclave is exactly two
+things: `confirm_checkout()` in `web`, which settles the buyer on the return
+page synchronously, and the 3-hourly `billing_poller` reconcile in `mail`'s
+crontab. The reconcile is in the mail role because it writes `plan_status` and
+that is the role that writes the manifest; on the box the same sweep is a
+`.timer` and merely a safety net, here it is the only thing a renewal or a
+cancellation travels through. Adding a receiver container would need a fourth
+account, the billing spool group, its own slice of the compose environment and
+public ingress to a port — a partition change, and one nobody should make by
+adding a service block alone.
+
+`web` carries no inference key. Which providers Settings offers is decided by
+whether their keys are present, and answering that yes/no question was the only
+reason that process held two live keys; `handoff.providers()` asks the mail role
+and gets catalog names back, never a key, cached for the process lifetime since
+a key cannot change under a running one. `llm_client.available_provider_names()`
+and `providers_named()` are the two halves. The cost is that `/settings` returns
+503 while the mail role is down, in both directions: the POST validates the
+submitted provider against the same answer, so an outage refuses the save rather
+than accepting a value nothing checked.
+
 ## What the enclave image carries
 
 `deploy/phala/image_files.nix` is the image's file list and `flake.nix` copies
@@ -261,11 +313,19 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
 - `billing_queue.py` — between the Polar receiver and the daemon. The receiver
   used to flip `plan_status` itself, which made a signature verifier a writer of
   the manifest. Two costs, both deliberate: Polar is acked on spool rather than
-  on apply (the 3-hourly `billing-poller` reconcile is the backstop, reading
-  entitlement from Polar rather than from an event body), and activation lands
-  within `WAKE_POLL_SECONDS` instead of instantly (`confirm_checkout()` already
-  settles the buyer watching the return page, synchronously and independent of
-  this path).
+  on apply, and activation lands within `WAKE_POLL_SECONDS` instead of instantly
+  (`confirm_checkout()` already settles the buyer watching the return page,
+  synchronously and independent of this path).
+  Acking early means nothing upstream resends, so a failed event is put back
+  with its attempt count (`retry()`, `MAX_ATTEMPTS`) and the drop after that
+  alerts rather than logs — the alert is on the drop and not the attempts, or a
+  timed-out Polar call pages someone every five minutes. Under that sits the
+  3-hourly `billing-poller` reconcile, reading entitlement from Polar rather
+  than from an event body. What it re-derives is *subscription status*, so a
+  lost `subscription.*` event heals within one sweep; an `order.paid` carrying
+  no `subscription_id` is the one grant it cannot re-derive, and `apply_event()`
+  logs that rather than refusing it. The sweep visits customers Polar names, so
+  an account Polar never heard of (the seeded owner) is never touched by it.
 - `email_summary.py` — daily summary, `email-summary.timer` (05:00 UTC). Sweeps
   every active account via `mailbox.fetch_daily(account)`, delivers to
   `account.telegram`, skips accounts with no linked chat.
@@ -432,14 +492,28 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   because the *decision* is not the web tier's to make (`chat_link`). The two
   action names live here because they are what the answer is called on the wire,
   and because the asking side must be able to read them without importing the
-  module holding the bypass. Everything else the web UI does with an account
-  needs the data key and not a token, and it gets that from the co-signer
-  directly.
+  module holding the bypass. `providers` is a third reason again: the answer is
+  a function of the inference API keys, and holding two live keys to answer a
+  yes/no question was the only thing keeping them in the web tier. Everything
+  else the web UI does with an account needs the data key and not a token, and
+  it gets that from the co-signer directly.
   A unix socket rather than the wake spool because the spool is one way: a
   synchronous sign-in would poll for a result file, and that file would hold a
   live authorization code at rest. It is `state/custody.sock` at 0660 in a setgid
   directory, so the two uids in `letterlock-data` are the only ones that can
   open it.
+  The mode is the grant and `_may_connect()` is a second check of the same fact,
+  not a replacement: every way that mode can widen is silent (`file_mode()`
+  reads a group that may not exist, the group comes from a setgid bit on
+  `state/`, `chmod_if_owned` no-ops on a file owned by someone else), and the
+  operations behind it mint consent URLs and exchange authorization codes. So
+  the listener reads `SO_PEERCRED` and admits our own uid and `paths.web_uid()`
+  alone. A kernel that will not answer is refused rather than assumed, and root
+  is refused because no correct caller is root — not as a security claim, since
+  root reads this process's memory anyway. What the socket does **not** do is
+  authenticate the end user: the daemon takes `account_id` as an argument and
+  acts on it, because the web tier is what decides who is signed in. That is why
+  `chat_link` exists for the one field where trusting it was too much.
   `HandoffUnavailable` is never caught into a fallback that does the work
   locally: a web process that exchanges the code itself is a web process holding
   a refresh token, which is the whole thing this removes. It renders a 503.

@@ -95,7 +95,7 @@
   "gmail_calls": [
     {
       "op": "list_events",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         "2026-07-23T00:00:00Z",
         "2026-07-24T00:00:00Z",
@@ -104,7 +104,7 @@
     },
     {
       "op": "submit",
-      "account": "default",
+      "account": "jordan.avery@example.com",
       "args": [
         {
           "to": "alice@contoso.com",

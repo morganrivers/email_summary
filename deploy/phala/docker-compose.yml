@@ -1,61 +1,176 @@
+# Three containers from one image, because one container was one uid.
+#
+# This file used to run a single service whose entrypoint started the mail
+# daemon, the Pub/Sub receiver and the web server as children of one shell. That
+# meant one uid (root, since nothing set `user:`) and one process environment
+# holding every secret, so a parsing bug in the web server was every mailbox in
+# the enclave -- exactly what `deploy/hetzner/*.service.d/` stopped being true on
+# the box in commit 01ba733. TDX defends against the host operator; it does
+# nothing about a bug in our own code, and the two are different adversaries.
+#
+# What makes this stronger here than on the box: dstack embeds this file in
+# app-compose.json, whose hash is extended as the `compose-hash` launch event
+# and measured into RTMR3. So which process runs as which account, and which
+# secrets each one is handed, is *attested* rather than merely configured. An
+# operator who moves SESSION_SECRET into the mail container changes the
+# measurement, and `cosigner/attest.py` stops accepting the client certificate.
+# The file modes on the Hetzner box are checkable by nobody but the box.
+#
+# How the secrets actually arrive, since it decides everything below. dstack
+# decrypts `.encrypted-env` to `/dstack/.host-shared/.decrypted-env` on the
+# guest filesystem, keeping only names listed in `allowed_envs`;
+# `app-compose.service` reads it with `EnvironmentFile=` and `app-compose.sh`
+# runs `docker compose up` with no `--env-file` and no passthrough flag. So the
+# full set lives in the *compose process* environment, outside every container,
+# and a container receives exactly what its own `environment:` block names.
+# Interpolation is the partition. Two rules follow:
+#
+#   * Never bind-mount /dstack/.host-shared into a container. `.decrypted-env`
+#     is written with a bare fs::write and no mode, and it is the whole set.
+#   * Every name interpolated below must also appear in `allowed_envs` in
+#     app-compose.json, or it decrypts to nothing and the service starts
+#     unconfigured. That list is set at deploy time by the phala CLI and is not
+#     in this repository.
+#
+# NOTE: none of this has been run in a CVM. It is derived from dstack's source
+# (dstack-util/src/system_setup.rs, os/common/rootfs/app-compose.{service,sh}),
+# and the boot of each role should be watched the first time it deploys.
+
+x-common: &common
+  image: tee-email-bot:latest
+  restart: always
+  environment: &common-env
+    # Fail-closed attestation gate; see backend/tee/tee_boot.py. Also what makes
+    # backend/secrets.py read no file at all, which is why no service below
+    # mounts one.
+    TEE_REQUIRED: "1"
+    EXPECTED_COMPOSE_HASH: "${EXPECTED_COMPOSE_HASH:-}"
+
 services:
-  email:
+  # The only role that opens a mailbox. Holds the Google client credentials, the
+  # inference keys and the Telegram token, and is the only account that can read
+  # database/<id>/token.bin (0600 to this uid, set by backend/paths.py).
+  # Applies spooled Polar events, which is why it carries the Polar API token.
+  mail:
+    <<: *common
     # This line is rewritten to a pinned registry digest by
     #   REGISTRY=<repo> deploy/phala/build_and_publish.sh --push
     # It must carry a literal @sha256 digest in production (not a tag): the
     # compose file is measured into the dstack attestation, so a mutable tag or
     # a ${VAR} would let the operator swap the image and break the trust story.
-    # The bare tag below is only a pre-publish placeholder.
-    image: tee-email-bot:latest
-    restart: always
-    ports:
-      - "8787:8787"
+    # The bare tag in x-common is only a pre-publish placeholder.
+    command: ["mail"]
+    user: "10001:10001"
+    # The enclave's SupplementaryGroups=, and it has to be spelled out: a
+    # numeric `user:` makes the runtime skip the /etc/group lookup that a
+    # username would trigger, so the accounts baked into the image would carry
+    # no membership at all and database/ at 2770 would be unreadable. 10010 is
+    # letterlock-data, 10011 letterlock-wake -- see the `accounts` set in
+    # flake.nix, which is where both numbers and the names come from.
+    group_add: ["10010", "10011"]
     environment:
-      WEBHOOK_HOST: "0.0.0.0"
-      WEBHOOK_PORT: "8787"
-      WEBHOOK_AUD: "${WEBHOOK_AUD}"
-      PUBSUB_SERVICE_ACCOUNT: "${PUBSUB_SERVICE_ACCOUNT}"
-      # Track F3: make the attest-before-run gate fail closed. tee_boot aborts
-      # unless the CVM is attested and the KMS released keys + secrets.
-      TEE_REQUIRED: "1"
-      # Optional belt-and-suspenders: the compose_hash the guest agent must
-      # report. The KMS is the real enforcer; this catches config drift early.
-      EXPECTED_COMPOSE_HASH: "${EXPECTED_COMPOSE_HASH:-}"
+      <<: *common-env
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      NEARAI_API_KEY: "${NEARAI_API_KEY:-}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      GOOGLE_OAUTH_CLIENT_ID: "${GOOGLE_OAUTH_CLIENT_ID:-}"
+      GOOGLE_OAUTH_CLIENT_SECRET: "${GOOGLE_OAUTH_CLIENT_SECRET:-}"
+      POLAR_API_TOKEN: "${POLAR_API_TOKEN:-}"
+      POLAR_ORGANIZATION_ID: "${POLAR_ORGANIZATION_ID:-}"
+      POLAR_PRODUCT_ID: "${POLAR_PRODUCT_ID:-}"
+      POLAR_SANDBOX: "${POLAR_SANDBOX:-0}"
       # The co-signer holding the outer half of every token's custody. Empty
       # falls back to the default host in backend/site.py. This enclave
       # processes no mail at all while that box is unreachable, by design: see
       # docs/plan_token_custody.md §1 on the availability trade.
       LETTERLOCK_COSIGNER_URL: "${LETTERLOCK_COSIGNER_URL:-}"
-    # Secrets (the LLM keys, the Telegram creds, the Polar keys, SESSION_SECRET
-    # and the Google OAuth client) are injected post-attestation via dstack
-    # encrypted environment variables:
-    # encrypted to the app KMS key, decrypted only inside the attested CVM, never
-    # baked into the measured image. Encrypt them with the phala CLI at deploy
-    # time; the guest sees them as env once the measurement is authorized.
-    #
-    # There is deliberately no `env_file: /app/.env` here. It was mounted with
-    # `required: false`, which made a cleartext secrets file on the volume a
-    # supported fallback -- a copy the KMS does not gate and the attestation does
-    # not cover. tee_boot now fails closed if that file exists at all, so adding
-    # the mount back stops the enclave from booting rather than silently
-    # weakening it. backend/secrets.py is the matching rule on the app side: it
-    # reads no file under TEE_REQUIRED.
-    #
-    # GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET are injected the same
-    # way, and there is deliberately no `/app/.gmail-mcp` volume any more: that
-    # mount existed to carry gcp-oauth.keys.json, the widest-blast-radius value
-    # here and the last one read off disk. oauth_app.load_keys() refuses the file
-    # under TEE_REQUIRED and the boot gate refuses to start with one present, so
-    # re-adding the volume stops the enclave booting rather than quietly putting
-    # the client secret back outside the KMS.
     volumes:
       - database:/app/database
-      # RA-TLS material + boot attestation record written by tee_boot; tmpfs so
-      # the enclave-held private key never lands on the encrypted volume at rest.
-      - type: tmpfs
-        target: /app/attestation
+      - state:/app/state
       # dstack guest-agent socket: in-enclave KMS unseal + on-demand attestation.
       - /var/run/dstack.sock:/var/run/dstack.sock
+      # RA-TLS material + boot attestation record written by tee_boot; tmpfs so
+      # the enclave-held private key never lands on the encrypted volume at
+      # rest. Per container, not shared: each role derives its own client
+      # certificate from GetTlsKey, so no private key crosses a container
+      # boundary. Mode 0777 because the tmpfs is created by the runtime as root
+      # and the container's single process is not; tee_boot chmods ra_tls.key
+      # to 0600 itself, and nothing else runs in here to read it.
+      - type: tmpfs
+        target: /app/attestation
+        tmpfs:
+          mode: 0777
+
+  # The product UI. Holds a data key for rendering an account's own documents
+  # and so runs the attestation gate, but never a Google token: token.bin is
+  # 0600 to the mail uid, and the consent URL, the OAuth callback and voice
+  # generation cross to the mail role over backend/custody/handoff.py.
+  #
+  # It carries no inference key. Which providers Settings offers is decided by
+  # whether their keys are present, and this process used to hold two live keys
+  # for no other purpose than answering that. It now asks the mail role over
+  # handoff.OP_PROVIDERS, which sends names and never a key. The cost is that
+  # /settings returns 503 while the mail role is down rather than rendering as
+  # though one provider were configured.
+  web:
+    <<: *common
+    command: ["web"]
+    user: "10002:10002"
+    # letterlock-data only. Not letterlock-wake: writing the wake spool starts a
+    # drafting pass against an account of the writer's choosing and spends that
+    # account's co-signer budget, which is the same reason the web uid is kept
+    # out of it on the box.
+    group_add: ["10010"]
+    environment:
+      <<: *common-env
+      SESSION_SECRET: "${SESSION_SECRET:-}"
+      SESSION_SECRET_PREVIOUS: "${SESSION_SECRET_PREVIOUS:-}"
+      POLAR_API_TOKEN: "${POLAR_API_TOKEN:-}"
+      POLAR_ORGANIZATION_ID: "${POLAR_ORGANIZATION_ID:-}"
+      POLAR_PRODUCT_ID: "${POLAR_PRODUCT_ID:-}"
+      POLAR_CHECKOUT_URL: "${POLAR_CHECKOUT_URL:-}"
+      POLAR_SANDBOX: "${POLAR_SANDBOX:-0}"
+      LETTERLOCK_COSIGNER_URL: "${LETTERLOCK_COSIGNER_URL:-}"
+    volumes:
+      - database:/app/database
+      - state:/app/state
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - type: tmpfs
+        target: /app/attestation
+        tmpfs:
+          mode: 0777
+
+  # Verifies the Pub/Sub OIDC JWT and appends an address to the wake spool. The
+  # cheapest role to isolate and the most exposed: it is the process Google
+  # posts to, and it needs nothing.
+  #
+  # No database volume, so it cannot read the account list -- it does not
+  # resolve the address it receives, the mail role does. No guest-agent socket,
+  # which is why it runs no attestation gate: it holds no key to unseal and no
+  # certificate to obtain, and the address it spools is acted on by a role that
+  # is gated. Withholding the socket is the whole point, since that socket is
+  # unauthenticated and GetKey takes a caller-supplied derivation path, so any
+  # process that can open it can derive this app's sealing key.
+  hook:
+    <<: *common
+    command: ["hook"]
+    user: "10003:10003"
+    # letterlock-wake alone: the FIFO and the wake spool, and nothing else in
+    # state/. Deliberately not letterlock-data, which is what keeps the account
+    # list out of reach of the process Google posts to.
+    group_add: ["10011"]
+    ports:
+      - "8787:8787"
+    environment:
+      <<: *common-env
+      WEBHOOK_HOST: "0.0.0.0"
+      WEBHOOK_PORT: "8787"
+      WEBHOOK_AUD: "${WEBHOOK_AUD}"
+      PUBSUB_SERVICE_ACCOUNT: "${PUBSUB_SERVICE_ACCOUNT}"
+    volumes:
+      - state:/app/state
 
 volumes:
   database:
+  state:

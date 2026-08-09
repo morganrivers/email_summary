@@ -105,7 +105,7 @@ def _google_hosts():
     return {
         _host(oauth_app.AUTH_ENDPOINT),
         _host(oauth_app.TOKEN_ENDPOINT),
-        _host(gmail_hook_server.TOKENINFO_URL),
+        _host(gmail_hook_server.CERTS_URL),
         _host(calendar_public.ICS_ROOT),
     } | set(GOOGLE_API_HOSTS)
 

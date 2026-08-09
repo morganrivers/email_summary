@@ -228,7 +228,7 @@ def test_a_tee_box_refuses_a_dev_key(enclave, monkeypatch):
     socket in this test, and the environment key must not stand in for the KMS."""
     monkeypatch.setenv("TEE_REQUIRED", "1")
     monkeypatch.setattr(wrapping, "_app_secret_cache", None)
-    with pytest.raises(AssertionError, match="KMS"):
+    with pytest.raises(wrapping.CustodyError, match="KMS"):
         wrapping.app_secret()
 
 
@@ -511,7 +511,7 @@ def test_a_private_dpop_key_is_refused(monkeypatch):
     monkeypatch.setattr(cosigner, "_request", lambda *a, **k: {
         "jwk": {"kty": "EC", "crv": "P-256", "x": "a", "y": "b", "d": "private"}
     })
-    with pytest.raises(AssertionError, match="private"):
+    with pytest.raises(cosigner.CoSignerUnavailable, match="private"):
         cosigner.dpop_jwk()
 
 
