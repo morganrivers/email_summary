@@ -192,7 +192,7 @@ def create_event(account, *, summary, start_iso, end_iso,
 
     Three things are deliberately not parameters: the calendar (WRITE_CALENDAR),
     the attendee list, and whether invites go out (`sendUpdates="none"`). Every
-    field that is a parameter is text, and the caps are asserted rather than
+    field that is a parameter is text, and the caps are refused rather than
     truncated here: text this long did not come from an event, it came from
     something filling an event with a payload, and the caller that fed it is the
     one that should hear about it.
@@ -203,15 +203,18 @@ def create_event(account, *, summary, start_iso, end_iso,
     assert summary and start_iso and end_iso, (
         "create_event requires summary, start_iso, end_iso"
     )
-    assert len(summary) <= MAX_SUMMARY, (
-        f"event summary is {len(summary)} chars, limit {MAX_SUMMARY}"
-    )
-    assert len(location) <= MAX_LOCATION, (
-        f"event location is {len(location)} chars, limit {MAX_LOCATION}"
-    )
-    assert len(description) <= MAX_DESCRIPTION, (
-        f"event description is {len(description)} chars, limit {MAX_DESCRIPTION}"
-    )
+    # Raised and not asserted: the text is model-generated, so an over-long
+    # field is a value to refuse at the write boundary rather than a bug in the
+    # caller. `schedule_from_sent._normalize()` truncates to these same
+    # constants, so reaching here means that path was bypassed.
+    if len(summary) > MAX_SUMMARY:
+        raise ValueError(f"event summary is {len(summary)} chars, limit {MAX_SUMMARY}")
+    if len(location) > MAX_LOCATION:
+        raise ValueError(f"event location is {len(location)} chars, limit {MAX_LOCATION}")
+    if len(description) > MAX_DESCRIPTION:
+        raise ValueError(
+            f"event description is {len(description)} chars, limit {MAX_DESCRIPTION}"
+        )
     _require_private_calendar(account)
     body = {
         "summary": summary,

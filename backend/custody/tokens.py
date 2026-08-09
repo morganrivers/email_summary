@@ -202,7 +202,14 @@ def exchange_with_dpop(form, uid=None, proof=None, sign=None):
             "Google asked for a DPoP nonce and there is no way to sign a second "
             "proof for this request"
         )
-        assert nonce, "Google demanded a DPoP nonce without supplying one"
+        if not nonce:
+            # CustodyError and not ReauthRequired: the grant is not the problem,
+            # so telling the user to consent again would send them through a
+            # sign-in that fixes nothing. This is Google answering strangely and
+            # the operator is who needs to see it.
+            raise wrapping.CustodyError(
+                "Google demanded a DPoP nonce without supplying one"
+            )
         resp = _post_token(form, sign(nonce))
         if resp.headers.get("DPoP-Nonce"):
             _dpop_nonce = resp.headers["DPoP-Nonce"]
@@ -256,7 +263,12 @@ def _refresh(acct):
     finally:
         wrapping.zeroize(refresh_token)
     access = payload.get("access_token")
-    assert access, f"token endpoint returned no access_token for {uid}"
+    if not access:
+        # Same reason as the missing nonce above: a 200 with no access_token is
+        # not a refused grant, so it is not a re-consent.
+        raise wrapping.CustodyError(
+            f"token endpoint returned no access_token for {uid}"
+        )
     expires_in = int(payload.get("expires_in", 3600))
     expiry = (datetime.datetime.now(datetime.timezone.utc)
               + datetime.timedelta(seconds=expires_in) - EXPIRY_MARGIN)

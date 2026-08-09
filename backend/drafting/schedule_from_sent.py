@@ -78,11 +78,11 @@ def extract_events(client, email, identity, timezone="UTC"):
 def _normalize(event):
     """Validate + fill defaults. Returns a dict or None if not schedulable.
 
-    This is the model boundary, so it truncates where calendar_api asserts. The
+    This is the model boundary, so it truncates where calendar_api refuses. The
     limits are that module's, imported rather than restated: a model that quotes
     half an email into a description is a long description, not an incident, and
     an event nobody can read the whole of is still better than an alert per
-    chatty draft. calendar_api keeps the assert for the caller that has no such
+    chatty draft. calendar_api keeps the refusal for the caller that has no such
     excuse."""
     summary = (event.get("summary") or "").strip()[:calendar_api.MAX_SUMMARY]
     start = (event.get("start") or "").strip()

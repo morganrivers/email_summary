@@ -91,17 +91,20 @@ def app_secret():
         secret = _decode_kms_key(released.get("key"))
     else:
         dev = os.environ.get(DEV_SECRET_ENV, "")
-        assert not secrets.tee_required(), (
-            "TEE_REQUIRED is set but there is no dstack guest agent to release "
-            "the app secret. Refusing to protect refresh tokens with a key that "
-            "did not come from the KMS."
-        )
-        assert dev, (
-            f"no dstack guest agent and no {DEV_SECRET_ENV} in the environment. "
-            "Set one to run split custody on a dev box."
-        )
+        if secrets.tee_required():
+            raise CustodyError(
+                "TEE_REQUIRED is set but there is no dstack guest agent to release "
+                "the app secret. Refusing to protect refresh tokens with a key that "
+                "did not come from the KMS."
+            )
+        if not dev:
+            raise CustodyError(
+                f"no dstack guest agent and no {DEV_SECRET_ENV} in the environment. "
+                "Set one to run split custody on a dev box."
+            )
         secret = dev.encode()
-    assert len(secret) >= 16, f"app secret is only {len(secret)} bytes"
+    if len(secret) < 16:
+        raise CustodyError(f"app secret is only {len(secret)} bytes")
     _app_secret_cache = secret
     return secret
 

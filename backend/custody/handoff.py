@@ -124,10 +124,19 @@ class RemoteRefusal(Exception):
 
 
 def encode(payload):
+    """One framed message. Raises ValueError on a payload over the limit.
+
+    A refusal and not an assert even though this is the outbound side: the
+    `sign-in` payload carries the OAuth callback's query string, which a browser
+    supplies and which the request line lets run to about this limit on its own.
+    So an over-long payload is an input to refuse rather than a bug in the
+    caller. The inbound limit is separate and already enforced by
+    `read_line(conn, limit=MAX_BODY)`."""
     line = json.dumps(payload).encode(ENCODING)
-    assert len(line) <= MAX_BODY, (
-        f"handoff payload is {len(line)} bytes, over the {MAX_BODY} limit"
-    )
+    if len(line) > MAX_BODY:
+        raise ValueError(
+            f"handoff payload is {len(line)} bytes, over the {MAX_BODY} limit"
+        )
     return line + LINE_END
 
 
@@ -150,12 +159,15 @@ def read_line(conn, limit=MAX_BODY):
 def call(op, **args):
     """One request, one response. Raises `HandoffUnavailable` or `RemoteRefusal`."""
     assert op in OPS, f"{op!r} is not a handoff operation"
+    # Framed before the socket exists, so an over-long payload is reported as
+    # what it is rather than as a daemon that could not be reached.
+    line = encode({F_OP: op, F_ARGS: args})
     path = str(socket_path())
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(TIMEOUT)
     try:
         conn.connect(path)
-        conn.sendall(encode({F_OP: op, F_ARGS: args}))
+        conn.sendall(line)
         reply = read_line(conn)
     except (OSError, ValueError) as err:
         raise HandoffUnavailable(f"{op} could not reach {path}: {err}") from err

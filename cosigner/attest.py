@@ -38,6 +38,16 @@ from backend.tee.quote_policy import REQUIRED, Verdict
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "allowlist.json"
 
+
+class AttestationRefused(RuntimeError):
+    """This box will not attest, and will not proceed as though it had.
+
+    A refusal rather than an assert because it is the answer to a question an
+    operator got wrong, not an invariant this code can assume: it fires when the
+    configuration says both "do not verify" and "this is production", and every
+    caller of `mode()` has to fail rather than pick one."""
+
+
 _CACHE = quote_policy.VerdictCache()
 _POLICY = None
 
@@ -79,10 +89,11 @@ def mode():
     this box for production."""
     value = policy().mode(os.environ.get("COSIGNER_ATTESTATION"))
     if value == DEV_INSECURE:
-        assert os.environ.get("TEE_REQUIRED", "").strip() not in ("1", "true", "yes"), (
-            "attestation is dev-insecure but TEE_REQUIRED is set; refusing to "
-            "run unverified against an enclave that believes it is attested"
-        )
+        if os.environ.get("TEE_REQUIRED", "").strip() in ("1", "true", "yes"):
+            raise AttestationRefused(
+                "attestation is dev-insecure but TEE_REQUIRED is set; refusing to "
+                "run unverified against an enclave that believes it is attested"
+            )
     return value
 
 
@@ -92,7 +103,7 @@ def configured():
     rather than discovered by every unwrap failing."""
     try:
         current = mode()
-    except AssertionError as err:
+    except (quote_policy.AllowlistInvalid, AttestationRefused) as err:
         return str(err)
     if current == REQUIRED:
         if not policy().entries():

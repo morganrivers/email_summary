@@ -30,6 +30,7 @@ import harness
 import pytest
 import requests
 
+from backend.tee import quote_policy
 from cosigner import attest, audit, policy, protocol, retention
 
 # What the co-signer is given to call an account by: an opaque handle the
@@ -371,13 +372,13 @@ def test_dev_mode_refuses_to_run_on_a_provisioned_box(tmp_path, monkeypatch):
     }))
     monkeypatch.delenv("COSIGNER_ATTESTATION", raising=False)
     attest.reset_for_test(config)
-    with pytest.raises(AssertionError, match="provisioned for production"):
+    with pytest.raises(quote_policy.AllowlistInvalid, match="provisioned for production"):
         attest.mode()
 
     config.write_text(json.dumps({"mode": attest.DEV_INSECURE, "measurements": []}))
     attest.reset_for_test(config)
     monkeypatch.setenv("TEE_REQUIRED", "1")
-    with pytest.raises(AssertionError, match="TEE_REQUIRED"):
+    with pytest.raises(attest.AttestationRefused, match="TEE_REQUIRED"):
         attest.mode()
 
 
@@ -389,7 +390,7 @@ def test_allowlist_entry_must_pin_a_measurement(tmp_path, monkeypatch):
         "measurements": [{"name": "sloppy", "mr_td": None}],
     }))
     attest.reset_for_test(config)
-    with pytest.raises(AssertionError, match="does not pin mr_td"):
+    with pytest.raises(quote_policy.AllowlistInvalid, match="does not pin mr_td"):
         attest.match_allowlist({"mr_td": "aa"})
 
 

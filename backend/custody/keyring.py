@@ -85,6 +85,16 @@ class BadRecord(wrapping.CustodyError):
     a record from a schema this build predates."""
 
 
+class DataKeyExists(wrapping.CustodyError):
+    """This account already has a data key, and a second one would orphan every
+    file encrypted under the first.
+
+    Wrap-once, checked against what is on disk rather than against anything this
+    process knows, which is why it is a refusal: the record is a file another
+    process may have written since. The co-signer enforces the same rule, so
+    this is the local half of it and both halves have to fail closed."""
+
+
 # --- the record on disk ---------------------------------------------------
 
 def dek_path(uid):
@@ -178,10 +188,11 @@ def create(uid, handle):
     what it has just wrapped would be a metered round trip for a value already
     in hand."""
     account_store.check_handle(handle)
-    assert not has_key(uid), (
-        f"{uid} already has a data key; replacing it would orphan every file "
-        "encrypted under the old one"
-    )
+    if has_key(uid):
+        raise DataKeyExists(
+            f"{uid} already has a data key; replacing it would orphan every "
+            "file encrypted under the old one"
+        )
     dek = bytearray(wrapping.new_dek())
     outer = cosigner.wrap(handle, wrapping.seal_dek(handle, dek))
     path = store_record(uid, outer)
@@ -253,7 +264,7 @@ def forget(uid=None):
 
 
 def identify(account):
-    """(id, handle) for an account, or an assertion naming what is missing.
+    """(id, handle) for an account, or a refusal naming what is missing.
 
     Takes an Account, or the pair itself. The pair is for onboarding, which has
     to encrypt a refresh token before the manifest entry that would carry it
@@ -302,9 +313,8 @@ def encrypt(dek, handle, name, plaintext):
 def decrypt(dek, handle, name, blob):
     assert len(dek) == wrapping.KEY_LEN, f"a data key is {wrapping.KEY_LEN} bytes"
     assert name, "decrypt needs the name the ciphertext was stored as"
-    assert len(blob) > wrapping.NONCE_LEN + wrapping.TAG_LEN, (
-        f"{name} is {len(blob)} bytes, too short to be sealed output"
-    )
+    if len(blob) <= wrapping.NONCE_LEN + wrapping.TAG_LEN:
+        raise BadRecord(f"{name} is {len(blob)} bytes, too short to be sealed output")
     nonce, sealed = bytes(blob[:wrapping.NONCE_LEN]), bytes(blob[wrapping.NONCE_LEN:])
     try:
         return AESGCM(bytes(dek)).decrypt(nonce, sealed, aad(handle, name))

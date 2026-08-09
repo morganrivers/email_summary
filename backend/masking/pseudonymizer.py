@@ -42,6 +42,16 @@ _PHONE_RUN = re.compile(r"(?<!\w)\+?\d[\d\s().\-]{5,}\d(?!\w)")
 _MIN_PHONE_DIGITS = 7
 
 
+class MaskingFailed(RuntimeError):
+    """Masking did not produce text safe to send. Never caught into a send.
+
+    A raise rather than an assert because what fails these checks is the text
+    being masked -- an email body from a stranger, a contact number out of the
+    account's own data -- and refusing to send is the only safe answer. A caller
+    that turns this into "send it unmasked" has undone the control: there is no
+    degraded mode here, only a request that stops."""
+
+
 def _digits(s):
     return re.sub(r"\D", "", s)
 
@@ -85,7 +95,10 @@ class UserIdentity:
         self._phone_digits = []
         for p in phones:
             d = _digits(p)
-            assert len(d) >= _MIN_PHONE_DIGITS, f"phone {p!r} has too few digits to mask safely"
+            if len(d) < _MIN_PHONE_DIGITS:
+                raise MaskingFailed(
+                    f"phone {p!r} has too few digits to mask safely"
+                )
             self._phone_digits.append(d)
         self._rules = self._build_rules()
 
@@ -515,11 +528,12 @@ def pseudonymize(text, state):
         text = _pseudonymize_patterns(text, state)
 
     for token, count in before.items():
-        assert text.count(token) == count, (
-            f"masking rewrote a protected token: {count} occurrences went in "
-            f"and {text.count(token)} came out. A structural delimiter was "
-            f"treated as PII; see pseudonymizer.protect()."
-        )
+        if text.count(token) != count:
+            raise MaskingFailed(
+                f"masking rewrote a protected token: {count} occurrences went "
+                f"in and {text.count(token)} came out. A structural delimiter "
+                "was treated as PII; see pseudonymizer.protect()."
+            )
     return text
 
 

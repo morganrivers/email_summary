@@ -50,6 +50,17 @@ RECHECK_SECONDS = 24 * 3600
 FAILURE_RECHECK_SECONDS = 60
 
 
+class AllowlistInvalid(RuntimeError):
+    """The pin list cannot answer the question. Refuse rather than guess.
+
+    The allowlist is a file on disk edited by an operator, so a mode nobody
+    defined, a dev-insecure switch on a box that pins production measurements,
+    an entry with no ``mr_td`` and an empty binding are all bad input rather
+    than bugs in this module. Every one of them would otherwise widen what gets
+    accepted, and both callers verify in opposite directions, so both need a
+    type they can refuse on."""
+
+
 class Verdict:
     """The answer for one quote, plus what to write in the log."""
 
@@ -75,9 +86,11 @@ class Policy:
 
     def __init__(self, path):
         self.path = Path(path)
-        assert self.path.exists(), f"no attestation allowlist at {self.path}"
+        if not self.path.exists():
+            raise AllowlistInvalid(f"no attestation allowlist at {self.path}")
         self.data = json.loads(self.path.read_text())
-        assert isinstance(self.data, dict), f"{self.path} must hold an object"
+        if not isinstance(self.data, dict):
+            raise AllowlistInvalid(f"{self.path} must hold an object")
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -87,12 +100,13 @@ class Policy:
 
         The escape hatch is deliberately hard to leave on by accident: an
         allowlist with entries in it means somebody provisioned this box for
-        production, and then the assert fires at startup rather than after a
+        production, and then the refusal fires at startup rather than after a
         month of unverified calls."""
         value = (override or self.get("mode") or REQUIRED).strip()
-        assert value in (REQUIRED, DEV_INSECURE), f"unknown attestation mode {value!r}"
-        if value == DEV_INSECURE:
-            assert not self.entries(), (
+        if value not in (REQUIRED, DEV_INSECURE):
+            raise AllowlistInvalid(f"unknown attestation mode {value!r}")
+        if value == DEV_INSECURE and self.entries():
+            raise AllowlistInvalid(
                 "attestation is dev-insecure but the allowlist names authorized "
                 f"measurements ({self.path}); this box looks provisioned for production"
             )
@@ -118,7 +132,10 @@ class Policy:
         authorizes everything."""
         for entry in self.entries(scope):
             name = entry.get("name") or "unnamed"
-            assert entry.get("mr_td"), f"allowlist entry {name!r} does not pin mr_td"
+            if not entry.get("mr_td"):
+                raise AllowlistInvalid(
+                    f"allowlist entry {name!r} does not pin mr_td"
+                )
             if all(entry.get(f) is None or entry.get(f) == actual.get(f)
                    for f in MEASUREMENT_FIELDS):
                 return name
@@ -215,7 +232,8 @@ def verify(quote, policy, subject, expected_report_data, scope=None):
 
 
 def _binds(got, expected):
-    assert expected, "an empty binding would accept a quote bound to nothing"
+    if not expected:
+        raise AllowlistInvalid("an empty binding would accept a quote bound to nothing")
     return got[:len(expected)] == expected and not any(got[len(expected):])
 
 

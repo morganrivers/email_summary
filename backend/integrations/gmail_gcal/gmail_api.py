@@ -70,7 +70,8 @@ def profile_address(access_token):
     )
     resp.raise_for_status()
     address = (resp.json().get("emailAddress") or "").strip().lower()
-    assert address, "Gmail getProfile returned no emailAddress"
+    if not address:
+        raise ValueError("Gmail getProfile returned no emailAddress")
     return address
 
 

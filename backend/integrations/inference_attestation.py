@@ -139,7 +139,7 @@ def configured(providers):
     deploy time rather than by every draft failing."""
     try:
         current = mode()
-    except AssertionError as err:
+    except quote_policy.AllowlistInvalid as err:
         return str(err)
     if current == DEV_INSECURE:
         return None

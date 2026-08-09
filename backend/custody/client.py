@@ -122,20 +122,22 @@ def _client_identity():
     dev_cert = os.environ.get(CLIENT_CERT_ENV, "")
     dev_key = os.environ.get(CLIENT_KEY_ENV, "")
     if dev_cert and dev_key:
-        assert not secrets.tee_required(), (
-            "TEE_REQUIRED is set but the co-signer client certificate comes "
-            f"from {CLIENT_CERT_ENV}. Inside a CVM it must be RA-TLS material "
-            "from the guest agent, or the co-signer is authenticating a file "
-            "rather than a measurement."
-        )
+        if secrets.tee_required():
+            raise CustodyError(
+                "TEE_REQUIRED is set but the co-signer client certificate comes "
+                f"from {CLIENT_CERT_ENV}. Inside a CVM it must be RA-TLS material "
+                "from the guest agent, or the co-signer is authenticating a file "
+                "rather than a measurement."
+            )
         _client_identity_cache = (dev_cert, dev_key)
         return _client_identity_cache
     dstack = DstackClient()
     if not dstack.available():
-        assert not secrets.tee_required(), (
-            "TEE_REQUIRED is set but there is no dstack guest agent to issue an "
-            "RA-TLS client certificate."
-        )
+        if secrets.tee_required():
+            raise CustodyError(
+                "TEE_REQUIRED is set but there is no dstack guest agent to issue "
+                "an RA-TLS client certificate."
+            )
         return None
     try:
         tls = dstack.get_tls_key(
@@ -144,7 +146,8 @@ def _client_identity():
     except DstackError as err:
         raise CoSignerUnavailable(f"guest agent refused an RA-TLS client key: {err}")
     chain = tls.get("certificate_chain") or []
-    assert chain and tls.get("key"), "guest agent returned no RA-TLS keypair"
+    if not (chain and tls.get("key")):
+        raise CoSignerUnavailable("guest agent returned no RA-TLS keypair")
     out_dir = tee_boot.ATTEST_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     cert_path = out_dir / "cosigner_client.crt"
@@ -186,7 +189,8 @@ def _request(method, path, body=None):
         parsed = resp.json()
     except json.JSONDecodeError as err:
         raise CoSignerUnavailable(f"{method} {url} returned non-JSON: {err}") from err
-    assert isinstance(parsed, dict), f"{path} returned non-object: {parsed!r}"
+    if not isinstance(parsed, dict):
+        raise CoSignerUnavailable(f"{path} returned non-object: {parsed!r}")
     return parsed
 
 
@@ -197,13 +201,15 @@ def dpop_jwk():
     global _jwk_cache
     if _jwk_cache is None:
         jwk = _request("GET", protocol.DPOP_JWK_PATH).get(protocol.F_JWK)
-        assert isinstance(jwk, dict) and jwk.get("kty"), (
-            f"co-signer returned no usable DPoP JWK: {jwk!r}"
-        )
-        assert "d" not in jwk, (
-            "co-signer served a DPoP JWK containing a private key. The private "
-            "half must never leave that box; refusing to use it."
-        )
+        if not (isinstance(jwk, dict) and jwk.get("kty")):
+            raise CoSignerUnavailable(
+                f"co-signer returned no usable DPoP JWK: {jwk!r}"
+            )
+        if "d" in jwk:
+            raise CoSignerUnavailable(
+                "co-signer served a DPoP JWK containing a private key. The private "
+                "half must never leave that box; refusing to use it."
+            )
         _jwk_cache = jwk
     return _jwk_cache
 
@@ -233,7 +239,8 @@ def sign_dpop(htm, htu, nonce=None):
     if nonce:
         body[protocol.F_NONCE] = nonce
     proof = _request("POST", protocol.SIGN_DPOP_PATH, body).get(protocol.F_PROOF)
-    assert proof, "co-signer returned an empty DPoP proof"
+    if not proof:
+        raise CoSignerUnavailable("co-signer returned an empty DPoP proof")
     return proof
 
 
@@ -248,7 +255,8 @@ def wrap(handle, inner):
         "POST", protocol.WRAP_PATH,
         {protocol.F_UID: handle, protocol.F_INNER: protocol.b64(inner)},
     ).get(protocol.F_OUTER)
-    assert outer, "co-signer returned an empty outer ciphertext"
+    if not outer:
+        raise CoSignerUnavailable("co-signer returned an empty outer ciphertext")
     return protocol.unb64(outer)
 
 
@@ -268,10 +276,11 @@ def unwrap_and_sign(handle, outer, htm, htu, nonce=None):
         body[protocol.F_NONCE] = nonce
     answer = _request("POST", protocol.UNWRAP_AND_SIGN_PATH, body)
     inner, proof = answer.get(protocol.F_INNER), answer.get(protocol.F_PROOF)
-    assert inner and proof, (
-        f"co-signer answered /unwrap-and-sign without both fields: "
-        f"inner={bool(inner)} proof={bool(proof)}"
-    )
+    if not (inner and proof):
+        raise CoSignerUnavailable(
+            f"co-signer answered /unwrap-and-sign without both fields: "
+            f"inner={bool(inner)} proof={bool(proof)}"
+        )
     return protocol.unb64(inner), proof
 
 
@@ -288,7 +297,8 @@ def unwrap(handle, outer):
         "POST", protocol.UNWRAP_PATH,
         {protocol.F_UID: handle, protocol.F_OUTER: protocol.b64(outer)},
     ).get(protocol.F_INNER)
-    assert inner, "co-signer answered /unwrap with no inner ciphertext"
+    if not inner:
+        raise CoSignerUnavailable("co-signer answered /unwrap with no inner ciphertext")
     return protocol.unb64(inner)
 
 
@@ -304,7 +314,8 @@ def rewrap(handle, outer):
         "POST", protocol.REWRAP_PATH,
         {protocol.F_UID: handle, protocol.F_OUTER: protocol.b64(outer)},
     ).get(protocol.F_OUTER)
-    assert rewrapped, "co-signer answered /rewrap with no outer ciphertext"
+    if not rewrapped:
+        raise CoSignerUnavailable("co-signer answered /rewrap with no outer ciphertext")
     return protocol.unb64(rewrapped)
 
 
