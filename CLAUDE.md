@@ -127,6 +127,17 @@ flake8's engine, and two pins for one analyzer is two versions that can disagree
 about what a warning is. There is no formatter: `black` would reflow the tree in
 one commit and bury every diff under it.
 
+bandit runs from the same module and asks the third question: is this call one
+of the known-dangerous ones (`yaml.load`, `verify=False`, `shell=True`, an
+insecure hash, a request with no timeout). It reads no `setup.cfg`, so its one
+piece of configuration is `test_lint.SKIPS`, a check id to the reason it is
+wrong here every time — `B101` above all, since asserts in this tree are the
+control rather than a note about one and `runtime_guard` already refuses to
+start under `-O`. Anything not in that list is a `# nosec <id>  # reason` on the
+line, the way `# noqa` is already used; there are four. It scans the shipped
+packages and not `tests/`, where fake credentials and swallowed exceptions are
+the point.
+
 `python -m deploy.audit` says whether anything we ship has a known
 vulnerability. It audits `deploy/phala/uv.lock`, not `requirements.txt`: the lock
 is the full transitive closure. It runs from `tests/test_dependency_audit.py`
@@ -265,6 +276,15 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
   in `.env`: the receiver no longer calls Polar's API. Moving the value is a
   manual step, and until it moves the receiver has no secret and
   `deploy/preflight.py` reports the unit rather than restarting it.
+- `.env.alerts` — `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, and nothing else.
+  No Python reads it: `cosigner.service.d/20-cosigner.conf` takes it as
+  `EnvironmentFile=`, which systemd reads as root before dropping to that unit's
+  account, so the co-signer gets an alert channel without getting `.env` or the
+  group that opens it. Before this the unit was in `letterlock` alone, so
+  `TELEGRAM_BOT_TOKEN` was unset and every refused unwrap alerted nobody. The
+  `-` prefix means a box without the file still boots, since a co-signer that
+  refuses to start stops all mail. Create it by hand with those two values;
+  `chmod 600` is the deploy's job.
 - `.gmail-mcp/` — `gcp-oauth.keys.json`, the OAuth *app*'s client_id/secret. One
   app serves every user; no per-user token lives here. Read only through
   `gmail_gcal/oauth_app.py`, which prefers the injected

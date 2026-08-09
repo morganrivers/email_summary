@@ -51,7 +51,8 @@ def _request(method, endpoint, payload=None, token=None):
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT, context=_ctx) as resp:
+        with urllib.request.urlopen(  # nosec B310  # https from api_base, no caller URL
+                req, timeout=_TIMEOUT, context=_ctx) as resp:
             raw = resp.read().decode("utf-8") or "{}"
             return resp.status, json.loads(raw)
     except urllib.error.HTTPError as e:

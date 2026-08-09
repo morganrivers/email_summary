@@ -45,7 +45,7 @@ from backend.integrations.telegram import TelegramTarget  # noqa: E402
 from backend.masking import pseudonymizer  # noqa: E402
 from frontend import web_server as web  # noqa: E402
 
-OUT_DEFAULT = Path("/tmp/letterlock-pages")
+OUT_DEFAULT = Path("/tmp/letterlock-pages")  # nosec B108  # dev tool output, named on purpose
 
 # route -> output filename, used both to name files and to rewrite nav links.
 ROUTES = {

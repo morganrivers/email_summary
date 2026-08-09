@@ -201,7 +201,8 @@ def granted_since(since, action=None, uid=None):
     source of counts, so what it enforced and what this log shows cannot
     disagree. `action` is one action, a set of them, or None for all."""
     clause, action_args = _action_clause(action)
-    sql = "SELECT COUNT(*) FROM requests WHERE decision = ? AND ts >= ?" + clause
+    sql = ("SELECT COUNT(*) FROM requests "
+           "WHERE decision = ? AND ts >= ?" + clause)  # nosec B608  # clause is placeholders only
     args = [ALLOW, float(since)] + action_args
     if uid is not None:
         sql += " AND uid = ?"
@@ -222,7 +223,7 @@ def distinct_uids_since(since, action):
     with _LOCK:
         return connect().execute(
             "SELECT COUNT(DISTINCT uid) FROM requests "
-            "WHERE decision = ? AND ts >= ?" + clause,
+            "WHERE decision = ? AND ts >= ?" + clause,  # nosec B608  # clause is placeholders only
             [ALLOW, float(since)] + action_args,
         ).fetchone()[0]
 

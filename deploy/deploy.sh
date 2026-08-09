@@ -142,8 +142,21 @@ done
 # open for a file's own mode to be the grant. Every file in there is 0600 or
 # 0660 to a named group, and x without r is not listing. Who has an account is
 # itself worth keeping, which is why database/ does not get the same bit.
-remote "chown -R $SERVICE_USER:$SERVICE_USER $REMOTE_DIR && \
+# The blanket `g-w` is the file-mode half of hardening.conf's narrowed
+# ReadWritePaths. rsync reproduces the checkout's 775 directories, and every
+# unit carries SupplementaryGroups=letterlock to reach the source, so without
+# this the co-signer's account can rewrite the daemon's code and wait for a
+# restart -- which is every isolation boundary in this deploy, undone by a file
+# mode. It runs before the loop below, which puts group-write back on the two
+# directories that need it and only those.
+#
+# database/ and state/ are created rather than skipped when absent: they are
+# named in ReadWritePaths now, and systemd refuses to start a unit whose
+# ReadWritePaths does not exist.
+remote "mkdir -p $REMOTE_DIR/database $REMOTE_DIR/state && \
+    chown -R $SERVICE_USER:$SERVICE_USER $REMOTE_DIR && \
     chmod 750 $REMOTE_DIR && \
+    chmod -R g-w $REMOTE_DIR && \
     [ -e $REMOTE_DIR/.gmail-mcp ] && chmod 700 $REMOTE_DIR/.gmail-mcp; \
     for d in database state; do \
         [ -e $REMOTE_DIR/\$d ] || continue; \
@@ -171,7 +184,8 @@ remote "chown -R $SERVICE_USER:$SERVICE_USER $REMOTE_DIR && \
         chmod 640 $REMOTE_DIR/.env; \
     [ -e $REMOTE_DIR/.env.billing ] && \
         chgrp $BILLING_SECRETS_GROUP $REMOTE_DIR/.env.billing && \
-        chmod 640 $REMOTE_DIR/.env.billing; true"
+        chmod 640 $REMOTE_DIR/.env.billing; \
+    [ -e $REMOTE_DIR/.env.alerts ] && chmod 600 $REMOTE_DIR/.env.alerts; true"
 
 CONFIG_PRESENT=()
 for name in "${CONFIG_FILES[@]}"; do

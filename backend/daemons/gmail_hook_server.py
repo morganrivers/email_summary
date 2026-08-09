@@ -179,7 +179,7 @@ class SigningCerts:
 
 def download_certs():
     """The certificate set and how long Google says it is good for."""
-    with urllib.request.urlopen(CERTS_URL, timeout=5) as resp:
+    with urllib.request.urlopen(CERTS_URL, timeout=5) as resp:  # nosec B310  # constant https URL
         body = resp.read()
         ttl = cache_lifetime(resp.headers.get("Cache-Control", ""))
     certs = json.loads(body.decode())

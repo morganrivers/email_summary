@@ -90,6 +90,7 @@ def volume_secrets():
     from backend.integrations.gmail_gcal import oauth_app
 
     return tuple(p for p in (paths.ENV_FILE, paths.BILLING_ENV_FILE,
+                             paths.ALERTS_ENV_FILE,
                              oauth_app.keys_path()) if p.exists())
 
 

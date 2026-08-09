@@ -41,6 +41,13 @@ ENV_FILE = REPO_ROOT / ".env"
 # other Polar value, the API token included, stays in .env: the receiver no
 # longer calls Polar's API, so nothing else needs to move.
 BILLING_ENV_FILE = REPO_ROOT / ".env.billing"
+
+# TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, and nothing else. Read by no Python
+# here: systemd hands it to cosigner.service as `EnvironmentFile=`, as root,
+# before dropping to that unit's account, which is how the process holding the
+# outer wrapping key gets an alert channel without getting .env. Named here so
+# the deploy and the enclave's boot gate both know the file exists.
+ALERTS_ENV_FILE = REPO_ROOT / ".env.alerts"
 STATIC_DIR = REPO_ROOT / "frontend" / "static"
 DATABASE_DIR = REPO_ROOT / "database"
 RUN_DIR = REPO_ROOT / "state"

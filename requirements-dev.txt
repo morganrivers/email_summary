@@ -18,6 +18,12 @@ pytest==9.0.2
 # configuration from setup.cfg.
 flake8==7.3.0
 isort==8.0.1
+# bandit is the third analyzer and asks a different question: not "is this
+# style" or "is this dead" but "is this a known-dangerous call". It runs from
+# the same test module, over the shipped packages only, with the whole-class
+# false positives skipped in one place there rather than as markers scattered
+# through the tree.
+bandit==1.9.4
 # uv is a test dependency because deploy/audit.py reads the closure through
 # `uv export --frozen` and CI regenerates the lock on Dependabot branches. Pinned
 # to the version that wrote the committed lock (`revision = 3`), so a newer uv
