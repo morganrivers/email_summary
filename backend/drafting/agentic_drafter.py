@@ -3,25 +3,18 @@
 Calls DeepSeek with tool schemas (calendar, email search, thread fetch). DeepSeek
 decides which tools to invoke. Loop continues until the model returns a final draft
 or MAX_ITERATIONS is hit. Returns the draft body as plain text.
-
-Wraps the OpenAI client with langsmith.wrappers.wrap_openai when LANGSMITH_API_KEY
-is set. No-op otherwise.
 """
 
 import json
-import os
 import re
 import secrets
 import string
 import sys
-import uuid
 from datetime import datetime, timezone
 
+from backend.drafting.tool_executors import TOOL_REGISTRY, TOOL_SCHEMAS
 from backend.integrations import llm_client
 from backend.masking import pseudonymizer
-from backend.integrations.llm_client import make_client, LANGSMITH_ENABLED
-
-from backend.drafting.tool_executors import TOOL_REGISTRY, TOOL_SCHEMAS
 
 MAX_ITERATIONS = 5
 MAX_TOKENS = 32000
@@ -192,35 +185,11 @@ def _strip_preamble(body):
     return body.strip()
 
 
-# TODO: this will be removed once we head to production; we're not there yet though.
-_LS_CLIENT = None
-def _get_ls_client():
-    global _LS_CLIENT
-    if not LANGSMITH_ENABLED:
-        return None
-    if _LS_CLIENT is not None:
-        return _LS_CLIENT
-    if not os.environ.get("LANGCHAIN_API_KEY"):
-        return None
-    try:
-        from langsmith import Client
-        _LS_CLIENT = Client()
-        return _LS_CLIENT
-    except Exception as err:
-        sys.stderr.write(f"langsmith Client init failed: {err}\n")
-        return None
-
-
-def _tool_call_to_message(tc):
-    return {
-        "role": "tool",
-        "tool_call_id": tc.id,
-        "content": "",
-    }
-
-
 def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
-          thread_id=None, on_iteration=None, account=None, fence=None):
+          on_iteration=None, account=None, fence=None):
+    """The drafting loop. Returns the reply body; there is no second return
+    value, because the only thing that ever filled one was a link into a
+    third-party trace."""
     now = datetime.now(timezone.utc).isoformat()
     # The caller's, not one made here: it already fenced the email with it, and
     # a second fence would put a rule in the system message naming delimiters the
@@ -266,6 +235,7 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
         "The final email content must fit in the response, so leave ample room for it."
     )
     state = pseudonymizer.new_state(identity)
+    pseudonymizer.protect(state, fence.nonce)
     system_with_time = pseudonymizer.pseudonymize(system_with_time, state)
     user_prompt = pseudonymizer.pseudonymize(user_prompt, state)
     messages = [
@@ -273,36 +243,10 @@ def draft(client, system_prompt, user_prompt, max_iterations=MAX_ITERATIONS,
         {"role": "user", "content": user_prompt},
     ]
 
-    session_id = thread_id or str(uuid.uuid4())
-    ls_extra = {"metadata": {"session_id": session_id, "thread_id": session_id}}
-    project = os.environ.get("LANGCHAIN_PROJECT") or os.environ.get("LANGSMITH_PROJECT")
-    ls_client = _get_ls_client()
-
-    if ls_client:
-        from langsmith.run_helpers import trace
-        with trace(
-            name="draft_email",
-            run_type="chain",
-            project_name=project,
-            inputs={"system_prompt": system_with_time[:500], "user_prompt": user_prompt[:2000]},
-            metadata={"session_id": session_id, "thread_id": session_id},
-        ) as run:
-            body = _draft_with_em_dash_retry(client, messages, max_iterations,
-                                             ls_extra, state, fence,
-                                             on_iteration=on_iteration,
-                                             account=account, ban_dashes=ban_dashes)
-        body = pseudonymizer.restore(body, state)
-        run_url = None
-        try:
-            run_url = ls_client.get_run_url(run=run, project_name=project)
-        except Exception as err:
-            sys.stderr.write(f"get_run_url failed: {err}\n")
-        return body, run_url
-    body = _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra,
-                                     state, fence, on_iteration=on_iteration,
+    body = _draft_with_em_dash_retry(client, messages, max_iterations, state,
+                                     fence, on_iteration=on_iteration,
                                      account=account, ban_dashes=ban_dashes)
-    body = pseudonymizer.restore(body, state)
-    return body, None
+    return pseudonymizer.restore(body, state)
 
 
 def _summarize_tool_result(result):
@@ -333,10 +277,10 @@ def _safe_notify(on_iteration, *args):
         sys.stderr.write(f"on_iteration failed: {err}\n")
 
 
-def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra, state,
+def _draft_with_em_dash_retry(client, messages, max_iterations, state,
                               fence, on_iteration=None, account=None,
                               ban_dashes=True):
-    body = _run_loop(client, messages, max_iterations, ls_extra, state, fence,
+    body = _run_loop(client, messages, max_iterations, state, fence,
                      on_iteration=on_iteration, account=account)
     if not ban_dashes:
         return body
@@ -349,12 +293,12 @@ def _draft_with_em_dash_retry(client, messages, max_iterations, ls_extra, state,
         )
         messages.append({"role": "assistant", "content": body})
         messages.append({"role": "user", "content": EM_DASH_CORRECTION_PROMPT})
-        body = _run_loop(client, messages, max_iterations, ls_extra, state, fence,
+        body = _run_loop(client, messages, max_iterations, state, fence,
                          on_iteration=on_iteration, account=account)
     return body
 
 
-def _run_loop(client, messages, max_iterations, ls_extra, state, fence,
+def _run_loop(client, messages, max_iterations, state, fence,
               on_iteration=None, account=None):
     tool_history = []
     for iteration in range(max_iterations):
@@ -365,7 +309,6 @@ def _run_loop(client, messages, max_iterations, ls_extra, state, fence,
             pseudonymize=False,
             tools=TOOL_SCHEMAS,
             tool_choice="auto",
-            langsmith_extra=ls_extra,
         )
         msg = resp.choices[0].message
         _log_iter(iteration + 1, msg, resp)
@@ -431,7 +374,6 @@ def _run_loop(client, messages, max_iterations, ls_extra, state, fence,
         }],
         max_tokens=MAX_TOKENS,
         pseudonymize=False,
-        langsmith_extra=ls_extra,
     )
     final_msg = final.choices[0].message
     _log_iter(max_iterations + 1, final_msg, final)

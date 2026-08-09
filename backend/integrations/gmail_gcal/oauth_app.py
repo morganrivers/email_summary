@@ -46,39 +46,64 @@ TOKEN_ENDPOINT = cosigner_protocol.TOKEN_ENDPOINT
 # and never used, and an unused scope is only ever a bigger loss when a token
 # leaks.
 #
-# calendar.acls.readonly is the one scope here that buys a refusal rather than a
-# capability. Event bodies are written from the account's own mail, so writing
-# one to a calendar the world can read republishes that mail; without this scope
-# the app cannot tell a private calendar from a public one and would be trusting
-# rather than checking. It is the read-only half of the ACL pair, so it grants
-# no way to change who a calendar is shared with. See
-# `calendar_api.write_calendar_audience()`, the only caller.
-SCOPES = (
+BASE_SCOPES = (
     "openid",
     "email",
     "profile",
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/calendar.acls.readonly",
 )
+
+# calendar.acls.readonly is the one scope here that buys a refusal rather than a
+# capability. Event bodies are written from the account's own mail, so writing
+# one to a calendar the world can read republishes that mail, and the ACL is how
+# the app tells one from the other rather than trusting. It is the read-only
+# half of the ACL pair, so it grants no way to change who a calendar is shared
+# with. See `calendar_api.write_calendar_audience()`, the only caller.
+#
+# It is off by default, and this switch is the one place that decides. A scope
+# is not ours to request: it has to be registered on the OAuth app's Data Access
+# page in the Google Cloud console, and being sensitive it puts a published app
+# back into verification. Asking for one that is not registered is how a consent
+# fails at Google rather than in code. When it is off, `calendar_public` answers
+# the same question over the public internet instead -- weaker, and its own
+# module says exactly how -- so the two are alternatives and never both.
+ACL_SCOPE = "https://www.googleapis.com/auth/calendar.acls.readonly"
+ACL_SCOPE_ENV = "LETTERLOCK_CALENDAR_ACL_SCOPE"
+
+
+def acl_scope_registered():
+    """Whether `ACL_SCOPE` is registered on the consent screen, and so whether
+    anything may ask for it or expect a token to carry it."""
+    return os.environ.get(ACL_SCOPE_ENV, "").strip() == "1"
+
+
+def scopes():
+    """What the consent asks for."""
+    return BASE_SCOPES + ((ACL_SCOPE,) if acl_scope_registered() else ())
+
 
 # What a consent has to come back with, as opposed to what it asks for. Google's
 # screen lets a user untick individual permissions, and a sign-in that dropped
 # one used to succeed and fail later at whatever call needed it: a mailbox the
-# daemon cannot read, or -- since the calendar ACL check -- scheduling that
+# daemon cannot read, or -- when the calendar ACL check is on -- scheduling that
 # refuses every event. The identity scopes are absent on
 # purpose. Nothing breaks without them, because the address comes from the Gmail
 # profile and `split_name` falls back, so requiring them would refuse a consent
 # that works.
-REQUIRED_SCOPES = (
+BASE_REQUIRED_SCOPES = (
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/calendar.acls.readonly",
 )
 
-assert set(REQUIRED_SCOPES) <= set(SCOPES), (
-    "a scope is required of the consent but never asked for in it"
-)
+
+def required_scopes():
+    """What the consent has to come back with."""
+    required = BASE_REQUIRED_SCOPES + ((ACL_SCOPE,) if acl_scope_registered() else ())
+    assert set(required) <= set(scopes()), (
+        "a scope is required of the consent but never asked for in it"
+    )
+    return required
 
 
 def keys_path():
@@ -125,7 +150,7 @@ def redirect_uri():
 
 
 def scope_param():
-    return " ".join(SCOPES)
+    return " ".join(scopes())
 
 
 def missing_scopes(granted):
@@ -136,7 +161,7 @@ def missing_scopes(granted):
     which is the fail-closed reading and the correct one: a response that does
     not say what was granted is not evidence that everything was."""
     have = set((granted or "").split())
-    return tuple(scope for scope in REQUIRED_SCOPES if scope not in have)
+    return tuple(scope for scope in required_scopes() if scope not in have)
 
 
 def describe_scopes(scopes):

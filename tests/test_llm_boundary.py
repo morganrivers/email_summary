@@ -9,11 +9,9 @@ is some, in llm_client's own docstring) is not a use of it.
 from urllib.parse import urlparse
 
 import pytest
-
 from harness import NEUTRAL_IDENTITY, attribute_chains, python_sources, relative
 
-from backend.integrations import llm_client
-from backend.integrations import telegram
+from backend.integrations import llm_client, telegram
 
 
 def test_nothing_uses_the_responses_api():
@@ -68,7 +66,6 @@ def refusing(monkeypatch):
         client = type("C", (), {})()
         client.chat = type("Chat", (), {"completions": Completions()})()
         client._ll_provider = llm_client.PROVIDERS["nearai-glm"]
-        client._ls_wrapped = False
         return client
 
     yield build, sent

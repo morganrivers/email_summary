@@ -11,8 +11,8 @@ from __future__ import annotations
 import threading
 import time
 
+from backend.integrations.gmail_gcal import calendar_public, oauth_app
 from backend.integrations.gmail_gcal.google_client import CALENDAR, service
-
 
 MAX_SUMMARY = 200
 MAX_LOCATION = 200
@@ -29,8 +29,14 @@ WRITE_CALENDAR = "primary"
 
 # Pinning the calendar answers "which calendar", not "who reads it": `primary`
 # is the account's own, and an account can share its own calendar with the
-# public. So the write is also checked against that calendar's ACL, which is
-# what `calendar.acls.readonly` was added to the consent for.
+# public. So the write is also checked against who can read that calendar.
+#
+# There are two ways to ask, and `oauth_app.acl_scope_registered()` is the one
+# place that picks: the calendar's own ACL when the consent carries
+# `calendar.acls.readonly`, and `calendar_public` -- an unauthenticated fetch of
+# the public feed -- when it does not. Never both, and never a fallback from one
+# to the other: falling back on an error is how a control that is supposed to
+# refuse comes to approve.
 #
 # `default` is the ACL scope meaning anyone at all, `domain` means everyone in
 # the account's Workspace. `freeBusyReader` is deliberately not a content role:
@@ -62,9 +68,9 @@ class CalendarSharingUnknown(CalendarNotPrivate):
     A subclass because the decision is the same one and every caller that
     refuses on the parent must refuse on this. It is separate because the remedy
     is not: a shared calendar is fixed in Google Calendar, a token minted before
-    `calendar.acls.readonly` was requested is fixed by signing in again, and
-    telling a user to do the wrong one of those is how a working feature looks
-    broken."""
+    `calendar.acls.readonly` was requested is fixed by signing in again, an
+    unreachable public feed is fixed by waiting, and telling a user to do the
+    wrong one of those is how a working feature looks broken."""
 
 
 def calendar(account):
@@ -81,20 +87,46 @@ def _acl_audience(rules):
     return tuple(sorted(audience))
 
 
+def _audience_from_acl(account):
+    """The ACL read. Needs `calendar.acls.readonly` on the token."""
+    res = calendar(account).acl().list(calendarId=WRITE_CALENDAR).execute()
+    return _acl_audience(res.get("items", []))
+
+
+def _audience_from_public_feed(account):
+    """The unauthenticated probe, for a consent without the ACL scope.
+
+    `WRITE_CALENDAR` is `primary`, and an account's primary calendar is named by
+    its own address, so that address is what gets probed. It is asserted rather
+    than defaulted: a blank one would build a URL for somebody else's calendar
+    and 404, which reads as private."""
+    address = (account.primary_email() or "").strip().lower()
+    assert address and "@" in address, (
+        f"account {account.id} has no mail address, so its primary calendar "
+        f"cannot be named"
+    )
+    public = calendar_public.is_public(address)
+    return (calendar_public.PUBLIC_AUDIENCE,) if public else ()
+
+
 def write_calendar_audience(account):
-    """Who can read WRITE_CALENDAR besides its owner, as ACL rule names.
+    """Who can read WRITE_CALENDAR besides its owner, as short rule names.
 
     Empty means private. Takes no calendar argument on purpose: this answers a
     question about the one calendar this app writes to, and a parameter here
-    would reintroduce the naming that `create_event` refuses to allow."""
+    would reintroduce the naming that `create_event` refuses to allow. Which of
+    the two ways it asks is not the caller's business either, so both paths land
+    in the one cache under the one TTL."""
     assert getattr(account, "id", None), "write_calendar_audience needs a loaded Account"
     now = time.monotonic()
     with _sharing_lock:
         cached = _sharing_cache.get(account.id)
         if cached and now - cached[0] < SHARING_TTL:
             return cached[1]
-    res = calendar(account).acl().list(calendarId=WRITE_CALENDAR).execute()
-    audience = _acl_audience(res.get("items", []))
+    if oauth_app.acl_scope_registered():
+        audience = _audience_from_acl(account)
+    else:
+        audience = _audience_from_public_feed(account)
     with _sharing_lock:
         _sharing_cache[account.id] = (time.monotonic(), audience)
     return audience
@@ -114,8 +146,10 @@ def _require_private_calendar(account):
     """Fail closed, including when the question cannot be asked.
 
     A token minted before `calendar.acls.readonly` was requested answers this
-    with a 403, and so does an outage. Both mean the same thing here: we do not
-    know who reads that calendar, and the event body is somebody's mail."""
+    with a 403, an outage answers with nothing at all, and the public feed
+    answers with a status code that is neither 200 nor 404. All of them mean the
+    same thing here: we do not know who reads that calendar, and the event body
+    is somebody's mail."""
     try:
         audience = write_calendar_audience(account)
     except Exception as err:

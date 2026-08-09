@@ -132,7 +132,7 @@ def test_a_crafted_recipient_or_subject_cannot_append_a_header():
     })
     lines = out.split("\r\n\r\n")[0].split("\r\n")
     assert len(lines) == 4
-    assert not any(l.startswith(("Bcc:", "X-Injected:")) for l in lines)
+    assert not any(line.startswith(("Bcc:", "X-Injected:")) for line in lines)
 
 
 def test_attribution_degrades_to_whichever_half_is_known():

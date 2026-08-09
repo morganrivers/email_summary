@@ -15,12 +15,20 @@ a token that could plausibly be genuine costs a request, which is what stops an
 anonymous flood from turning into an outbound flood and getting us throttled
 (and the real pushes rejected with it). Verified tokens are cached until they
 expire so Pub/Sub's own retries cost nothing either. We then decode the message body
-({emailAddress, historyId}), resolve emailAddress to a registered account via
-account.get_account, enqueue that account id on the wake spool, and poke the
+({emailAddress, historyId}), enqueue that address on the wake spool, and poke the
 FIFO so the daemon processes only that user's mailbox. The historyId is not
 used: the daemon pulls the delta from that account's stored lastHistoryId
 cursor (single source of truth). emailAddress is trusted only because the JWT
-proves the push came from Google; unregistered addresses are dropped.
+proves the push came from Google.
+
+This process does not resolve the address, and that is deliberate rather than
+an omission. Resolving it means reading `database/accounts.json`, which is
+every user's address and whether they are paid up, and this is a program that
+verifies a signature and appends a line. It runs under its own account with no
+read access to the store (deploy/hetzner/email-webhook.service.d), so an
+unregistered address is dropped by the daemon on the next drain instead of
+here. The cost is one wake for an address nobody registered, which the daemon
+already handles: it logs and moves on.
 """
 
 import base64
@@ -31,12 +39,8 @@ import time
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
-from backend import paths
-from backend import secrets
-from backend import site
-from backend.accounts import account
+from backend import paths, secrets, site
 from backend.daemons import wake_queue
 
 secrets.load()
@@ -166,10 +170,11 @@ def signal_daemon():
 
 
 def route_push(body):
-    """Resolve a verified push to a registered account and wake the daemon for it.
+    """Spool the address a verified push names and wake the daemon for it.
 
-    Unregistered/inactive addresses are dropped (acked, never woken). An
-    unparseable body falls back to a full sweep so no mail is silently lost."""
+    Whether that address belongs to anyone is the daemon's question, not this
+    process's: see the module docstring. An unparseable body falls back to a
+    full sweep so no mail is silently lost."""
     try:
         envelope = json.loads(body)
         data = base64.b64decode(envelope["message"]["data"])
@@ -178,12 +183,9 @@ def route_push(body):
         log(f"unparseable push body ({err}); waking full sweep as fallback")
         signal_daemon()
         return
-    acct = account.get_account(email)
-    if acct is None:
-        log("push for unregistered/inactive address; ignoring")
-        return
-    wake_queue.enqueue(acct.id)
-    log(f"queued account {acct.id} and signaling daemon")
+    assert email, "verified push carried no emailAddress"
+    wake_queue.enqueue(email)
+    log("queued push and signaling daemon")
     signal_daemon()
 
 

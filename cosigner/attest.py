@@ -33,15 +33,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
 from backend.tee import quote_policy
-from backend.tee.quote_policy import (  # noqa: F401  (re-exported for callers)
-    DEV_INSECURE,
-    MEASUREMENT_FIELDS,
-    RECHECK_SECONDS,
-    REQUIRED,
-    Verdict,
-    aggregate,
-    measurements_of,
-)
+from backend.tee.quote_policy import DEV_INSECURE  # noqa: F401  (re-exported for callers)
+from backend.tee.quote_policy import REQUIRED, Verdict
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "allowlist.json"
 
@@ -151,7 +144,9 @@ def extract_quote(cert):
         ext = cert.extensions.get_extension_for_oid(x509.ObjectIdentifier(oid))
     except x509.ExtensionNotFound:
         return None
-    return ext.value.public_bytes() if hasattr(ext.value, "public_bytes") else bytes(ext.value.value)
+    if hasattr(ext.value, "public_bytes"):
+        return ext.value.public_bytes()
+    return bytes(ext.value.value)
 
 
 def verify_client(cert_der):

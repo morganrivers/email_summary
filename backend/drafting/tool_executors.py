@@ -77,7 +77,8 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "search_emails",
             "description": (
-                "Full-text search across the account owner's Gmail. Returns matching messages with from, "
+                "Full-text search across the account owner's Gmail. Returns matching"
+                " messages with from, "
                 "subject, date, snippet, and body (up to 2000 chars). Useful for finding past "
                 "correspondence with a sender, prior discussion of a topic, or to verify what "
                 "was previously promised. Use Gmail search syntax: from:alice@example.com, "

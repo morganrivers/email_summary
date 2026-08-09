@@ -32,9 +32,7 @@ import threading
 import time
 from collections import namedtuple
 
-from cosigner import alerts
-from cosigner import audit
-from cosigner import protocol
+from cosigner import alerts, audit, protocol
 
 ACTION_WRAP = "wrap"
 ACTION_UNWRAP = "unwrap-and-sign"

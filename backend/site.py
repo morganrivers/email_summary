@@ -21,7 +21,6 @@ LETTERLOCK_ALIAS_HOSTS) and re-render the Caddyfile.
 import os
 
 from backend import secrets
-
 from cosigner import protocol as cosigner_protocol
 
 secrets.load()
@@ -93,6 +92,7 @@ def upstream(port):
     )
     return f"{LOOPBACK}:{port}"
 
+
 OAUTH_CALLBACK_PATH = "/auth/callback"
 
 # Namespaced for the same reason as the port. The other product's signer serves
@@ -137,12 +137,6 @@ def oauth_callback_url():
     """Where Google returns the user after web sign-in. Must be registered
     verbatim as an authorized redirect URI on the OAuth client."""
     return app_url(OAUTH_CALLBACK_PATH)
-
-
-def polar_webhook_url():
-    """Endpoint to register in the Polar dashboard. Caddy routes this path on
-    both hosts, so either works; API_HOST is the one with DNS today."""
-    return api_url(POLAR_WEBHOOK_PATH)
 
 
 def checkout_success_url():

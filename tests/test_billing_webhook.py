@@ -16,15 +16,12 @@ import base64
 import datetime
 import json
 
+import harness
 import pytest
 from standardwebhooks import Webhook
 
-import harness
-
 from backend.accounts import account
-from backend.billing import billing
-from backend.billing import billing_webhook
-
+from backend.billing import billing, billing_webhook
 
 SECRET = "polar-webhook-secret-not-real"
 BUYER = "buyer@example.com"

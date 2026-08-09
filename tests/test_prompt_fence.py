@@ -16,11 +16,9 @@ alone.
 """
 
 import pytest
-
 from harness import python_sources, relative
 
-from backend.drafting import agentic_drafter
-from backend.drafting import voice_dna
+from backend.drafting import agentic_drafter, voice_dna
 from backend.masking import pseudonymizer
 
 FIXED_NONCE = "ABCDEFGHIJKLMNOP"
@@ -114,12 +112,46 @@ def test_masking_leaves_the_nonce_alone(analyzer):
     if analyzer and not pseudonymizer.analyzer_available():
         pytest.skip("Presidio/spaCy not installed; the regex-only path is the default")
     fence = agentic_drafter.Fence()
+    state = pseudonymizer.new_state(_identity(analyzer))
+    pseudonymizer.protect(state, fence.nonce)
     prompt = f"{fence.rule}\n{fence.wrap('Jordan, reach me at jordan@example.com')}"
-    masked = pseudonymizer.pseudonymize(prompt, pseudonymizer.new_state(_identity(analyzer)))
+    masked = pseudonymizer.pseudonymize(prompt, state)
 
     assert masked.count(fence.nonce) == prompt.count(fence.nonce)
     assert fence.open in masked and fence.close in masked
     assert "jordan@example.com" not in masked, "the masking still has to happen"
+
+
+@pytest.mark.parametrize("analyzer", [False, True])
+def test_masking_leaves_the_nonce_alone_for_every_nonce_not_just_this_one(analyzer):
+    """One nonce per run is a test that agrees with the bug 98% of the time.
+
+    spaCy read `<nonce>_EXTERNAL_CONTENT` as a PERSON for about one nonce in
+    sixty and the anonymizer replaced it, so the closing marker vanished and
+    everything after the email body sat inside the untrusted region. It surfaced
+    as an unrelated summary test failing once in thirty runs. The property is
+    over the whole alphabet, so the test has to be too."""
+    if analyzer and not pseudonymizer.analyzer_available():
+        pytest.skip("Presidio/spaCy not installed; the regex-only path is the default")
+    body = ("From: Bob Baker <bob@example.net>\nSubject: Lunch next week?\n"
+            "Jordan, reach me at jordan@example.com")
+    for _ in range(250):
+        fence = agentic_drafter.Fence()
+        state = pseudonymizer.new_state(_identity(analyzer))
+        pseudonymizer.protect(state, fence.nonce)
+        masked = pseudonymizer.pseudonymize(f"{fence.rule}\n{fence.wrap(body)}", state)
+        assert fence.open in masked, f"opening marker lost for nonce {fence.nonce}"
+        assert fence.close in masked, f"closing marker lost for nonce {fence.nonce}"
+
+
+def test_an_unprotected_delimiter_is_a_failed_run_not_a_silent_one():
+    """The assert is the other half of the fix. protect() is what a caller has
+    to remember, so forgetting it must be loud: a masking layer that ate a
+    delimiter used to produce a prompt, and now produces an exception."""
+    state = pseudonymizer.new_state(_identity(False))
+    pseudonymizer.protect(state, "+1-555-0101")
+    with pytest.raises(AssertionError, match="protected token"):
+        pseudonymizer.pseudonymize("call +1-555-0101 now", state)
 
 
 def test_drafting_refuses_a_call_with_no_fence():

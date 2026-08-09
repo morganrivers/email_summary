@@ -17,9 +17,7 @@ import os
 
 import pytest
 
-from deploy import audit
-from deploy import requirements
-
+from deploy import audit, requirements
 
 TODAY = datetime.date(2026, 8, 7)
 

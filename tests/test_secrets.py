@@ -19,8 +19,7 @@ import json
 
 import pytest
 
-from backend import paths
-from backend import secrets
+from backend import paths, secrets
 from backend.integrations.gmail_gcal import oauth_app
 from backend.tee import tee_boot
 
@@ -121,8 +120,8 @@ def test_each_required_secret_is_actually_required(env_file, monkeypatch, name):
     assert any(name in reason for reason in gaps), gaps
 
 
-def test_the_injected_oauth_pair_beats_the_file_on_the_volume(env_file, tmp_path,
-                                                             monkeypatch):
+def test_the_injected_oauth_pair_beats_the_file_on_the_volume(
+        env_file, tmp_path, monkeypatch):
     """A stale key file must not shadow what the KMS released; the file is the
     fallback, never the winner."""
     monkeypatch.delenv("TEE_REQUIRED", raising=False)
@@ -157,8 +156,8 @@ def test_half_an_injected_pair_is_not_a_pair(env_file, tmp_path, monkeypatch):
     assert oauth_app.load_keys() == ("file-id", "file-secret")
 
 
-def test_a_tee_refuses_the_key_file_and_names_what_to_inject(env_file, tmp_path,
-                                                            monkeypatch):
+def test_a_tee_refuses_the_key_file_and_names_what_to_inject(
+        env_file, tmp_path, monkeypatch):
     """The client secret is the widest-blast-radius value here. Inside the
     enclave a file copy is one the KMS does not gate, so the reader refuses it
     outright instead of preferring the injected pair and quietly falling back."""

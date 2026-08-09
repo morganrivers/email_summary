@@ -44,25 +44,22 @@ Authenticated:
 """
 
 import html
-import http.cookies
 import os
-import secrets
 import sys
 import time
 import urllib.parse
 import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from backend import audit
-from backend import paths
+from backend import audit, paths
 from backend import secrets as app_secrets
 from backend import site
 from backend.accounts import account
 from backend.billing import billing
-from backend.drafting import personal_context
-from backend.drafting import voice_dna
-from backend.integrations import llm_client
-from backend.integrations import telegram
+from backend.custody import handoff
+from backend.drafting import personal_context, voice_dna
+from backend.integrations import llm_client, telegram
+from backend.integrations.gmail_gcal import oauth_app
 from backend.masking import pseudonymizer
 from backend.onboarding import provisioning
 from frontend import session as sess
@@ -71,7 +68,11 @@ app_secrets.load()
 
 HOST = os.environ.get("WEB_HOST", site.LOOPBACK)
 PORT = int(os.environ.get("WEB_PORT", str(site.WEB_PORT)))
-REDIRECT_URI = os.environ.get("WEB_OAUTH_REDIRECT_URI", site.oauth_callback_url())
+# Asked of oauth_app rather than rebuilt here. This line used to be its own copy
+# of the same rule, and the value has to match byte for byte between the auth URL
+# and the code exchange or Google refuses the exchange -- so two copies of it is
+# two chances to drift into a consent that cannot be completed.
+REDIRECT_URI = oauth_app.redirect_uri()
 
 # Rendered form of billing.PLAN_PRICE_EUR, for every page that quotes a price.
 PRICE = f"&euro;{billing.PLAN_PRICE_EUR}"
@@ -85,6 +86,7 @@ def _model_list():
         f"<li><strong>{html.escape(p.label)}</strong> &mdash; {html.escape(p.blurb)}</li>"
         for p in llm_client.PROVIDERS.values()
     )
+
 
 # Every page is server-rendered from our own templates with no third-party
 # assets, so the policy can be as tight as "nothing but us, and no framing".
@@ -122,28 +124,30 @@ STATIC_TYPES = {
 }
 _STATIC_CACHE = {}
 
-# account id -> (link code, expiry). In-process and short-lived on purpose: a
-# code is only meaningful between rendering the page and the user pressing the
-# confirm button, and a restart just means starting the link again.
-_LINK_CODES = {}
+# account id -> (pending change, expiry). What is on the page, not what decides
+# anything: the daemon minted this code, holds its own copy and checks it, and
+# keeping one here only saves re-rendering the instructions from a round trip.
+# In-process and short-lived for the same reason as before -- it is meaningful
+# between rendering the page and pressing the confirm button.
+_PENDING_CHATS = {}
 LINK_TTL = 900
 
 
-def _put_link_code(account_id):
-    code = telegram.new_link_code()
-    _LINK_CODES[account_id] = (code, time.time() + LINK_TTL)
-    return code
+def _put_pending(account_id, action, code, username):
+    pending = {"action": action, "code": code, "username": username}
+    _PENDING_CHATS[account_id] = (pending, time.time() + LINK_TTL)
+    return pending
 
 
-def _get_link_code(account_id):
-    entry = _LINK_CODES.get(account_id)
+def _get_pending(account_id):
+    entry = _PENDING_CHATS.get(account_id)
     if not entry:
         return None
-    code, expiry = entry
+    pending, expiry = entry
     if expiry < time.time():
-        del _LINK_CODES[account_id]
+        del _PENDING_CHATS[account_id]
         return None
-    return code
+    return pending
 
 
 def log(msg):
@@ -270,7 +274,8 @@ def _layout(title, body, active=None, user_email=None, refresh=None):
 <div id="page">
   <div id="titlebar">
     <div class="brand">
-      <a href="/"><img class="mark" src="/static/mark.png" alt="" width="23" height="14"> Letterlock</a>
+      <a href="/"><img class="mark" src="/static/mark.png" alt="" width="23" height="14">
+Letterlock</a>
       <span class="tagline">The most secure AI assistant for Gmail</span>
     </div>
   </div>
@@ -279,7 +284,8 @@ def _layout(title, body, active=None, user_email=None, refresh=None):
 {body}
   </div>
   <div id="footer">
-    <span>&copy; 2026 Letterlock | Website hosted using a secure enclave | Open source code here | Code attestation here | Based in Berlin, Germany </span>
+    <span>&copy; 2026 Letterlock | Website hosted using a secure enclave | Open source code here |
+Code attestation here | Based in Berlin, Germany </span>
     <span class="footer-right">
       <span id="utc-clock"></span>
     </span>
@@ -290,7 +296,8 @@ def _layout(title, body, active=None, user_email=None, refresh=None):
   function tick(){{
     var n=new Date();
     var pad=function(x){{return String(x).padStart(2,'0');}};
-    document.getElementById('utc-clock').textContent=pad(n.getUTCHours())+':'+pad(n.getUTCMinutes())+':'+pad(n.getUTCSeconds())+' UTC';
+    document.getElementById('utc-clock').textContent=
+      pad(n.getUTCHours())+':'+pad(n.getUTCMinutes())+':'+pad(n.getUTCSeconds())+' UTC';
   }}
   tick(); setInterval(tick,1000);
 }})();
@@ -327,21 +334,28 @@ store your email data.</p>
 
 <h2>Why doesn't Letterlock send emails?</h2>
 
-<p>The world doesn't need more AI slop. Letterlock never sends email, and never will. 
+<p>The world doesn't need more AI slop. Letterlock never sends email, and never will.
 Instead, Letterlock does 80% of the work so you can do the remaining 20%.
-The Letterlock assistant securely gathers relevant information from your email and provides a draft email, lets you know when you missed 
-an important email, makes sure all your appointments get on your calendar, and fixes grammar or spelling while fact-checking your email drafts as soon as you type @llfix in your email draft.
-Lastly, Letterlock matches the length of your emails, and is configured to avoid overclaiming or hallucinating email content. 
+The Letterlock assistant securely gathers relevant information from your email and provides a draft
+email, lets you know when you missed
+an important email, makes sure all your appointments get on your calendar, and fixes grammar or
+spelling while fact-checking your email drafts as soon as you type @llfix in your email draft.
+Lastly, Letterlock matches the length of your emails, and is configured to avoid overclaiming or
+hallucinating email content.
 If Letterlock doesn't know something, it won't write it.</p>
 
 <h2>Features</h2>
 
 <ul style="font-size:11px;line-height:1.9;padding-left:18px;">
-  <li>Automatic draft creation: Letterlock reads the thread, searches your email history for context, and writes a reply in your voice</li>
-  <li>Google Calendar integration: checks your availability, and creates events from your sent mail when auto-scheduling is enabled</li>
+  <li>Automatic draft creation: Letterlock reads the thread, searches your email history for
+context, and writes a reply in your voice</li>
+  <li>Google Calendar integration: checks your availability, and creates events from your sent mail
+when auto-scheduling is enabled</li>
   <li>Telegram notifications when a draft is ready as well as the steps of the process</li>
-  <li>Daily summary of your inbox and calendar when configured, skipping unimportant emails and highlighting urgent ones</li>
-  <li>Forward an email thread to [your email]+ll@gmail.com. A reply will be automatically drafted in the thread following your instructions</li>
+  <li>Daily summary of your inbox and calendar when configured, skipping unimportant emails and
+highlighting urgent ones</li>
+  <li>Forward an email thread to [your email]+ll@gmail.com. A reply will be automatically drafted in
+the thread following your instructions</li>
 </ul>
 
 <div class="tee-box">
@@ -350,7 +364,9 @@ processor chip. Code or data inside cannot be seen or modified by the host opera
 the cloud provider.
 At boot, the enclave produces a signed attestation report containing
 a hash of the code it is running. Anyone can verify that hash against the published source code.
-Letterlock goes a step beyond: Even within the TEE, all data are encrypted using a separate signing server. Even processes within the enclave cannot see enclave data without permission from a separate, monitored signing server.
+Letterlock goes a step beyond: Even within the TEE, all data are encrypted using a separate signing
+server. Even processes within the enclave cannot see enclave data without permission from a
+separate, monitored signing server.
 </div>
 
 <hr>
@@ -376,11 +392,13 @@ personally identifying information from your email before any text reaches the A
 
 <h2>How the security works</h2>
 <h3>Attestation</h3>
-<p>As described on the <a href="/">home</a> page, a Trusted Execution Environment is a hardware-enforced region of a processor. Code running
+<p>As described on the <a href="/">home</a> page, a Trusted Execution Environment is a
+hardware-enforced region of a processor. Code running
 there cannot be read or modified by the operating system, the cloud provider, or the server
 operator. At boot it produces an attestation report: a signed statement of which code is
 running, chaining back to the chip manufacturer (Intel, for TDX). Compare that hash against
-our published source and you know what the server is running. If it doesn't match, the server doesn't start. </p>
+our published source and you know what the server is running. If it doesn't match, the server
+doesn't start. </p>
 
 <p></p>
 
@@ -400,13 +418,13 @@ NER model, so those are always caught.</p>
 <h3>Secure inference</h3>
 Letterlock uses Near.ai attested inference.
 Each update of the Near AI codebase is given a security audit to ensure your emails cannot be
- read by the inference provider. From then on, Near AI's attested inference cluser is used to 
- securely call open-weight models. Near AI has been verified by Letterlock to never store or 
+ read by the inference provider. From then on, Near AI's attested inference cluser is used to
+ securely call open-weight models. Near AI has been verified by Letterlock to never store or
  transmit AI prompts to external providers.
 
 <h3>All user data is doubly encrypted</h3>
 
-<p>Letterlock uses a signing server in combination with a secure enclave, so accessing your 
+<p>Letterlock uses a signing server in combination with a secure enclave, so accessing your
 configurations within letterlock and OAuth token for Gmail read+write access would have to be
 compromised simultaneously. </p>
 <p> The enclave seals user configuration data only after the
@@ -415,20 +433,26 @@ co-signer has never seen your token and cannot read what it unwraps, and the enc
 get past the outer layer. Neither key is on the host filesystem.</p>
 
 <h3> Agent sandbox </h3>
-<p>Agents within letterlock are kept on a short leash. They cannot access the open internet, and cannot execute code.
-They can't even write emails with HTML. They have no calendar write tool at all, and the one code path that does
-write an event writes to your own calendar and to no other, after reading that calendar's sharing settings and
+<p>Agents within letterlock are kept on a short leash. They cannot access the open internet, and
+cannot execute code.
+They can't even write emails with HTML. They have no calendar write tool at all, and the one code
+path that does
+write an event writes to your own calendar and to no other, after reading that calendar's sharing
+settings and
 refusing if anyone else can read it.
 Letterlock takes no chances with AI and treats them as untrusted outsiders.</p>
 
 <h2>Open source</h2>
-<p>All code for Letterlock is public, including the TEE and the signing server. That includes the server for this website, which is itself run on a TEE.
-A reproducible Nix build means anyone can rebuild from source and derive the same image hash that the attestation report contains.</p>
+<p>All code for Letterlock is public, including the TEE and the signing server. That includes the
+server for this website, which is itself run on a TEE.
+A reproducible Nix build means anyone can rebuild from source and derive the same image hash that
+the attestation report contains.</p>
 
 <h2>Based in Germany</h2>
 <p>Letterlock is an EU entity based in Germany and enthusiastically complies with GDPR regulations.
 The CLOUD act therefore cannot compel Letterlock to release user data. Even if it did, Letterlock
-could not provide the US government a single signed-up email address or contents of any email or configuration data.</p>
+could not provide the US government a single signed-up email address or contents of any email or
+configuration data.</p>
 
 <hr>
 
@@ -443,6 +467,13 @@ could not provide the US government a single signed-up email address or contents
 # use braces normally. Everything it demonstrates runs in the reader's browser
 # on sample values: it illustrates the shape of the pipeline, it is not the
 # pipeline, which runs inside the enclave (backend/masking/pseudonymizer.py).
+# A newline inside a <textarea> is content, so this one value cannot be wrapped
+# where it is used and is spliced in instead.
+_PII_DEMO_TEXT = (
+    "Hi Bob Martinez, Alice Johnson here. My SSN is 123-45-6789, "
+    "reply to alice@example.com or call +1-555-0101."
+)
+
 _MASKING_ANSWER = """
 <p>
 Before any message leaves the enclave, Letterlock scans it for personally identifying
@@ -457,9 +488,9 @@ anything. The AI provider never sees your actual data.
   "Hi, I'm Alice      ──&#9658;  scan &amp; replace    ──&#9658;  "Hi, I'm [NAME_1].
    Johnson. SSN:            PII with placeholder       SSN [SSN_1]."
    123-45-6789."            text
-                                                        <svg width="14" height="28" viewBox="0 0 20 40">
-                                                          <line x1="10" y1="0" x2="10" y2="25" stroke="currentColor" />
-                                                          <polygon points="5,25 15,25 10,35" fill="currentColor" />
+      <svg width="14" height="28" viewBox="0 0 20 40">
+        <line x1="10" y1="0" x2="10" y2="25" stroke="currentColor" />
+        <polygon points="5,25 15,25 10,35" fill="currentColor" />
                                                         </svg>
   "OK Alice Johnson,  &#9664;──  restore PII    &#9664;──    "OK [NAME_1],
    your SSN                                          your SSN
@@ -476,7 +507,8 @@ they are never sent in the clear.
 <div class="pii-demo">
   <div class="pii-demo-col">
     <div class="pii-demo-label out">&#9654; Your message (sent to the model)</div>
-    <textarea class="pii-input" id="pii-input" rows="5" spellcheck="false">Hi Bob Martinez, Alice Johnson here. My SSN is 123-45-6789, reply to alice@example.com or call +1-555-0101.</textarea>
+    <textarea class="pii-input" id="pii-input" rows="5"
+              spellcheck="false">""" + _PII_DEMO_TEXT + """</textarea>
   </div>
   <div class="pii-demo-col">
     <div class="pii-demo-label out">Redacted &mdash; what the model sees</div>
@@ -608,14 +640,17 @@ def _page_faq():
 <details>
 <summary>What is a TEE and why does it matter for email privacy?</summary>
 <div class="answer">
-<p>A TEE (Trusted Execution Environment) is a locked compartment inside of a web server that no-one can read data or monitor processes on. 
-Email is the property of you and your sender, not an AI company. The TEE provides a verifiable guarantee that no-one else will read your data. 
+<p>A TEE (Trusted Execution Environment) is a locked compartment inside of a web server that no-one
+can read data or monitor processes on.
+Email is the property of you and your sender, not an AI company. The TEE provides a verifiable
+guarantee that no-one else will read your data.
 </details>
 
 <details>
 <summary>Does Letterlock train on my emails?</summary>
 <div class="answer">
-<p>No. This would be impossible, as neither Letterlock nor the model provider store or look at your emails.</p>
+<p>No. This would be impossible, as neither Letterlock nor the model provider store or look at your
+emails.</p>
 </div>
 </details>
 
@@ -657,7 +692,8 @@ read it and press send.</p>
 <details>
 <summary>What does it cost?</summary>
 <div class="answer">
-<p>{PRICE} a month. You look at <a href="/pricing">Pricing</a> to compare this against the alternatives.</p>
+<p>{PRICE} a month. You look at <a href="/pricing">Pricing</a> to compare this against the
+alternatives.</p>
 </div>
 </details>
 
@@ -681,7 +717,8 @@ def _page_pricing():
 <h2>Pricing</h2>
 
 <div class="info-box" style="text-align:center;padding:16px;">
-  <div style="font-size:22px;font-weight:bold;color:#1a237e;font-family:'Trebuchet MS',Verdana,sans-serif;">
+  <div style="font-size:22px;font-weight:bold;color:#1a237e;
+              font-family:'Trebuchet MS',Verdana,sans-serif;">
     {PRICE} / month
   </div>
   <div style="font-size:11px;color:#444;margin-top:4px;">All features included. No usage caps.</div>
@@ -777,8 +814,10 @@ approximate and may change.
 </table>
 
 <p style="font-size:11px;color:#555;">
-The key distinction: Letterlock's security is verifiable and uses attested AI providers, carefully checking that they don't store and cannot look at your data. The attestation report shows that
-the server runs the published open-source code, which can be verified. Other tools require you to trust they are telling you the truth.
+The key distinction: Letterlock's security is verifiable and uses attested AI providers, carefully
+checking that they don't store and cannot look at your data. The attestation report shows that
+the server runs the published open-source code, which can be verified. Other tools require you to
+trust they are telling you the truth.
 </p>
 
 <h2>What is included</h2>
@@ -787,7 +826,8 @@ the server runs the published open-source code, which can be verified. Other too
   <li>Automatic draft creation with email history search for context</li>
   <li>Google Calendar read, plus event creation from your sent mail when enabled</li>
   <li>Verifiably secure hosted models (Llama 3, Mistral, DeepSeek R1, Qwen)</li>
-  <li>An optional per-account voice profile, so drafts sound are written with your writing style</li>
+  <li>An optional per-account voice profile, so drafts sound are written with your writing
+style</li>
   <li>Optional Telegram notifications</li>
   <li>Optional daily inbox summary</li>
   <li>On-demand attestation: verify the server is running the published code at any time</li>
@@ -871,6 +911,38 @@ Drafts only. The assistant never sends email autonomously.
     return _layout("Dashboard", body, active="/dashboard", user_email=acct.id)
 
 
+def _voice_job(account_id):
+    """This account's generation job, or None.
+
+    The job runs in the daemon now, because generating a profile reads the
+    account's sent mail and this process is not allowed a mailbox token. So the
+    page has to tolerate the daemon being down: a status that cannot be asked
+    for is not a failed generation, and rendering the editor is the right answer
+    either way. Starting one is where the outage has to be said out loud."""
+    try:
+        return handoff.voice_status(account_id)
+    except handoff.HandoffUnavailable as err:
+        log(f"voice status unavailable for {account_id}: {err}")
+        return None
+
+
+def _voice_forget(account_id):
+    try:
+        handoff.voice_clear_status(account_id)
+    except handoff.HandoffUnavailable as err:
+        log(f"voice status not cleared for {account_id}: {err}")
+
+
+def _chat_forget(account_id):
+    """Drop any half-finished Telegram change. Best effort on a path that has
+    already deleted the account: the pending entry expires on its own, and the
+    account it names is gone either way."""
+    try:
+        handoff.chat_forget(account_id)
+    except (handoff.HandoffUnavailable, handoff.RemoteRefusal) as err:
+        log(f"pending telegram change not cleared for {account_id}: {err}")
+
+
 def _page_voice(acct, error=None, notice=None):
     """The voice profile, as editable plaintext.
 
@@ -885,14 +957,15 @@ def _page_voice(acct, error=None, notice=None):
     rejects drafts and therefore belongs to a switch the user can see the state
     of. "Revert to default" is how they get the shipped rules back."""
     own = voice_dna.load(acct)
-    job = voice_dna.status(acct.id)
+    job = _voice_job(acct.id)
     running = bool(job and job["state"] == "running")
     if job and job["state"] == "failed" and not error:
         error = job["error"]
     if job and job["state"] == "done" and not notice:
-        notice = "Profile generated from your sent mail. Read it over and edit anything that is off."
+        notice = ("Profile generated from your sent mail. "
+                  "Read it over and edit anything that is off.")
     if job and not running:
-        voice_dna.clear_status(acct.id)
+        _voice_forget(acct.id)
 
     status_badge = (
         '<span class="status-ok">SET</span>' if own
@@ -915,7 +988,8 @@ def _page_voice(acct, error=None, notice=None):
 <div class="info-box">
   <p><b>Reading your sent mail and writing your profile.</b></p>
   <p>
-    This takes a minute or two, as recent emails you have written are sampled to build your unique writing voice profile. The page refreshes itself.
+    This takes a minute or two, as recent emails you have written are sampled to build your unique
+writing voice profile. The page refreshes itself.
   </p>
 </div>
 <hr>
@@ -948,7 +1022,8 @@ Your voice DNA tells the assistant how you write, so Letterlock drafts sound lik
 <h3>Generate from your sent mail</h3>
 
 <p>
-Letterlock securely analyze recent emails you have sent and generate the the profile below. Nothing is sent anywhere else. <b>Caution: Generating a result replaces whatever is in the box below</b>.
+Letterlock securely analyze recent emails you have sent and generate the the profile below. Nothing
+is sent anywhere else. <b>Caution: Generating a result replaces whatever is in the box below</b>.
 </p>
 
 <form method="post" action="/voice/generate" style="display:inline">
@@ -1058,12 +1133,15 @@ Generating a voice profile does not touch this box.
                    user_email=acct.id)
 
 
-def _telegram_section(acct, link_code=None, error=None, notice=None):
+def _telegram_section(acct, pending=None, error=None, notice=None):
     """The Telegram block of the settings page.
 
-    Linking is a round trip through the bot rather than a chat-ID text field: the
-    user posts a one-time code, and we read the chat id back off the bot. A typed
-    chat id proves nothing about who owns it."""
+    Both directions are a round trip through the bot rather than a button that
+    acts on its own. Linking posts a code from the chat being linked, because a
+    typed chat id proves nothing about who owns it. Unlinking posts a code from
+    the chat being detached, because this process is the one an attacker
+    reaches, and the summary carries mail: the rule and the reason are in
+    `backend.accounts.chat_link`, and this only renders it."""
     error_html = (
         f'<div class="form-error" style="margin-bottom:10px;">{_h(error)}</div>'
         if error else ""
@@ -1073,18 +1151,23 @@ def _telegram_section(acct, link_code=None, error=None, notice=None):
         if notice else ""
     )
 
-    if link_code:
-        username = telegram.bot_username()
+    if pending:
+        username = pending.get("username")
         open_link = (
             f'<a href="https://t.me/{_h(username)}" target="_blank" rel="noopener">'
             f'@{_h(username)}</a>'
             if username else "our Telegram bot"
         )
         search_name = f"@{_h(username)}" if username else "our Telegram bot"
-        return f"""
-<h3>Telegram</h3>
-{error_html}{notice_html}
-<div class="info-box">
+        if pending["action"] == handoff.CHAT_UNLINK:
+            instructions = f"""
+  <p>
+    To stop your summary going to chat <code>{_h(acct.telegram.chat_id)}</code>, send
+    this code <b>from that chat</b>. We only detach a chat that asks us to, so that
+    nobody else can move your summary somewhere you cannot see it.
+  </p>"""
+        else:
+            instructions = f"""
   <p>
     1. Open {open_link} in Telegram and press Start, or send it <code>/start</code>
     if no button appears.<br>
@@ -1092,11 +1175,16 @@ def _telegram_section(acct, link_code=None, error=None, notice=None):
     <a href="https://web.telegram.org" target="_blank" rel="noopener">web.telegram.org</a>
     and search for {search_name}.<br>
     2. Send it this code:
-  </p>
+  </p>"""
+        return f"""
+<h3>Telegram</h3>
+{error_html}{notice_html}
+<div class="info-box">
+{instructions}
   <p style="text-align:center;font-size:18px;font-weight:bold;letter-spacing:2px;">
-    {_h(link_code)}
+    {_h(pending["code"])}
   </p>
-  <p>3. Come back here and press the button.</p>
+  <p>Then come back here and press the button.</p>
   <form method="post" action="/settings/telegram/confirm" style="display:inline">
     <button type="submit" class="form-submit">I have sent the code</button>
   </form>
@@ -1111,7 +1199,7 @@ def _telegram_section(acct, link_code=None, error=None, notice=None):
   Linked to chat <code>{_h(acct.telegram.chat_id)}</code>. You get a message when a draft
   is ready, plus the daily summary.
 </p>
-<form method="post" action="/settings/telegram/unlink" style="display:inline">
+<form method="post" action="/settings/telegram/start" style="display:inline">
   <button type="submit" class="form-submit">Unlink</button>
 </form>
 """
@@ -1179,7 +1267,7 @@ def _analyzer_section(acct):
     </div>"""
 
 
-def _page_settings(acct, saved=False, link_code=None, error=None, notice=None,
+def _page_settings(acct, saved=False, pending=None, error=None, notice=None,
                    settings_error=None):
     saved_html = ""
     if saved:
@@ -1195,7 +1283,7 @@ def _page_settings(acct, saved=False, link_code=None, error=None, notice=None,
 
 {saved_html}
 
-{_telegram_section(acct, link_code=link_code, error=error, notice=notice)}
+{_telegram_section(acct, pending=pending, error=error, notice=notice)}
 
 <hr>
 
@@ -1543,10 +1631,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/auth/login":
             state = sess.new_state()
             try:
-                url = provisioning.build_auth_url(state, REDIRECT_URI)
-            except provisioning.ProvisionError as e:
+                url = handoff.auth_url(state, REDIRECT_URI)
+            except handoff.RemoteRefusal as e:
                 log(f"auth/login failed: {e.msg}")
-                return self._send(e.code, _page_error(e.code, "Sign-in unavailable. Please try again later."))
+                return self._send(e.code, _page_error(
+                    e.code, "Sign-in unavailable. Please try again later."))
+            except handoff.HandoffUnavailable as e:
+                log(f"auth/login could not reach the daemon: {e}")
+                return self._send(503, _page_error(
+                    503, "Sign-in unavailable. Please try again later."))
             # The existing cookie is carried in, so opening a second sign-in tab
             # adds a pending consent rather than invalidating the first one.
             return self._redirect(url, extra=[
@@ -1554,19 +1647,26 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/auth/callback":
             query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+            # The cookie proving this consent started in this browser is this
+            # process's to check; the code exchange is not. What crosses to the
+            # daemon is the answer, because nothing over there can see a cookie.
+            state = query.get("state", "")
+            state_ok = bool(state) and sess.state_is_ours(state, self.headers)
             try:
-                acct, location = provisioning.handle_callback(
-                    query, lambda s: sess.state_is_ours(s, self.headers), REDIRECT_URI
-                )
-            except provisioning.ProvisionError as e:
+                account_id, location = handoff.sign_in(query, state_ok, REDIRECT_URI)
+            except handoff.RemoteRefusal as e:
                 log(f"auth/callback rejected: {e.msg}")
                 return self._send(e.code, _page_error(
                     e.code, "Could not complete sign-in. Please try again."))
+            except handoff.HandoffUnavailable as e:
+                log(f"auth/callback could not reach the daemon: {e}")
+                return self._send(503, _page_error(
+                    503, "Sign-in is temporarily unavailable. Please try again in a few minutes."))
             except Exception as e:
                 log(f"auth/callback error: {e}")
                 return self._send(500, _page_error(500, "Sign-in failed. Please try again."))
-            audit.record(acct.id, audit.SIGN_IN, "ok")
-            session_cookie = sess.make_cookie(acct.id)
+            audit.record(account_id, audit.SIGN_IN, "ok")
+            session_cookie = sess.make_cookie(account_id)
             return self._redirect(location, extra=[
                 ("Set-Cookie", sess.clear_state_cookie()),
                 ("Set-Cookie", session_cookie),
@@ -1675,7 +1775,8 @@ class Handler(BaseHTTPRequestHandler):
             name = form.get("name", "").strip()
             email = form.get("email", "").strip()
             _deliver_contact(name, email, message)
-            return self._send(200, _page_contact(msg="Message received. We'll get back to you when we can."))
+            return self._send(200, _page_contact(
+                msg="Message received. We'll get back to you when we can."))
 
         if path == "/settings":
             acct = self._require_auth()
@@ -1711,50 +1812,47 @@ class Handler(BaseHTTPRequestHandler):
             )
             return self._send(200, _page_settings(acct, saved=True))
 
+        # One route for both directions. Which change this is comes back from
+        # the daemon, read off the account it holds: a page that named the
+        # action would be a page that could ask to link over an existing chat,
+        # which is the replacement the rule declines to do in one step.
         if path == "/settings/telegram/start":
             acct = self._require_auth()
             if acct is None:
                 return
-            if not telegram.bot_token():
+            try:
+                action, code, username = handoff.chat_begin(acct.id)
+            except handoff.RemoteRefusal as e:
+                return self._send(200, _page_settings(acct, error=e.msg))
+            except handoff.HandoffUnavailable as e:
+                log(f"telegram change could not be started for {acct.id}: {e}")
                 return self._send(200, _page_settings(acct, error=(
-                    "Telegram is not configured on this server yet.")))
-            code = _put_link_code(acct.id)
-            return self._send(200, _page_settings(acct, link_code=code))
+                    "Telegram changes are unavailable right now. Please try "
+                    "again in a few minutes.")))
+            pending = _put_pending(acct.id, action, code, username)
+            return self._send(200, _page_settings(acct, pending=pending))
 
         if path == "/settings/telegram/confirm":
             acct = self._require_auth()
             if acct is None:
                 return
-            code = _get_link_code(acct.id)
-            if not code:
-                return self._send(200, _page_settings(acct, error=(
-                    "That link code expired. Start again.")))
+            # Display state only. The code that counts is the daemon's, and a
+            # refusal below is its answer rather than this dictionary's.
+            pending = _get_pending(acct.id)
             try:
-                chat_id = telegram.claim_chat_id(code)
-            except Exception as e:
-                log(f"telegram claim failed for {acct.id}: {e}")
-                chat_id = None
-            if not chat_id:
-                return self._send(200, _page_settings(acct, link_code=code, error=(
-                    "We have not seen that code yet. Send it to the bot, "
-                    "then press the button again.")))
-            _LINK_CODES.pop(acct.id, None)
-            acct = account.set_telegram(acct.id, chat_id=chat_id)
-            telegram.send_telegram(
-                "✅ <b>Letterlock is linked to this chat.</b>\n"
-                "You will get a message when a draft is ready, plus your daily summary.",
-                acct.telegram,
-            )
-            return self._send(200, _page_settings(
-                acct, notice="Telegram linked. We sent a test message."))
-
-        if path == "/settings/telegram/unlink":
-            acct = self._require_auth()
-            if acct is None:
-                return
-            _LINK_CODES.pop(acct.id, None)
-            acct = account.set_telegram(acct.id, clear=True)
-            return self._send(200, _page_settings(acct, notice="Telegram unlinked."))
+                chat_id = handoff.chat_finish(acct.id)
+            except handoff.RemoteRefusal as e:
+                return self._send(200, _page_settings(acct, pending=pending, error=e.msg))
+            except handoff.HandoffUnavailable as e:
+                log(f"telegram change could not be completed for {acct.id}: {e}")
+                return self._send(200, _page_settings(acct, pending=pending, error=(
+                    "Telegram changes are unavailable right now. Please try "
+                    "again in a few minutes.")))
+            _PENDING_CHATS.pop(acct.id, None)
+            acct = account.account_for_email(acct.id)
+            notice = ("Telegram linked. We sent a test message." if chat_id
+                      else "Telegram unlinked.")
+            return self._send(200, _page_settings(acct, notice=notice))
 
         if path == "/voice":
             acct = self._require_auth()
@@ -1789,7 +1887,15 @@ class Handler(BaseHTTPRequestHandler):
             acct = self._require_auth()
             if acct is None:
                 return
-            voice_dna.start(acct)
+            try:
+                handoff.voice_start(acct.id)
+            except handoff.HandoffUnavailable as e:
+                # Said plainly rather than swallowed: the button did nothing,
+                # and the waiting page would poll a job that was never started.
+                log(f"voice generation could not be started for {acct.id}: {e}")
+                return self._send(200, _page_voice(acct, error=(
+                    "Profile generation is unavailable right now. Please try "
+                    "again in a few minutes, or write your profile by hand below.")))
             # Straight to the waiting page rather than rendering it here, so a
             # refresh during generation is a GET and not a repeated POST.
             return self._redirect("/voice")
@@ -1815,10 +1921,12 @@ class Handler(BaseHTTPRequestHandler):
                 # destructive path, so a run of failed attempts is a signal
                 # rather than a typo.
                 audit.record(acct.id, audit.ACCOUNT, "refused", ("confirm-mismatch",))
-                return self._send(200, _page_account(acct, error="Email address did not match. Account not deleted."))
+                return self._send(200, _page_account(
+                    acct, error="Email address did not match. Account not deleted."))
             account.delete_account(acct.id)
-            _LINK_CODES.pop(acct.id, None)
-            voice_dna.clear_status(acct.id)
+            _PENDING_CHATS.pop(acct.id, None)
+            _chat_forget(acct.id)
+            _voice_forget(acct.id)
             clear = sess.clear_cookie()
             return self._send(200, _page_deleted(), extra=[("Set-Cookie", clear)])
 

@@ -13,14 +13,11 @@ same two boundaries the drafting suite stands at.
 
 import re
 
+import harness
 import pytest
 
-import harness
-
 from backend.accounts import account as account_mod
-from backend.drafting import agentic_drafter
-from backend.drafting import email_summary
-
+from backend.drafting import agentic_drafter, email_summary
 
 OTHER = "other@example.com"
 

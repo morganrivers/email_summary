@@ -64,7 +64,6 @@
       "from": "Alice Adams <alice@contoso.com>",
       "subject": "Lunch next week?",
       "reason": "Personal lunch request",
-      "run_url": null,
       "draft_id": "draft-1",
       "thread_id": "t1"
     }

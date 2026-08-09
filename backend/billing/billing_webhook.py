@@ -1,10 +1,13 @@
-"""Polar subscription webhook -> instant account activation/deactivation.
+"""Polar subscription webhook -> spooled account activation/deactivation.
 
 Ported from hetzner_signing_server/webhook.py. Verifies the Standard Webhooks
-signature, then routes the event through billing.PolarBilling.apply_event, which
-flips the buyer's local account plan_status (the cert-signing action is gone).
+signature, then hands the event to `billing_queue` for the daemon to apply. It
+used to call billing.PolarBilling.apply_event here and flip plan_status itself;
+read that module's docstring for why a signature verifier does not write the
+account store, and what deferring costs.
 
-Runs as a long-lived loopback http.server; Caddy terminates TLS and
+Runs as a long-lived loopback http.server under its own account
+(deploy/hetzner/billing-webhook.service.d); Caddy terminates TLS and
 reverse-proxies /polar/webhook here. Per CLAUDE.md, the Caddy config is updated
 by hand, not by deploy.sh.
 
@@ -21,7 +24,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from standardwebhooks import Webhook
 
 from backend import site
-from backend.billing.billing import PolarBilling, log, webhook_secret
+from backend.billing.billing import log, webhook_secret
+from backend.billing.billing_queue import DeferredBilling
 
 WEBHOOK_PATH = site.POLAR_WEBHOOK_PATH
 _SIG_HEADERS = ("webhook-id", "webhook-timestamp", "webhook-signature")
@@ -33,8 +37,12 @@ MAX_BODY = 256 * 1024
 
 def process_webhook(raw, headers, verifier, billing):
     """Pure decision path for one webhook POST, shared by do_POST and the tests.
-    Returns (http_status, json_body_str). Verifies the signature, then applies the
-    entitlement event to the local account store."""
+    Returns (http_status, json_body_str). Verifies the signature, then hands the
+    event to `billing`, which spools it for the daemon.
+
+    Still exactly one call after the verify, which is the property the AST test
+    in tests/test_billing_webhook.py pins: an event reaches the rest of the
+    system through this function or not at all."""
     try:
         # verify() raises on a bad/absent signature and returns the payload.
         event = verifier.verify(raw, headers)
@@ -51,8 +59,10 @@ def process_webhook(raw, headers, verifier, billing):
     try:
         result = billing.apply_event(event)
     except Exception as e:
-        # 5xx tells Polar to retry; a transient Polar API blip self-heals.
-        log(f"webhook apply failed type={event.get('type')}: {e}")
+        # 5xx tells Polar to retry. The only failure left here is the spool
+        # write itself, since applying the event moved to the daemon; a retry
+        # is the right answer to a full disk and costs nothing otherwise.
+        log(f"webhook spool failed type={event.get('type')}: {e}")
         return 500, '{"error":"apply failed"}'
 
     log(f"webhook {event.get('type')} -> {result}")
@@ -60,7 +70,7 @@ def process_webhook(raw, headers, verifier, billing):
 
 
 class Handler(BaseHTTPRequestHandler):
-    billing = None      # PolarBilling, set in main()
+    billing = None      # DeferredBilling, set in main()
     verifier = None     # standardwebhooks.Webhook, set in main()
 
     def _reply(self, code, msg="{}"):
@@ -92,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    Handler.billing = PolarBilling()
+    Handler.billing = DeferredBilling()
     Handler.billing.log_startup("billing-webhook")
     secret = webhook_secret()
     assert secret, "POLAR_WEBHOOK_SECRET required"

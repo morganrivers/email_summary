@@ -5,29 +5,32 @@ Blocks on a FIFO for wake signals from gmail_hook_server. On wake, fetches new
 emails via state.lastHistoryId and runs them through manual_draft /
 draft_replies.
 
-The webhook runs as the same user under systemd, so the FIFO is 0600. It was
-0666 back when the webhook was PHP running as a different user; leaving it world
--writable now just lets any local account wake the daemon.
+The webhook runs under its own uid, so the FIFO goes through paths.wake_file():
+0660 to paths.WAKE_GROUP, whose only members are this unit and that one. It was
+0666 back when the webhook was PHP, and 0600 while both ran as one account.
+Neither is right now, and neither is the group holding the rest of state/ --
+waking this daemon starts work against a named account and the web tier is in
+that wider group.
 
-A re-wake during processing is fine: the webhook spools the account id to
+A re-wake during processing is fine: the webhook spools the address to
 wake_queue before poking the FIFO, and the read end stays open for the whole
 process lifetime so a poke during processing is never refused.
 """
 
 import os
-import sys
-import stat
-import time
 import select
 import signal
+import stat
+import sys
+import time
 import traceback
-from pathlib import Path
 
-from backend import paths
-from backend import secrets
+from backend import paths, secrets
 from backend.accounts import account as account_mod
-from backend.daemons import pipeline
-from backend.daemons import wake_queue
+from backend.billing import billing_queue
+from backend.billing.billing import PolarBilling
+from backend.custody import handoff_server
+from backend.daemons import pipeline, wake_queue
 from backend.integrations.telegram import notify_error
 
 secrets.load()
@@ -49,8 +52,8 @@ def ensure_fifo():
         if not stat.S_ISFIFO(FIFO_PATH.stat().st_mode):
             FIFO_PATH.unlink()
     if not FIFO_PATH.exists():
-        os.mkfifo(str(FIFO_PATH), 0o600)
-    os.chmod(str(FIFO_PATH), 0o600)
+        os.mkfifo(str(FIFO_PATH), paths.FILE_MODE_PRIVATE)
+    paths.wake_file(FIFO_PATH)
 
 
 def _run_account(acct):
@@ -71,6 +74,27 @@ def _run_account(acct):
 def process_all():
     for acct in account_mod.load_accounts():
         _run_account(acct)
+
+
+def process_billing():
+    """Apply whatever the Polar receiver spooled since the last pass.
+
+    Here rather than in that receiver because flipping a plan means writing the
+    account manifest, and the process verifying signatures from the open
+    internet must not hold that. `PolarBilling` is constructed only when there
+    is something to apply, so a box with no Polar token configured pays nothing
+    for this call. One event's failure does not stop the rest, for the same
+    reason one mailbox's does not."""
+    events = billing_queue.drain()
+    if not events:
+        return
+    billing = PolarBilling()
+    for event in events:
+        try:
+            log(f"billing: {billing.apply_event(event)}")
+        except Exception as err:
+            log(f"billing event {event.get('type')!r} failed: {err}")
+            notify_error("billing event failed", err)
 
 
 def process_accounts(ids):
@@ -117,10 +141,14 @@ def wait_for_wake(fd, timeout=WAKE_POLL_SECONDS):
 def main():
     ensure_fifo()
     fd, _keepalive = open_fifo_reader()
+    # Before the sweep, not after: the sweep can run for minutes and the web
+    # tier cannot complete a sign-in until this socket exists.
+    handoff_server.start(log)
     log(f"daemon started; FIFO={FIFO_PATH} poll={WAKE_POLL_SECONDS}s")
     # Bootstrap at startup: drain any queued pushes, then sweep all accounts
     # in case a push arrived while the daemon was down.
     try:
+        process_billing()
         process_accounts(wake_queue.drain())
         process_all()
     except Exception as err:
@@ -137,6 +165,10 @@ def main():
                 except FileNotFoundError:
                     pass
                 sys.exit(0)
+            # Before the mail work, so an activation that arrived while the
+            # last pass ran is in force for this one: an account flipped to
+            # active is an account this sweep should process.
+            process_billing()
             ids = wake_queue.drain()
             if ids:
                 log(f"routed wake for {len(ids)} account(s): {ids}")

@@ -56,8 +56,7 @@ import time
 
 import requests
 
-from backend import secrets
-from backend import site
+from backend import secrets, site
 from backend.custody.wrapping import CustodyError
 from backend.integrations import telegram
 from backend.tee import tee_boot
@@ -191,10 +190,6 @@ def _request(method, path, body=None):
     return parsed
 
 
-def health():
-    return _request("GET", protocol.HEALTH_PATH)
-
-
 def dpop_jwk():
     """The co-signer's DPoP public key, fetched once per process. Public
     material: it is what Google binds the refresh token to, and it is in every
@@ -311,33 +306,6 @@ def rewrap(handle, outer):
     ).get(protocol.F_OUTER)
     assert rewrapped, "co-signer answered /rewrap with no outer ciphertext"
     return protocol.unb64(rewrapped)
-
-
-def unwrap(handle, outer):
-    """An account's data key released without a proof, for reading the documents
-    that account owns. Same refusals, same log, its own ceiling; the proof is
-    what is missing, and a capability nobody needs is one not to mint."""
-    assert handle and outer, "unwrap needs a handle and an outer ciphertext"
-    inner = _request(
-        "POST", protocol.UNWRAP_PATH,
-        {protocol.F_UID: handle, protocol.F_OUTER: protocol.b64(outer)},
-    ).get(protocol.F_INNER)
-    assert inner, "co-signer returned an empty inner ciphertext"
-    return protocol.unb64(inner)
-
-
-def rewrap(handle, outer):
-    """One record moved onto the co-signer's current outer key version. Returns
-    the new `outer`. Nothing is opened on this box: the enclave hands over
-    ciphertext and gets ciphertext back, which is what makes rotating the
-    operator's key cost no access to anyone's data."""
-    assert handle and outer, "rewrap needs a handle and an outer ciphertext"
-    fresh = _request(
-        "POST", protocol.REWRAP_PATH,
-        {protocol.F_UID: handle, protocol.F_OUTER: protocol.b64(outer)},
-    ).get(protocol.F_OUTER)
-    assert fresh, "co-signer returned an empty outer ciphertext"
-    return protocol.unb64(fresh)
 
 
 def reset_cache():

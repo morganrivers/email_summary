@@ -26,8 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from backend import paths
-from backend import secrets
+from backend import paths, secrets
 
 UNIT_DIR = Path(__file__).resolve().parent / "hetzner"
 _EXEC_MODULE = re.compile(r"^ExecStart=.*?\s-m\s+(\S+)", re.MULTILINE)
@@ -84,11 +83,16 @@ def _custody_available():
 
 
 def _web_configured():
-    """The web UI signs users in with Google, so a missing OAuth app takes it
-    down as surely as a missing cookie key does. It also generates voice
-    profiles, which builds an inference client like any mail path does."""
-    return (secrets.session_configured() or secrets.google_oauth_configured()
-            or _inference_attestable())
+    """What the web UI needs by itself: the cookie key, and the co-signer it
+    asks for a data key when it renders a user's two documents.
+
+    Deliberately not the Google OAuth app and not an inference provider. The
+    consent URL, the code exchange and voice generation run in the daemon over
+    backend/custody/handoff.py, because this process is not allowed a mailbox
+    token or the client secret that would obtain one. A box missing either takes
+    the daemon out of this report, which is where the remedy is; the site itself
+    stays up with everything except sign-in."""
+    return secrets.session_configured() or _custody_available()
 
 
 def _definitely_absent(path):
@@ -145,9 +149,16 @@ def _cosigner_configured():
 CONFIG_CHECKS = {
     "cosigner.server": _cosigner_configured,
     "backend.daemons.egress_proxy": _egress_allowlist_derivable,
-    "backend.billing.billing_webhook": secrets.polar_configured,
+    # The receiver verifies signatures and spools; it holds no API token and
+    # reads .env.billing alone, so the webhook secret is the whole of what it
+    # needs. Checking polar_configured() here would skip the unit for a missing
+    # value it never reads, or pass it on one it cannot see.
+    "backend.billing.billing_webhook": secrets.polar_webhook_configured,
     "backend.billing.billing_poller": secrets.polar_api_configured,
     "frontend.web_server": _web_configured,
+    # The daemon applies the spooled billing events, so the API token is its
+    # concern now. Not a hard requirement: a box with no Polar configured
+    # drafts mail perfectly well, which is why this stays _mail_configured.
     "backend.daemons.daemon_loop": _mail_configured,
     "backend.daemons.gmail_hook_server": _mail_configured,
     "backend.onboarding.watch_renew": _mail_configured,

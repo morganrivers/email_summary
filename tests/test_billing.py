@@ -7,11 +7,11 @@ while an activated one becomes routable. Polar's API is never hit: every path
 tested resolves the account from data carried in the event itself.
 """
 
-from harness import account_entry as _entry, write_manifest as _manifest
+from harness import account_entry as _entry
+from harness import write_manifest as _manifest
 
 from backend.accounts import account
-from backend.billing import billing
-from backend.billing import polar_api
+from backend.billing import billing, polar_api
 
 
 def _billing(monkeypatch):

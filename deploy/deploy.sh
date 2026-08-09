@@ -97,12 +97,81 @@ rsync "${RSYNC_FLAGS[@]}" \
 echo "==> Ensuring service account and ownership"
 remote "id -u $SERVICE_USER >/dev/null 2>&1 || \
     useradd --system --home-dir $REMOTE_DIR --shell /usr/sbin/nologin $SERVICE_USER"
+
+# The web UI runs as its own account (deploy/hetzner/letterlock-web.service.d),
+# so "owner only" stopped being an answer for the files two uids share. Which
+# group holds what is decided in backend/paths.py, because the application sets
+# these modes at runtime too and the two must agree; read back from there rather
+# than spelled twice.
+DATA_GROUP="$(cd "$REPO_DIR" && python3 -c 'from backend import paths; print(paths.DATA_GROUP)')"
+SECRETS_GROUP="$(cd "$REPO_DIR" && python3 -c 'from backend import paths; print(paths.SECRETS_GROUP)')"
+WAKE_GROUP="$(cd "$REPO_DIR" && python3 -c 'from backend import paths; print(paths.WAKE_GROUP)')"
+BILLING_QUEUE_GROUP="$(cd "$REPO_DIR" && python3 -c 'from backend import paths; print(paths.BILLING_QUEUE_GROUP)')"
+BILLING_SECRETS_GROUP="$(cd "$REPO_DIR" && python3 -c 'from backend import paths; print(paths.BILLING_SECRETS_GROUP)')"
+SHARED_GROUPS=("$DATA_GROUP" "$SECRETS_GROUP" "$WAKE_GROUP" "$BILLING_QUEUE_GROUP" "$BILLING_SECRETS_GROUP")
+for g in "${SHARED_GROUPS[@]}"; do
+    [ -n "$g" ] || { echo "could not read group names from backend/paths.py" >&2; exit 1; }
+done
+echo "==> Ensuring shared groups: ${SHARED_GROUPS[*]}"
+for group in "${SHARED_GROUPS[@]}"; do
+    remote "getent group $group >/dev/null || groupadd --system $group"
+    # The mail units run as SERVICE_USER, which has no drop-in to name its
+    # supplementary groups. Membership matters beyond reading: paths.shared_dir
+    # hands a directory to the group, and chgrp by a non-root owner is refused
+    # unless the owner is in the target group.
+    remote "id -nG $SERVICE_USER | tr ' ' '\n' | grep -qx $group || \
+        usermod -aG $group $SERVICE_USER"
+done
+
+# database/, state/ and config/ are setgid to the shared group so a file created
+# by either uid is readable by the other; .gmail-mcp/ deliberately is not, since
+# it holds the OAuth client secret and the web tier receives the authorization
+# code that secret would exchange. token.bin is put back to owner-only after the
+# blanket pass: it is the one file the web tier must not read, because the data
+# key it legitimately holds for a document render would open it.
+#
+# The two spools are the other exceptions and they move sideways rather than
+# down. The wake files (FIFO plus its spool) go to WAKE_GROUP and the billing
+# spool to BILLING_QUEUE_GROUP, each holding the mail uid and one receiver.
+# Writing to the wake path starts a drafting pass against a named account and
+# spends that account's co-signer budget, so it is a capability the web uid and
+# the billing uid are kept out of even though both are in DATA_GROUP.
+#
+# state/ is 2771 rather than 2770 and database/ is not: four uids open a file in
+# state/ and they are deliberately not all in one group, so traversal has to be
+# open for a file's own mode to be the grant. Every file in there is 0600 or
+# 0660 to a named group, and x without r is not listing. Who has an account is
+# itself worth keeping, which is why database/ does not get the same bit.
 remote "chown -R $SERVICE_USER:$SERVICE_USER $REMOTE_DIR && \
     chmod 750 $REMOTE_DIR && \
-    for d in database state .gmail-mcp config; do \
-        [ -e $REMOTE_DIR/\$d ] && chmod 700 $REMOTE_DIR/\$d; \
+    [ -e $REMOTE_DIR/.gmail-mcp ] && chmod 700 $REMOTE_DIR/.gmail-mcp; \
+    for d in database state; do \
+        [ -e $REMOTE_DIR/\$d ] || continue; \
+        chgrp -R $DATA_GROUP $REMOTE_DIR/\$d; \
+        find $REMOTE_DIR/\$d -type d -exec chmod 2770 {} +; \
+        find $REMOTE_DIR/\$d -type f -exec chmod 660 {} +; \
     done; \
-    [ -e $REMOTE_DIR/.env ] && chmod 600 $REMOTE_DIR/.env; true"
+    [ -e $REMOTE_DIR/state ] && chmod 2771 $REMOTE_DIR/state; \
+    [ -e $REMOTE_DIR/database ] && \
+        find $REMOTE_DIR/database -type f -name token.bin -exec chmod 600 {} +; \
+    for f in wake.fifo wake_queue.jsonl wake_queue.lock; do \
+        [ -e $REMOTE_DIR/state/\$f ] || continue; \
+        chgrp $WAKE_GROUP $REMOTE_DIR/state/\$f && chmod 660 $REMOTE_DIR/state/\$f; \
+    done; \
+    for f in billing_queue.jsonl billing_queue.lock; do \
+        [ -e $REMOTE_DIR/state/\$f ] || continue; \
+        chgrp $BILLING_QUEUE_GROUP $REMOTE_DIR/state/\$f && chmod 660 $REMOTE_DIR/state/\$f; \
+    done; \
+    if [ -e $REMOTE_DIR/config ]; then \
+        chgrp -R $DATA_GROUP $REMOTE_DIR/config; \
+        find $REMOTE_DIR/config -type d -exec chmod 2750 {} +; \
+        find $REMOTE_DIR/config -type f -exec chmod 640 {} +; \
+    fi; \
+    [ -e $REMOTE_DIR/.env ] && chgrp $SECRETS_GROUP $REMOTE_DIR/.env && \
+        chmod 640 $REMOTE_DIR/.env; \
+    [ -e $REMOTE_DIR/.env.billing ] && \
+        chgrp $BILLING_SECRETS_GROUP $REMOTE_DIR/.env.billing && \
+        chmod 640 $REMOTE_DIR/.env.billing; true"
 
 CONFIG_PRESENT=()
 for name in "${CONFIG_FILES[@]}"; do
@@ -167,15 +236,27 @@ done
 # not run as the application's user. The account name is defined in the drop-in
 # and nowhere else -- this script reads it back out rather than hardcoding it,
 # so adding a second isolated unit needs no change here.
-mapfile -t EXTRA_USERS < <(cat "$UNIT_DIR"/*.d/*.conf 2>/dev/null \
-    | sed -n 's/^User=[[:space:]]*//p' | sort -u | grep -vx "$SERVICE_USER" || true)
-for account in "${EXTRA_USERS[@]}"; do
+# Read per drop-in rather than over their concatenation, because the groups a
+# unit's account belongs to are now part of the same answer: SupplementaryGroups=
+# in the drop-in is the only statement of which accounts reach the account store
+# and which reach only the source. Making it so here means the unit file is that
+# statement instead of describing one somebody applied by hand.
+for conf in "$UNIT_DIR"/*.d/*.conf; do
+    [ -f "$conf" ] || continue
+    account="$(sed -n 's/^User=[[:space:]]*//p' "$conf" | tail -1)"
     [ -n "$account" ] || continue
-    echo "==> Ensuring service account: $account"
-    # No home and no shell: it owns its StateDirectory and its credentials, and
-    # reaches the source read-only through SupplementaryGroups=.
-    remote "id -u $account >/dev/null 2>&1 || \
-        useradd --system --no-create-home --shell /usr/sbin/nologin $account"
+    if [ "$account" != "$SERVICE_USER" ]; then
+        echo "==> Ensuring service account: $account"
+        # No home and no shell: it owns its StateDirectory and its credentials,
+        # and reaches the source read-only through SupplementaryGroups=.
+        remote "id -u $account >/dev/null 2>&1 || \
+            useradd --system --no-create-home --shell /usr/sbin/nologin $account"
+    fi
+    for group in $(sed -n 's/^SupplementaryGroups=[[:space:]]*//p' "$conf"); do
+        remote "getent group $group >/dev/null || groupadd --system $group"
+        remote "id -nG $account | tr ' ' '\n' | grep -qx $group || \
+            usermod -aG $group $account"
+    done
 done
 
 for unit in "${SANDBOXED[@]}"; do

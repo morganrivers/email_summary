@@ -54,13 +54,11 @@ import re
 import shutil
 from pathlib import Path
 
-from backend import audit
-from backend import paths
-from backend import secrets
+from backend import audit, paths, secrets
+from backend.accounts import state
 from backend.integrations import llm_client
 from backend.integrations.telegram import TelegramTarget, bot_token, operator_target
 from backend.masking import pseudonymizer
-from backend.accounts import state
 
 ACCOUNTS_DIR = paths.DATABASE_DIR
 MANIFEST = ACCOUNTS_DIR / "accounts.json"
@@ -232,12 +230,15 @@ def _resolve(path):
 
 
 def secure_dir(path):
-    """Create a directory only its owner can read. It holds each account's
-    identity and its wrapped token; the default 0755 makes every local account
-    able to read them."""
-    path.mkdir(parents=True, exist_ok=True)
-    path.chmod(0o700)
-    return path
+    """Create a directory nothing outside the application reaches. It holds each
+    account's identity and its wrapped token; the default 0755 makes every local
+    account able to read them.
+
+    Delegates because the answer stopped being one mode: the web tier and the
+    mail units are separate uids and both write here, so the grant is to the
+    group holding exactly those two. `paths.shared_dir` falls back to owner-only
+    where that group does not exist."""
+    return paths.shared_dir(path)
 
 
 def check_id(account_id):
@@ -248,10 +249,10 @@ def check_id(account_id):
     own home or reads another account's. Exported because custody, onboarding
     and the document modules all build paths from it; one guard is one that
     cannot be relaxed for a single caller."""
-    assert account_id and "/" not in account_id and "\\" not in account_id \
-        and ".." not in account_id, (
-        f"refusing to build an account path from {account_id!r}"
-    )
+    assert (
+        account_id and "/" not in account_id and "\\" not in account_id
+        and ".." not in account_id
+    ), f"refusing to build an account path from {account_id!r}"
     return account_id
 
 
@@ -269,12 +270,17 @@ def account_dir(account_id):
 
 
 def _write_manifest(data):
-    """Sole manifest write. 0600 for the same reason as secure_dir: the file
-    carries per-user identity, chat ids, and billing links."""
+    """Sole manifest write. Restricted for the same reason as secure_dir: the
+    file carries per-user identity, chat ids, and billing links.
+
+    The web tier writes it too, which is the one thing about this file the uid
+    split does not change and the reason a repointed telegram target is still
+    reachable from a compromised web process. Closing that means the manifest
+    stops being a file the web tier can write at all."""
     secure_dir(ACCOUNTS_DIR)
     tmp = MANIFEST.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2))
-    tmp.chmod(0o600)
+    tmp.chmod(paths.file_mode())
     tmp.replace(MANIFEST)
 
 

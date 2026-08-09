@@ -168,9 +168,12 @@ auditable.
   box. Clean single source of truth.
 - `daemon_loop.py` FIFO listener, `gmail_hook_server.py` webhook, calendar +
   draft writers, daily summary, weekly watch renewal. All single-tenant.
-- Hardcoded identity: `pseudonymizer.py` bakes in Morgan/Rivers constants;
-  `state.json` is one global state; OAuth token sits in `.env` / `.gmail-mcp/`
-  in plaintext on the Hetzner box.
+- Hardcoded identity (fixed): `pseudonymizer.py` held the operator's own name
+  and address as module constants, and `new_state()` fell back to them, so any
+  caller that omitted an identity masked one user's mail under another's. The
+  module now holds no identity at all; each one comes from the account store,
+  the owner's from `LETTERLOCK_OWNER_*` (`account.owner_identity()`), and
+  `new_state()` / `complete()` assert rather than substitute.
 
 Diagrams: `docs/graphviz/arch_current.*` and `arch_target.*`.
 

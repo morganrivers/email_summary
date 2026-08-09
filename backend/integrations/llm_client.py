@@ -28,13 +28,10 @@ for `client.responses`.
 import json
 import os
 import sys
-import threading
-import time
 
 from openai import OpenAI
 
-from backend.integrations import inference_attestation
-from backend.integrations import telegram
+from backend.integrations import inference_attestation, telegram
 from backend.masking import pseudonymizer
 
 
@@ -137,17 +134,15 @@ class ProviderUnavailable(RuntimeError):
     balance is not a reason to send someone's mail somewhere they did not
     choose."""
 
+
 # Reasoning tokens count against max_tokens, so a budget sized for the answer
 # alone truncates before any answer is emitted. Sized for the largest batch a
 # caller sends (40 emails) rather than the typical one.
 JSON_MAX_TOKENS = 16000
 
-# Off unless deliberately switched on. Tracing ships every prompt and tool
-# result to a third-party observability service, which is a claim the product
-# pages do not make; an API key happening to be present in the environment is
-# not consent to send other people's mail there. It also lands outside whatever
-# enclave the chosen provider runs in, so it defeats attestation when enabled.
-LANGSMITH_ENABLED = os.environ.get("LANGSMITH_TRACING", "0") == "1"
+# There is deliberately no tracing integration here. Anything that wraps this
+# client ships every prompt and tool result to a third party, outside whatever
+# enclave the chosen provider runs in, and defeats attestation.
 
 
 def available_providers():
@@ -191,31 +186,6 @@ def resolve(account=None):
     return available[0]
 
 
-def _traced(client):
-    # TODO: will be removed when move to production... or switch to langfuse and eat the cost?
-    if not LANGSMITH_ENABLED:
-        return client
-    ls_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")
-    if not ls_key:
-        sys.stderr.write("no LANGSMITH/LANGCHAIN_API_KEY in env; tracing disabled\n")
-        return client
-    os.environ.setdefault("LANGCHAIN_API_KEY", ls_key)
-    os.environ.setdefault("LANGSMITH_API_KEY", ls_key)
-    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
-    proj = os.environ.get("LANGSMITH_PROJECT") or os.environ.get("LANGCHAIN_PROJECT")
-    if proj:
-        os.environ.setdefault("LANGCHAIN_PROJECT", proj)
-    try:
-        from langsmith.wrappers import wrap_openai
-    except ImportError:
-        sys.stderr.write("langsmith not installed; tracing disabled\n")
-        return client
-    sys.stderr.write(f"langsmith tracing enabled, project={proj or 'default'}\n")
-    wrapped = wrap_openai(client)
-    wrapped._ls_wrapped = True
-    return wrapped
-
-
 def make_client(account=None):
     """Build the client for this account's provider. Pass None only where there
     is no account in hand (one-off tooling); everything on a mail path has one.
@@ -228,8 +198,6 @@ def make_client(account=None):
     if provider.attests():
         inference_attestation.require(provider)
     client = OpenAI(api_key=provider.api_key(), base_url=provider.base_url)
-    client._ls_wrapped = False
-    client = _traced(client)
     client._ll_provider = provider
     return client
 
@@ -288,30 +256,40 @@ def _restore_response(resp, state):
             msg.content = pseudonymizer.restore(msg.content, state)
 
 
-def complete(client, messages, max_tokens, pseudonymize=True, identity=None, **kwargs):
+def complete(client, messages, max_tokens, pseudonymize=True, identity=None,
+             protect=(), **kwargs):
     """Single LLM boundary. By default, PII is masked out of every message
     before the call (so external traces carry only tags) and restored in the
     response afterward. identity is the account owner whose own name and
     addresses get fixed tags, and masking cannot proceed without it: there is no
     default identity to fall back to, because falling back would mask some other
     person's name out of this user's mail. Multi-turn callers that manage their
-    own pseudonymizer state (agentic_drafter) pass pseudonymize=False."""
+    own pseudonymizer state (agentic_drafter) pass pseudonymize=False.
+
+    protect names tokens masking must leave alone. A caller that fenced part of
+    its prompt passes the fence's nonce, because the state doing the masking is
+    built here and the delimiters would otherwise be prose to it. Callers
+    holding their own state call pseudonymizer.protect() directly instead."""
     assert messages, "messages must be non-empty"
     assert identity is not None or not pseudonymize, (
         "complete() needs the account's identity to mask for; pass identity= or "
         "pseudonymize=False if the caller already holds its own masking state"
+    )
+    assert not protect or pseudonymize, (
+        "protect= only means something when this call does the masking; a "
+        "caller holding its own state registers tokens on that state"
     )
     provider = getattr(client, "_ll_provider", None)
     assert provider is not None, (
         "client must come from make_client(); a bare OpenAI() carries no provider "
         "and would send this to whatever base_url it was built with"
     )
-    if not getattr(client, "_ls_wrapped", False):
-        kwargs.pop("langsmith_extra", None)
     extra_body = kwargs.pop("extra_body", {}) or {}
     extra_body.setdefault("thinking", provider.thinking)
     state = pseudonymizer.new_state(identity) if pseudonymize else None
     if state is not None:
+        for token in protect:
+            pseudonymizer.protect(state, token)
         messages = _mask_messages(messages, state)
     resp = _create(
         client, provider,

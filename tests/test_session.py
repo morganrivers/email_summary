@@ -11,7 +11,6 @@ import pytest
 
 from frontend import session as sess
 
-
 CURRENT = "test-session-secret-0123456789"
 ROTATED = "test-session-secret-9876543210"
 

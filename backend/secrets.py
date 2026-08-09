@@ -89,11 +89,22 @@ def volume_secrets():
     gate that enumerated its own subset would let a re-added mount through."""
     from backend.integrations.gmail_gcal import oauth_app
 
-    return tuple(p for p in (paths.ENV_FILE, oauth_app.keys_path()) if p.exists())
+    return tuple(p for p in (paths.ENV_FILE, paths.BILLING_ENV_FILE,
+                             oauth_app.keys_path()) if p.exists())
+
+
+def secret_files():
+    """Every file ``load()`` reads, in the order it reads them.
+
+    Two, because one unit must not hold the other's secrets: ``.env.billing``
+    carries the Polar webhook signing secret alone and is the only file the
+    Polar receiver can open. Each is read best-effort, so a process entitled to
+    one and not the other gets what it is entitled to and no exception."""
+    return (paths.ENV_FILE, paths.BILLING_ENV_FILE)
 
 
 def _file_values():
-    """``.env`` as a dict, empty when this process is not allowed to read it.
+    """The secret files as one dict, skipping any this process may not read.
 
     Not every unit on this box is meant to. The egress proxy runs as its own
     account precisely so that the process with unrestricted network access is
@@ -109,10 +120,13 @@ def _file_values():
     refuses to read a permission error as "missing" for exactly the opposite
     reason -- because that one is judging another unit's provisioning, and this
     one is describing its own."""
-    try:
-        return dotenv_values(paths.ENV_FILE)
-    except PermissionError:
-        return {}
+    values = {}
+    for path in secret_files():
+        try:
+            values.update(dotenv_values(path))
+        except PermissionError:
+            continue
+    return values
 
 
 def load():
@@ -128,7 +142,7 @@ def load():
     if tee_required():
         return
     for name, value in _file_values().items():
-        assert name, f"unnamed entry in {paths.ENV_FILE}"
+        assert name, f"unnamed entry in {secret_files()}"
         if value is None or name in os.environ:
             continue
         os.environ[name] = value

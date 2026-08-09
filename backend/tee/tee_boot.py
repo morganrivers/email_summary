@@ -140,7 +140,8 @@ def run_gate() -> int:
 def run_selftest() -> int:
     client = DstackClient()
     if not client.available():
-        print(f"[f1] no dstack socket at {client.socket_path}; deploy inside a CVM.", file=sys.stderr)
+        print(f"[f1] no dstack socket at {client.socket_path}; deploy inside a CVM.",
+              file=sys.stderr)
         return 1
 
     print("[f1] === dstack hello-world: KMS unseal + RA-TLS + quote ===")

@@ -41,15 +41,55 @@ unit needing an exception says so in `deploy/hetzner/<unit>.d/*.conf`, numbered
 above `10-hardening.conf`; exceptions live beside their unit rather than
 loosening the common sandbox. The deploy deletes drop-ins the repo no longer has.
 
-`cosigner.service.d/20-cosigner.conf` is the only one: the co-signer holds the
-outer wrapping key and the DPoP key, so it must not share the app's uid. It runs
-as `cosigner`, reads the source through `SupplementaryGroups=letterlock` (app dir
-750; `database/`, `state/`, `config/`, `.env` are 700/600, so group membership
-does not reach user data), with `ReadWritePaths=` emptied since it writes only to
-`StateDirectory=cosigner`. The deploy derives accounts to create by reading
-`User=` out of the drop-ins. Until the enclave moves to Phala this is separation
-of privilege on one box, not separation of operator, and no product copy may say
-otherwise.
+Five units name their own account. `cosigner.service.d/20-cosigner.conf`: the
+co-signer holds the outer wrapping key and the DPoP key, so it must not share the
+app's uid. `egress-proxy.service.d/20-egress-proxy.conf`: the process holding the
+network must not be the one holding the API keys. Both run with
+`ReadWritePaths=` emptied and reach the source through
+`SupplementaryGroups=letterlock` alone (app dir 750), which is why the account
+store and `.env` are **not** that group — see `backend/paths.py`.
+
+`letterlock-web.service.d/20-web.conf` is the third and the newest.
+`frontend/web_server.py` parses HTTP from the open internet, and while it ran as
+`letterlock` a parsing bug in it read every account's `database/<id>/` and could
+ask the co-signer to unwrap any of them: compromise of the web tier was
+compromise of every mailbox. It now runs as `letterlock-web` with
+`SupplementaryGroups=letterlock letterlock-data letterlock-secrets`, writing only
+`database/` and `state/`. What makes that more than a change of file owner is
+what the account cannot reach: `token.bin` is written mail-uid-only at 0600, and
+the two operations needing a Google token happen in the daemon over
+`backend/custody/handoff.py`. Still reachable and stated so nobody reads more
+into it: `database/accounts.json` is writable there, so a compromised web tier
+can still edit its own settings and its plan. It can no longer move the telegram
+target, which was the one field that reached mail content — see
+`backend/accounts/chat_link.py`.
+
+The two webhooks are the fourth and fifth, and they are the cheap ones: both
+parse HTTP from the open internet and neither needs an account's data.
+`email-webhook.service.d` runs `letterlock-hook` in `letterlock letterlock-wake`
+— no `database/` at all, since the receiver spools the address Google names and
+the daemon resolves it. `billing-webhook.service.d` runs `letterlock-billing` in
+`letterlock letterlock-billing-queue letterlock-billing-secrets`: it verifies the
+Polar signature, spools the event for the daemon to apply, and so writes neither
+the manifest nor anything else under `database/`. It reads `.env.billing` (the
+webhook signing secret alone) and not `.env`, so a compromise there does not
+hold `SESSION_SECRET` and cannot mint a login cookie.
+
+Four groups, because four different sets of units share four different things:
+`letterlock-data` (`database/`, `state/`), `letterlock-secrets` (`.env`),
+`letterlock-wake` (the FIFO and wake spool — writing there starts a drafting
+pass against a named account and spends that account's co-signer budget, so the
+web and billing uids are kept out) and `letterlock-billing-queue` (the billing
+spool). `state/` is `2771` rather than `2770`: four uids open a file in it and
+are deliberately not all in one group, so traversal is open and each file's own
+mode is the grant. `database/` does not get that bit, since who has an account
+is itself worth keeping.
+
+The deploy derives accounts to create by reading `User=` out of the drop-ins, and
+group membership by reading `SupplementaryGroups=` out of the same file, so the
+unit is the statement of which accounts reach user data. Until the enclave moves
+to Phala this is separation of privilege on one box, not separation of operator,
+and no product copy may say otherwise.
 
 Caddy config is not synced. `deploy/hetzner/Caddyfile` is generated from
 `backend/site.py`, so change the host or port there and regenerate:
@@ -75,9 +115,17 @@ python -m deploy.render_pyproject      # rewrite the pyproject dependency array
 ```
 
 `tests/test_requirements.py` fails if the committed pyproject drifts.
-`requirements-dev.txt` (pytest, pip-audit, uv) is the only other list, installed
-on neither the box nor the image; the same test fails if one of its pins reaches
-a shipped list. `deploy/requirements.py` owns parsing and name-stripping.
+`requirements-dev.txt` (pytest, pip-audit, uv, flake8, isort) is the only other
+list, installed on neither the box nor the image; the same test fails if one of
+its pins reaches a shipped list. `deploy/requirements.py` owns parsing and
+name-stripping.
+
+flake8 and isort run from `tests/test_lint.py`, configured in `setup.cfg`, over
+the packages `tools/reachability.py` names — a linter in a contributing guide is
+a linter nobody runs. pyflakes is not pinned beside flake8 because it *is*
+flake8's engine, and two pins for one analyzer is two versions that can disagree
+about what a warning is. There is no formatter: `black` would reflow the tree in
+one commit and bury every diff under it.
 
 `python -m deploy.audit` says whether anything we ship has a known
 vulnerability. It audits `deploy/phala/uv.lock`, not `requirements.txt`: the lock
@@ -113,6 +161,42 @@ model to switch it on; `pseudonymizer.analyzer_available()` detects it. pip neve
 uninstalls, so a box that already has it keeps it until the venv is rebuilt. The
 image inherits the default, since a commented-out pin is not rendered.
 
+## What the enclave image carries
+
+`deploy/phala/image_files.nix` is the image's file list and `flake.nix` copies
+exactly it. Generated, like the pyproject and the Caddyfile:
+
+```bash
+python -m deploy.render_image_manifest          # rewrite the list
+python -m deploy.render_image_manifest --check  # exit 1 if it is stale
+```
+
+`tests/test_image_manifest.py` fails on drift, so a new import that pulls a new
+module into the enclave is caught there rather than in a CVM.
+
+Derived from what actually starts: `tools/reachability.py` walks imports from
+the `python -m` entry points in `flake.nix` itself, so a module ships because
+something that runs imports it. It replaced a filter over file extensions that
+was wrong both ways — it shipped `cosigner/` whole (the outer key derivation,
+the request policy, the audit store) plus the egress proxy, the billing webhook
+and poller and `tools/` into an image that starts none of them, and it shipped
+no data file at all, because `.py`-or-`.css` matches neither `default_voice.md`
+nor `inference_allowlist.json` nor a favicon. Only the co-signer's wire contract
+(`cosigner/protocol.py`) belongs in the enclave; a test asserts that.
+
+Two lists in that module cannot be derived and carry a reason each.
+`EXTRA_MODULES` is commands nothing starts that must still be there because
+their data is only there (`accounts.whois`, `custody.rotate`). `DATA_FILES` is
+what a module reads at runtime, since no import graph says a module opens a JSON
+file beside it; the renderer asserts each exists.
+
+`python -m tools.reachability --coverage <cov.json>` is the report behind it,
+and answers the question coverage alone cannot: unreachable (nothing calls it)
+and untested (something calls it and no test does) need opposite responses, and
+a coverage-only pruner deletes working code the moment a test errors during
+collection. It classifies against four root sets — the systemd units, the flake
+entry points, the hand-run commands, the suite — and never deletes anything.
+
 ## Server-only files (never overwritten or deleted by deploy)
 
 Each has a matching `--exclude` in `deploy/deploy.sh`.
@@ -121,22 +205,34 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
   confidential routes (one key serves both NEAR AI providers). Read once through
   `secrets.load()`. Inside the enclave this file must not exist; the same values
   arrive as injected environment.
+- `.env.billing` — `POLAR_WEBHOOK_SECRET` (and its `_SANDBOX` twin), and nothing
+  else. Split out of `.env` so the unit verifying Polar signatures does not also
+  hold `SESSION_SECRET` and the inference keys; `secrets.secret_files()` is the
+  ordered list `load()` reads, each best-effort, so a process entitled to one
+  file and not the other gets what it is entitled to. The Polar API token stays
+  in `.env`: the receiver no longer calls Polar's API. Moving the value is a
+  manual step, and until it moves the receiver has no secret and
+  `deploy/preflight.py` reports the unit rather than restarting it.
 - `.gmail-mcp/` — `gcp-oauth.keys.json`, the OAuth *app*'s client_id/secret. One
   app serves every user; no per-user token lives here. Read only through
   `gmail_gcal/oauth_app.py`, which prefers the injected
   `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` and refuses this file
   entirely under `TEE_REQUIRED`. The box's fallback, not the enclave's.
 - `state/` — daemon scratch: `state.json`, `wake.fifo`, `wake_queue.jsonl`,
-  `wake_queue.lock`, `restart.flag`. Created by `paths.ensure_run_dir()`.
+  `wake_queue.lock`, `billing_queue.jsonl`, `billing_queue.lock`, `restart.flag`.
+  Created by `paths.ensure_run_dir()`.
 - `database/` — multi-tenant account store. `database/accounts.json` is the
   manifest (identity, opaque handle, token file, telegram targets, timezone, plan
   status) and the only plaintext left: it maps a handle back to a person, and
   encrypting it per account would need the account list to find the account.
   Everything under `<id>/` is ciphertext — `dek.bin`, `token.bin`,
   `voice-dna.enc`, `personal-context.enc` — and opening any of it costs a
-  co-signer round trip that is rate limited and logged. Git-ignored, 0600 inside
-  0700, but the modes are not the isolation: all six units share the `letterlock`
-  uid, so the key is. Seed the owner once with
+  co-signer round trip that is rate limited and logged. Git-ignored, and the
+  modes are now part of the isolation rather than decoration: `letterlock-data`
+  is setgid on the directories and holds exactly the mail uid and the web uid, so
+  `cosigner` and `egress` (in `letterlock` only) reach none of it, and `token.bin`
+  is 0600 to the mail uid alone so the web tier cannot read the one file its data
+  key would open. `backend/paths.py` owns all of it. Seed the owner once with
   `python -m backend.accounts.seed_owner`, then have them sign in through
   `/auth/callback`.
 - `config/` — operator prompts pushed from `~/.system_files`.
@@ -150,20 +246,40 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
   wake routes each email through `manual_draft.is_bot_request(email, account)` to
   either `manual_draft.process_draft_request()` or
   `draft_replies.process_emails()`. The bot alias is derived per account
-  (`user+bot@…`), not a global constant.
+  (`user+bot@…`), not a global constant. Also runs `handoff_server.start()` on a
+  thread: this loop is serial by design, so the work the web tier hands over
+  cannot wait behind a drafting pass. Also calls `process_billing()` each pass,
+  which is where a spooled Polar event is applied.
 - `gmail_hook_server.py` — HTTPS webhook, `email-webhook` service behind Caddy
-  (`127.0.0.1:8787`). Verifies the Pub/Sub OIDC JWT and wakes the daemon.
+  (`127.0.0.1:8787`). Verifies the Pub/Sub OIDC JWT, spools the address on
+  `wake_queue` and pokes the FIFO. It does not resolve the address: that reads
+  the manifest, and this process holds none of it.
+- `backend/spool.py` — the one append-and-drain file protocol, under one lock,
+  behind both `daemons/wake_queue.py` and `billing/billing_queue.py`. Each spool
+  names its own group, since waking the daemon and settling a subscription are
+  different capabilities.
+- `billing_queue.py` — between the Polar receiver and the daemon. The receiver
+  used to flip `plan_status` itself, which made a signature verifier a writer of
+  the manifest. Two costs, both deliberate: Polar is acked on spool rather than
+  on apply (the 3-hourly `billing-poller` reconcile is the backstop, reading
+  entitlement from Polar rather than from an event body), and activation lands
+  within `WAKE_POLL_SECONDS` instead of instantly (`confirm_checkout()` already
+  settles the buyer watching the return page, synchronously and independent of
+  this path).
 - `email_summary.py` — daily summary, `email-summary.timer` (05:00 UTC). Sweeps
   every active account via `mailbox.fetch_daily(account)`, delivers to
   `account.telegram`, skips accounts with no linked chat.
 - `watch_renew.py` — weekly per-account `users.watch` renewal, `gmail-watch.timer`.
 - `frontend/web_server.py` — product web UI, `letterlock-web` service behind
   Caddy (`127.0.0.1:8790` on `APP_HOST`): sign-in, dashboard, voice DNA, personal
-  info, settings, billing. `/voice` generates a profile on a background thread
-  (`voice_dna.start()`, page polls by meta refresh); `/personal` is the second
+  info, settings, billing. Runs as its own uid; `/voice` generation, the consent
+  URL and the OAuth callback are handed to the daemon over
+  `backend/custody/handoff.py` (page still polls by meta refresh, the job now
+  lives in the daemon's memory); `/personal` is the second
   box (`personal_context`), kept apart because generating a profile overwrites
-  the profile. Telegram is linked by a round trip through the bot
-  (`/settings/telegram/*`), never by typing a chat id. The old `/onboard` flow was
+  the profile. Telegram is linked and unlinked by a round trip through the bot
+  (`/settings/telegram/start` for either direction, then `/confirm`), never by
+  typing a chat id and never decided here. The old `/onboard` flow was
   removed; its OAuth sequence lives in `backend/onboarding/provisioning.py`.
 - `cosigner/server.py` — split-custody co-signer, `cosigner` service behind Caddy
   (`127.0.0.1:8791` on `COSIGNER_HOST`, the one site block demanding a client
@@ -273,7 +389,7 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   imports this rather than reimplementing token custody. The exchange is in
   Python because Google binds the refresh token to the co-signer's DPoP key at
   that one request. Google's screen lets a user untick a permission, so
-  `oauth_app.REQUIRED_SCOPES` is the set the code calls and `missing_scopes()`
+  `oauth_app.required_scopes()` is the set the code calls and `missing_scopes()`
   the one comparison, applied twice: in `handle_callback()` off the redirect's
   `scope` (refusing before a code is exchanged or anything wrapped) and in
   `exchange_code()` off the token response (the grant itself), before anything is
@@ -305,6 +421,40 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   returns the pair (id names the directory, handle names the account everywhere
   else), because a function accepting either would accept the wrong one and
   derive a different key without raising.
+- `backend/custody/handoff.py` — the wire contract and the client for the work
+  the web tier is no longer allowed to do itself, with `handoff_server.py` the
+  listener the daemon runs on a thread. Most of the operations are the ones
+  needing a Google token or the credential that obtains one: the consent URL
+  (reads the OAuth client secret's file), the OAuth callback (the one moment a
+  plaintext refresh token exists), and starting/reading a voice generation job
+  (reads sent mail). The three `chat-*` operations cross for a different reason
+  and the difference is worth keeping straight — they need no token, they cross
+  because the *decision* is not the web tier's to make (`chat_link`). The two
+  action names live here because they are what the answer is called on the wire,
+  and because the asking side must be able to read them without importing the
+  module holding the bypass. Everything else the web UI does with an account
+  needs the data key and not a token, and it gets that from the co-signer
+  directly.
+  A unix socket rather than the wake spool because the spool is one way: a
+  synchronous sign-in would poll for a result file, and that file would hold a
+  live authorization code at rest. It is `state/custody.sock` at 0660 in a setgid
+  directory, so the two uids in `letterlock-data` are the only ones that can
+  open it.
+  `HandoffUnavailable` is never caught into a fallback that does the work
+  locally: a web process that exchanges the code itself is a web process holding
+  a refresh token, which is the whole thing this removes. It renders a 503.
+  `tests/test_web_boundary.py` reads the tree for a `frontend/` module importing
+  `keyring`/`tokens`/`wrapping`/`chat_link` or calling any of those functions
+  directly, and pins that `keyring.write_encrypted(..., shared=False)` has
+  exactly one caller. `chat_link` is on that list without holding a key: a web
+  tier that imports it calls `force_unlink` in-process, which is the rule undone.
+- `backend/paths.py` — on-disk locations *and* their modes, since the answer
+  stopped being "0600, owner only" when the web tier moved to its own uid.
+  `DATA_GROUP`/`SECRETS_GROUP` are read back by `deploy/deploy.sh` rather than
+  spelled twice. `data_gid()` returning None (a laptop, or the box before the
+  deploy that creates the group) falls back to owner-only, so this code landing
+  ahead of its deploy is never a widening. `_chmod_if_owned` is why the second
+  uid to reach a shared directory does not raise EPERM on its first write.
 - `backend/integrations/gmail_gcal/` — the only code talking to Google's mail and
   calendar APIs: `oauth_app.py` (keys, scopes, endpoints), `google_client.py`
   (credentials + per-thread service cache), `gmail_api.py`, `calendar_api.py`,
@@ -324,18 +474,39 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   `schedule_from_sent._normalize()`, so a long draft is an ugly event rather than
   an operator alert.
   Pinning the calendar answers which calendar, not who reads it, so
-  `create_event()` reads the ACL first (`write_calendar_audience()`) and refuses
-  when anyone but the owner can read event contents: scope `default` or `domain`
-  at role `reader`/`writer`/`owner`. `freeBusyReader` is allowed — it exposes
-  that a span is taken and no field of the event. This is what
-  `calendar.acls.readonly` is for, read-only on purpose: the code refusing to
-  write to a public calendar must not be able to make one private and proceed.
-  Cached per account for `SHARING_TTL`. It fails closed even when the question
-  cannot be asked: a token minted before that scope answers 403, as does an
-  outage, and `CalendarSharingUnknown` is a subclass so every caller refusing on
-  one refuses on the other while the user still gets the right remedy. Existing
-  users lose scheduling from sent mail until they sign in again at `/auth/login`;
+  `create_event()` asks who can read it first (`write_calendar_audience()`) and
+  refuses when anyone but the owner can read event contents. Cached per account
+  for `SHARING_TTL`, one cache whichever way it asked.
+  There are two ways to ask and `oauth_app.acl_scope_registered()`
+  (`LETTERLOCK_CALENDAR_ACL_SCOPE=1`) is the one place that picks. It also
+  decides whether the consent asks for the scope, since requesting one the
+  console does not carry fails at Google — `scopes()` and `required_scopes()`
+  are functions for that reason, and there is no `SCOPES` constant any more.
+  **On (`calendar.acls.readonly`):** read the calendar's ACL, refuse scope
+  `default` or `domain` at role `reader`/`writer`/`owner`. `freeBusyReader` is
+  allowed — it exposes that a span is taken and no field of the event. The scope
+  is read-only on purpose: the code refusing to write to a public calendar must
+  not be able to make one private and proceed. Existing users lose scheduling
+  from sent mail until they sign in again at `/auth/login`;
   `tokens.take_custody()` reuses the account's data key so a returning user works.
+  Registering it is manual and outside this repo: Google Cloud console → Google
+  Auth Platform → Data Access, and being a sensitive scope it puts a published
+  app back into verification.
+  **Off (the default):** `calendar_public.is_public()` fetches the calendar's
+  public iCal feed with no credentials, as a stranger would; 200 refuses, 404
+  proceeds. Deliberately weaker in two named ways, both in that module's
+  docstring: a Workspace `domain` share is not public and passes, and public
+  free/busy-only is refused where the ACL path allows it. It holds no
+  credentials and imports no Google client, which is why it is its own module
+  and why `backend/egress.py` can read `ICS_ROOT` off it — the feed host is on
+  the allowlist unconditionally, since the proxy cannot read this switch.
+  Either way it fails closed when the question cannot be answered: a token
+  minted before the scope answers 403, an outage answers nothing, the feed
+  answers a status that is neither 200 nor 404, and only those two codes are an
+  answer at all. `CalendarSharingUnknown` is a subclass so every caller refusing
+  on one refuses on the other, and `schedule_from_sent.render_not_private()`
+  reads the same switch so it does not send a user to `/auth/login` for a grant
+  that would fix nothing.
   `tests/test_calendar_boundary.py` enforces all of it by reading the tree: no
   `calendarId` outside `calendar_api` and none that is not `WRITE_CALENDAR`, no
   `calendars`/`calendarList` call, no ACL read outside `calendar_api` and no ACL
@@ -365,7 +536,7 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   provider. Every call is `/v1/chat/completions`, never `/v1/responses` (stateful,
   persists content server-side); `tests/test_llm_boundary.py` reads the tree as an
   AST and fails if anything reaches for it or calls `chat.completions.create`
-  elsewhere. LangSmith tracing is off unless `LANGSMITH_TRACING=1`.
+  elsewhere. There is no tracing integration and no hook for one.
   `ProviderUnavailable` names the ordinary failure that is not a bug: 401/402/403
   mean the provider keeps refusing until a human tops up a balance or fixes a key,
   unlike 429 and 5xx which propagate untouched. It alerts through
@@ -430,10 +601,32 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   — deleting an account does not delete its rows, since the row saying it was
   deleted is the one most worth keeping — and the prune rides on `record()`
   behind `PRUNE_INTERVAL` with `secure_delete` on.
-- `backend/integrations/telegram.py` — `TelegramTarget`, sends, chat linking.
-  `send_telegram(msg, target)` always takes an explicit target;
+- `backend/integrations/telegram.py` — `TelegramTarget`, sends, and the bot's
+  inbox. `send_telegram(msg, target)` always takes an explicit target;
   `operator_target()` (env) is only for box-level failures, never a user's mail.
-  Deliberately no env fallback on the per-account path.
+  Deliberately no env fallback on the per-account path. `posts_of(code)` is the
+  one read of the inbox, returning chat id *and* timestamp; it answers who
+  posted a code and never who may act on it.
+- `backend/accounts/chat_link.py` — who may change an account's telegram target.
+  The daily summary carries mail content and the daemon delivers it to whatever
+  chat id the manifest names, so that field is the one setting that turns a
+  compromise of the web tier into a standing subscription to someone else's
+  mail, and the daemon's co-signer traffic stays exactly what it is every
+  morning. Moving the write behind the handoff does not close it: this process
+  cannot tell a forged request from a real one, because the web tier is what
+  decides who is signed in. The rule that does close it asks the chat being
+  replaced — nothing linked, link freely; a chat linked, unlinking needs a code
+  posted from *that* chat. Changing a target is therefore unlink then link.
+  Unlink needs the proof for the same reason link does not, or an attacker
+  unlinks first and falls into the case that asks for nothing. The code is
+  minted here and the message must be newer than the request, both against the
+  same replay: the user's own linking code sits in the bot's 24h inbox, posted
+  from precisely the chat an unlink wants to hear from. `account.set_telegram()`
+  stays the sole writer and now has exactly one caller, which is what makes this
+  a rule rather than a suggestion; `force_unlink()` is the operator's way out
+  for a user who has lost the Telegram account, reachable only from
+  `python -m backend.accounts.unlink_telegram` and deliberately never a route.
+  `tests/test_chat_link.py` pins the refusals and both caller sets.
 - `draft_replies.drafting_instructions()` — everything the drafter is told about
   an account before it sees an email: voice profile, then personal information.
   One assembly, so the auto-reply and forwarded-email paths cannot hand the model
@@ -496,6 +689,18 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   before a model loads; `en_core_web_lg` is another ~1.1 GB). Measured recall is
   96% with the analyzer and 74% without, the whole gap being PERSON. The stated
   preference is stored even where it cannot run.
+
+  `protect(state, token)` names text masking must leave byte-identical, and
+  `pseudonymize()` asserts the count on the way out. It exists because spaCy
+  read the fence's closing marker `<nonce>_EXTERNAL_CONTENT` as a PERSON for
+  about one nonce in sixty and the anonymizer replaced it, so the fence never
+  closed and everything after the email body sat inside the untrusted region.
+  A token and not a shape: a protected span is a span PII is *not* masked out
+  of, so a pattern an email body could write would let the sender choose what
+  stays in the clear. The nonce cannot be written by a sender because
+  `Fence.wrap()` strips it from the content first. Registered by whoever pairs a
+  fence with a state — `agentic_drafter.draft()` directly, and
+  `llm_client.complete(protect=…)` for callers whose state is built inside it.
 - `billing.PLAN_PRICE_EUR` — the quoted price, rendered as `web_server.PRICE`.
   Landing copy, pricing page, comparison table, sign-up button and billing table
   each held their own literal and drifted from the Polar product. Polar is what

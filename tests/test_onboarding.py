@@ -8,13 +8,20 @@ cursor once and never rewinds it; and that the callback enforces CSRF state
 before provisioning.
 """
 
+import base64
+import hashlib
 import json
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from backend import secrets
 from backend.accounts import account
-from backend.onboarding import watch_renew
+from backend.custody import client as cosigner
+from backend.custody import keyring, tokens, wrapping
+from backend.integrations.gmail_gcal import gmail_api, oauth_app
 from backend.onboarding import provisioning as ob
+from backend.onboarding import watch_renew
 
 REDIRECT = "https://example.test/auth/callback"
 
@@ -185,20 +192,40 @@ def test_callback_happy_path_provisions_and_lands_in_the_app(monkeypatch):
     assert loc == "/dashboard", "signing in must not push the user into checkout"
 
 
-def test_every_required_scope_is_one_the_consent_asks_for():
-    assert set(oauth_app.REQUIRED_SCOPES) <= set(oauth_app.SCOPES)
+@pytest.fixture(params=[False, True], ids=["acl-scope-off", "acl-scope-on"])
+def acl_scope(request, monkeypatch):
+    """Both settings of the switch, for anything whose answer must hold either
+    way. The scope is registered on the OAuth app or it is not, and a test that
+    exercised only one of those passes on a box configured the other way."""
+    if request.param:
+        monkeypatch.setenv(oauth_app.ACL_SCOPE_ENV, "1")
+    else:
+        monkeypatch.delenv(oauth_app.ACL_SCOPE_ENV, raising=False)
+    return request.param
+
+
+def test_every_required_scope_is_one_the_consent_asks_for(acl_scope):
+    assert set(oauth_app.required_scopes()) <= set(oauth_app.scopes())
     assert oauth_app.missing_scopes(oauth_app.scope_param()) == ()
 
 
-def test_a_grant_that_says_nothing_is_not_a_full_grant():
+def test_the_acl_scope_is_asked_for_only_when_it_is_registered(acl_scope):
+    """Asking for a scope the console does not carry fails at Google, so the
+    switch has to reach the consent and not only the check that uses it."""
+    assert (oauth_app.ACL_SCOPE in oauth_app.scopes()) is acl_scope
+    assert (oauth_app.ACL_SCOPE in oauth_app.required_scopes()) is acl_scope
+
+
+def test_a_grant_that_says_nothing_is_not_a_full_grant(acl_scope):
     """Fail closed on silence. A response with no scope field is not evidence
     that everything was granted."""
-    assert oauth_app.missing_scopes(None) == oauth_app.REQUIRED_SCOPES
-    assert oauth_app.missing_scopes("") == oauth_app.REQUIRED_SCOPES
+    assert oauth_app.missing_scopes(None) == oauth_app.required_scopes()
+    assert oauth_app.missing_scopes("") == oauth_app.required_scopes()
 
 
-def test_the_calendar_permission_can_be_unticked_and_is_named():
-    granted = " ".join(s for s in oauth_app.SCOPES if "calendar" not in s)
+def test_the_calendar_permission_can_be_unticked_and_is_named(monkeypatch):
+    monkeypatch.setenv(oauth_app.ACL_SCOPE_ENV, "1")
+    granted = " ".join(s for s in oauth_app.scopes() if "calendar" not in s)
     missing = oauth_app.missing_scopes(granted)
     assert missing == (
         "https://www.googleapis.com/auth/calendar.events",
@@ -259,19 +286,6 @@ def test_checkout_redirect_uses_sandbox_url_when_toggled(monkeypatch):
 # without being stored anywhere, and that a signup ends with a wrapped token and
 # an account rather than either one alone.
 
-import base64
-import hashlib
-import json as _json
-from urllib.parse import parse_qs, urlparse
-
-from backend import secrets
-from backend.custody import client as cosigner
-from backend.custody import keyring
-from backend.custody import tokens
-from backend.custody import wrapping
-from backend.integrations.gmail_gcal import gmail_api, oauth_app
-
-
 @pytest.fixture
 def consent(tmp_path, monkeypatch):
     """A box that can run a consent: dev app secret, throwaway OAuth app keys,
@@ -281,7 +295,7 @@ def consent(tmp_path, monkeypatch):
     monkeypatch.delenv("TEE_REQUIRED", raising=False)
     monkeypatch.setattr(wrapping, "_app_secret_cache", None)
     keys = tmp_path / "gcp-oauth.keys.json"
-    keys.write_text(_json.dumps(
+    keys.write_text(json.dumps(
         {"web": {"client_id": "cid", "client_secret": "csecret"}}))
     monkeypatch.setenv(oauth_app.KEYS_ENV, str(keys))
     monkeypatch.delenv(secrets.GOOGLE_CLIENT_ID_ENV, raising=False)
@@ -332,7 +346,7 @@ def _google_says(monkeypatch, payload, status=200, seen=None):
     class R:
         status_code = status
         headers = {}
-        text = _json.dumps(payload)
+        text = json.dumps(payload)
 
         def json(self):
             return payload
@@ -345,8 +359,8 @@ def _google_says(monkeypatch, payload, status=200, seen=None):
     monkeypatch.setattr(tokens.requests, "post", post)
 
 
-def test_the_consent_runs_on_an_injected_oauth_app_with_no_file_present(consent,
-                                                                       monkeypatch):
+def test_the_consent_runs_on_an_injected_oauth_app_with_no_file_present(
+        consent, monkeypatch):
     """Plan §8: the client secret is the widest-blast-radius value the
     deployment holds and the last one that was read off a volume. Inside the
     enclave there is no `.gmail-mcp` mount at all, so both halves of the consent
@@ -379,7 +393,7 @@ def test_provision_takes_custody_and_registers_the_account(consent, monkeypatch)
         "id_token": ".".join([
             "hdr",
             base64.urlsafe_b64encode(
-                _json.dumps({"given_name": "Dana", "family_name": "Reed"}).encode()
+                json.dumps({"given_name": "Dana", "family_name": "Reed"}).encode()
             ).decode().rstrip("="),
             "sig",
         ]),
@@ -421,6 +435,7 @@ def test_a_partial_grant_in_the_token_response_is_refused(consent, monkeypatch):
     """The redirect parameter is a convenience; this is the grant. Refused
     before the account exists and before a token is stored, so a consent we
     cannot use leaves nothing behind."""
+    monkeypatch.setenv(oauth_app.ACL_SCOPE_ENV, "1")
     _google_says(monkeypatch, {
         "access_token": "ya29.x", "refresh_token": "1//0gRefreshValue",
         "expires_in": 3600,

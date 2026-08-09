@@ -12,12 +12,12 @@ could trigger the path and the owner's alias could fire inside someone else's
 mailbox.
 """
 
-import re
-import json
 import html
+import json
+import re
 
-from backend.drafting import agentic_drafter
-from backend.drafting import draft_replies
+from backend.drafting import agentic_drafter, draft_replies
+from backend.integrations import llm_client
 from backend.integrations.gmail_gcal import gmail_api
 
 BOT_TAG = "bot"
@@ -142,8 +142,7 @@ def reply_subject(subj):
     return f"Re: {s}" if s else "Re:"
 
 
-def draft_with_context(client, instructions, parsed, account, thread_id=None,
-                       on_iteration=None):
+def draft_with_context(client, instructions, parsed, account, on_iteration=None):
     sys_prompt = instructions + DRAFTER_WITH_CONTEXT
     owner = account.display_name
     # The owner's own instructions are trusted; the forwarded email is not, so
@@ -169,7 +168,7 @@ def draft_with_context(client, instructions, parsed, account, thread_id=None,
         + "Draft the reply."
     )
     return agentic_drafter.draft(client, sys_prompt, user_prompt,
-                                 thread_id=thread_id, on_iteration=on_iteration,
+                                 on_iteration=on_iteration,
                                  account=account, fence=fence)
 
 
@@ -226,7 +225,7 @@ def process_draft_request(account, forwarded_email):
     instructions = draft_replies.drafting_instructions(account)
 
     thread_info = find_thread(account, parsed["original_email"], parsed["original_subject"])
-    client = agentic_drafter.make_client(account)
+    client = llm_client.make_client(account)
     found = thread_info.get("found")
     thread_id = thread_info.get("threadId") if found else None
 
@@ -254,9 +253,8 @@ def process_draft_request(account, forwarded_email):
         draft_replies.submit_draft(account, make_payload(body_text), draft_id=draft_id)
 
     try:
-        body, run_url = draft_with_context(
+        body = draft_with_context(
             client, instructions, parsed, account,
-            thread_id=f"manual-{forwarded_email.get('id', '')}",
             on_iteration=on_iteration,
         )
     except AssertionError as err:
@@ -281,7 +279,6 @@ def process_draft_request(account, forwarded_email):
             + draft_replies.format_draft_line(
                 parsed["original_from"], parsed["original_subject"],
                 thread_id=thread_id,
-                trace_url=run_url,
             ),
             account.telegram,
         )
@@ -296,7 +293,6 @@ def process_draft_request(account, forwarded_email):
         + draft_replies.format_draft_line(
             parsed["original_from"], parsed["original_subject"],
             thread_id=thread_id,
-            trace_url=run_url,
         ),
         account.telegram,
     )

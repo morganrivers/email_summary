@@ -26,15 +26,11 @@ by setting the header directly.
 import json
 import time
 
+import harness
 import pytest
 import requests
 
-import harness
-from cosigner import attest
-from cosigner import audit
-from cosigner import policy
-from cosigner import protocol
-from cosigner import retention
+from cosigner import attest, audit, policy, protocol, retention
 
 # What the co-signer is given to call an account by: an opaque handle the
 # enclave minted, never an address. This service does not parse it -- which is
@@ -352,8 +348,8 @@ def test_audit_schema_cannot_hold_a_ciphertext(cosigner):
     assert grants == {"uid", "action", "first_granted_ts"}
 
 
-def test_attestation_required_refuses_a_connection_without_a_certificate(cosigner,
-                                                                        monkeypatch):
+def test_attestation_required_refuses_a_connection_without_a_certificate(
+        cosigner, monkeypatch):
     """Caddy is configured to demand a client certificate, so its absence means
     the proxy was bypassed. Fail closed."""
     outer = _outer(cosigner)

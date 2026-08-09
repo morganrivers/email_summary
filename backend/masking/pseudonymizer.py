@@ -24,7 +24,6 @@ function here is a passthrough and Presidio is never imported.
 
 import importlib.util
 import re
-import sys
 from collections import defaultdict
 
 PSEUDONYMIZE_ENABLED = True
@@ -45,6 +44,7 @@ _MIN_PHONE_DIGITS = 7
 
 def _digits(s):
     return re.sub(r"\D", "", s)
+
 
 STOPWORDS = frozenset({
     "will", "hope", "grace", "mark", "may", "june", "april", "august",
@@ -67,8 +67,8 @@ class UserIdentity:
     person-numbering. Compiled once per identity; passed into new_state so a
     shared process can hold one identity per user without global coupling."""
 
-    def __init__(self, first, last, first_aliases=(), emails=(), phones=(), contacts=(), account_id="default",
-                 analyzer=True):
+    def __init__(self, first, last, first_aliases=(), emails=(), phones=(),
+                 contacts=(), account_id="default", analyzer=True):
         assert first and last, "identity requires first and last name"
         assert account_id, "identity requires an account_id"
         self.account_id = account_id
@@ -301,7 +301,56 @@ def new_state(identity):
         "pindex": {},
         "persons": {},
         "token_index": {},
+        "protected": [],
     }
+
+
+def protect(state, token):
+    """Register a token masking must leave byte-identical wherever it appears.
+
+    Masking rewrites spans it believes are PII, and it has no way to know that
+    some of the text around it is structural rather than prose. The fence's
+    delimiters are the case that matters: spaCy reads
+    ``<nonce>_EXTERNAL_CONTENT`` as a PERSON often enough to measure (~1.5% of
+    randomly minted nonces), and one replaced closing marker is a fence that
+    never closes, which puts every later section of the prompt inside the
+    untrusted region -- or, when it is an opening marker, puts a stranger's
+    email outside it.
+
+    A token rather than a shape on purpose. A pattern like "anything in angle
+    brackets" would be one an email body could write, and a protected span is a
+    span PII is *not* masked out of, so the attacker would be choosing what
+    stays in the clear. The fence's nonce cannot be written by a sender because
+    ``Fence.wrap()`` strips it from the content first.
+
+    Idempotent, and a no-op when masking is off."""
+    if state is None:
+        return
+    assert token, "a protected token must be a non-empty string"
+    if token not in state["protected"]:
+        state["protected"].append(token)
+
+
+def _protected_spans(text, state):
+    spans = []
+    for token in state["protected"]:
+        start = text.find(token)
+        while start != -1:
+            spans.append((start, start + len(token)))
+            start = text.find(token, start + 1)
+    return spans
+
+
+def _drop_overlapping(results, spans):
+    """Analyzer hits that touch a protected span are not applied.
+
+    Dropped rather than trimmed: the detected span is wider than the token
+    (``<nonce>_EXTERNAL_CONTENT`` contains the nonce), so a trimmed replacement
+    would still rewrite the half of the marker that carries its meaning."""
+    if not spans:
+        return results
+    return [r for r in results
+            if not any(r.start < end and start < r.end for start, end in spans)]
 
 
 def _person_tag(state, pid, surface, preferred_role):
@@ -432,28 +481,45 @@ def pseudonymize(text, state):
     detection of people, places and organisations this account has never
     corresponded with before.
 
+    Tokens registered with protect() come out byte-identical. Every layer below
+    is checked against that, not just the one known to have broken it: the count
+    is asserted on the way out, so a future rule that eats a delimiter is a
+    failed run rather than a prompt whose fence silently stopped closing.
+
     Passthrough when disabled or when text is empty.
     """
     if state is None or not text:
         return text
 
+    before = {t: text.count(t) for t in state["protected"]}
+
     text = state["identity"].mask_user(text)
     text = _scrub_contacts(text, state)
     text = _mask_names(text, state)
-    if not state["analyzer"]:
-        return _pseudonymize_patterns(text, state)
+    if state["analyzer"]:
+        from presidio_anonymizer.entities import OperatorConfig
 
-    from presidio_anonymizer.entities import OperatorConfig
+        analyzer, anonymizer = _engines()
+        results = _drop_overlapping(
+            analyzer.analyze(text=text, language="en", entities=ENTITIES),
+            _protected_spans(text, state),
+        )
+        if results:
+            _resolve_persons(state, results, text)
+            text = anonymizer.anonymize(
+                text=text,
+                analyzer_results=results,
+                operators={"DEFAULT": OperatorConfig("pseudonymize", state)},
+            ).text
+    else:
+        text = _pseudonymize_patterns(text, state)
 
-    analyzer, anonymizer = _engines()
-    results = analyzer.analyze(text=text, language="en", entities=ENTITIES)
-    if results:
-        _resolve_persons(state, results, text)
-        text = anonymizer.anonymize(
-            text=text,
-            analyzer_results=results,
-            operators={"DEFAULT": OperatorConfig("pseudonymize", state)},
-        ).text
+    for token, count in before.items():
+        assert text.count(token) == count, (
+            f"masking rewrote a protected token: {count} occurrences went in "
+            f"and {text.count(token)} came out. A structural delimiter was "
+            f"treated as PII; see pseudonymizer.protect()."
+        )
     return text
 
 

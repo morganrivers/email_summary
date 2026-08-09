@@ -44,8 +44,7 @@ import socket
 import socketserver
 import sys
 
-from backend import egress
-from backend import site
+from backend import egress, site
 
 HOST = os.environ.get("EGRESS_PROXY_BIND", "127.0.0.1")
 PORT = int(os.environ.get("EGRESS_PROXY_PORT", str(site.EGRESS_PROXY_PORT)))

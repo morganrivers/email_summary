@@ -45,9 +45,7 @@ is an availability risk bought for nothing.
 import threading
 import time
 
-from cosigner import alerts
-from cosigner import audit
-from cosigner import policy
+from cosigner import alerts, audit, policy
 
 DAY = 86400
 

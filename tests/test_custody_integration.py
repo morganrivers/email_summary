@@ -20,20 +20,17 @@ import base64
 import json
 from urllib.parse import parse_qs, urlparse
 
+import harness
 import pytest
 
-import harness
 from backend.accounts import account
 from backend.custody import client as cosigner
-from backend.custody import keyring
-from backend.custody import tokens
-from backend.custody import wrapping
+from backend.custody import keyring, tokens, wrapping
 from backend.integrations.gmail_gcal import gmail_api, oauth_app
 from backend.onboarding import provisioning
 from cosigner import audit
 from cosigner import keys as cosigner_keys
-from cosigner import policy
-from cosigner import protocol
+from cosigner import policy, protocol
 
 REFRESH_TOKEN = "1//0gSuperSecretRefreshTokenValue"
 UID = "alice@example.com"
@@ -114,8 +111,8 @@ def split_custody(tmp_path, monkeypatch):
         monkeypatch.setenv("LETTERLOCK_COSIGNER_URL", proc.base)
         monkeypatch.setenv(wrapping.DEV_SECRET_ENV, "dev-secret-for-tests-0123456789")
         monkeypatch.setattr(wrapping, "_app_secret_cache", None)
-        monkeypatch.setattr(tokens.account_store, "ACCOUNTS_DIR", tmp_path / "database")
-        monkeypatch.setattr(tokens.account_store, "MANIFEST",
+        monkeypatch.setattr(account, "ACCOUNTS_DIR", tmp_path / "database")
+        monkeypatch.setattr(account, "MANIFEST",
                             tmp_path / "database" / "accounts.json")
         keys = tmp_path / "gcp-oauth.keys.json"
         keys.write_text(json.dumps({"web": {
@@ -273,8 +270,8 @@ def test_a_re_consent_costs_no_second_wrap(split_custody):
     assert split_custody.calls[-1]["form"]["refresh_token"] == "1//0gADifferentTokenEntirely"
 
 
-def test_the_rate_limit_stops_mail_rather_than_being_worked_around(split_custody,
-                                                                  monkeypatch):
+def test_the_rate_limit_stops_mail_rather_than_being_worked_around(
+        split_custody, monkeypatch):
     """The ceiling is what bounds a live enclave breach, so it has to reach the
     caller as a failure. Anything that answers with a token past the limit has
     found a way to read mail with one box."""

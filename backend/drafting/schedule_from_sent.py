@@ -12,15 +12,14 @@ Dedup is handled upstream by the history cursor (lastHistoryId), which delivers
 each sent message exactly once — same guarantee the drafting path relies on.
 """
 
-import html
 import datetime
+import html
 import sys
 
-from backend import secrets
-from backend import site
+from backend import secrets, site
 from backend.integrations import llm_client
-from backend.integrations.gmail_gcal import calendar_api
-from backend.integrations.telegram import send_telegram, notify_error
+from backend.integrations.gmail_gcal import calendar_api, oauth_app
+from backend.integrations.telegram import notify_error, send_telegram
 
 secrets.load()
 
@@ -143,11 +142,23 @@ def render_telegram(created):
 
 def render_not_private(err):
     if isinstance(err, calendar_api.CalendarSharingUnknown):
-        remedy = (
-            "Letterlock could not check who can read that calendar, so it wrote "
-            f"nothing. Sign in again to refresh its permissions: "
-            f"{site.app_url('/auth/login')}"
-        )
+        # Which remedy is the right one depends on how this deployment asks the
+        # question. With the ACL scope the usual cause is a token minted before
+        # it, which a new grant fixes; without it the check is an unauthenticated
+        # fetch that no permission of the user's affects, and telling them to
+        # sign in would send them somewhere that cannot help.
+        if oauth_app.acl_scope_registered():
+            remedy = (
+                "Letterlock could not check who can read that calendar, so it "
+                f"wrote nothing. Sign in again to refresh its permissions: "
+                f"{site.app_url('/auth/login')}"
+            )
+        else:
+            remedy = (
+                "Letterlock could not check who can read that calendar, so it "
+                "wrote nothing. Nothing on your side is broken and nothing is "
+                "lost: the next run tries again."
+            )
     else:
         remedy = (
             "Nothing was written, because an event built from your mail would be "
@@ -171,7 +182,9 @@ def _schedule_all(account, sent_emails, client, created):
                                     timezone=account.timezone)
         except Exception as err:
             _log(f"extract failed for {email.get('id')}: {err}")
-            notify_error(f"schedule_from_sent: event extraction failed for sent email {email.get('id')}", err, account.telegram)
+            notify_error(
+                f"schedule_from_sent: event extraction failed for sent email {email.get('id')}",
+                err, account.telegram)
             continue
         for raw in events:
             event = _normalize(raw)
@@ -183,7 +196,9 @@ def _schedule_all(account, sent_emails, client, created):
                 raise
             except Exception as err:
                 _log(f"create failed for {event['summary']!r}: {err}")
-                notify_error(f"schedule_from_sent: calendar event creation failed for {event['summary']!r}", err, account.telegram)
+                notify_error(
+                    f"schedule_from_sent: calendar event creation failed for "
+                    f"{event['summary']!r}", err, account.telegram)
                 continue
             created.append({**event, "htmlLink": res.get("htmlLink")})
 

@@ -37,10 +37,8 @@ import threading
 import requests
 
 from backend import site
-from backend.accounts import account as account_store
 from backend.custody import client as cosigner
-from backend.custody import keyring
-from backend.custody import wrapping
+from backend.custody import keyring, wrapping
 from backend.integrations import telegram
 from backend.integrations.gmail_gcal import oauth_app
 
@@ -110,7 +108,7 @@ def take_custody(acct, refresh_token):
     uid, handle = keyring.identify(acct)
     if not keyring.has_key(uid):
         keyring.create(uid, handle)
-    return keyring.write_encrypted(acct, TOKEN_FILE, refresh_token)
+    return keyring.write_encrypted(acct, TOKEN_FILE, refresh_token, shared=False)
 
 
 def has_custody(acct):

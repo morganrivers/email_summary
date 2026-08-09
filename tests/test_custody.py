@@ -29,9 +29,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from backend.accounts import account as account_store
 from backend.custody import client as cosigner
-from backend.custody import keyring
-from backend.custody import tokens
-from backend.custody import wrapping
+from backend.custody import keyring, tokens, wrapping
 from backend.integrations import telegram
 from backend.integrations.gmail_gcal import oauth_app
 from cosigner import protocol
@@ -59,7 +57,7 @@ def enclave(monkeypatch, tmp_path):
     monkeypatch.setenv(wrapping.DEV_SECRET_ENV, "dev-secret-for-tests-0123456789")
     monkeypatch.delenv("TEE_REQUIRED", raising=False)
     monkeypatch.setattr(wrapping, "_app_secret_cache", None)
-    monkeypatch.setattr(tokens.account_store, "ACCOUNTS_DIR", tmp_path)
+    monkeypatch.setattr(account_store, "ACCOUNTS_DIR", tmp_path)
     keys = tmp_path / "gcp-oauth.keys.json"
     keys.write_text(json.dumps(
         {"web": {"client_id": "test-client-id", "client_secret": "test-client-secret"}}))

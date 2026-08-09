@@ -37,12 +37,13 @@ sys.path.insert(0, str(REPO_ROOT))
 # defining a second one. It is a development tool; nothing here ships.
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
-import identity_fixture                                      # noqa: E402
-from backend import paths                                    # noqa: E402
-from backend.accounts import account, state                  # noqa: E402
-from backend.integrations.telegram import TelegramTarget     # noqa: E402
-from backend.masking import pseudonymizer                    # noqa: E402
-from frontend import web_server as web                       # noqa: E402
+import identity_fixture  # noqa: E402
+
+from backend import paths  # noqa: E402
+from backend.accounts import account, state  # noqa: E402
+from backend.integrations.telegram import TelegramTarget  # noqa: E402
+from backend.masking import pseudonymizer  # noqa: E402
+from frontend import web_server as web  # noqa: E402
 
 OUT_DEFAULT = Path("/tmp/letterlock-pages")
 
@@ -117,7 +118,8 @@ def variants():
         ("settings-error.html", web._page_settings(fresh, error="Could not reach Telegram.")),
         ("billing.html", web._page_billing(owner)),
         ("billing-inactive.html", web._page_billing(fresh)),
-        ("billing-error.html", web._page_billing(owner, error="The billing portal is unavailable.")),
+        ("billing-error.html",
+         web._page_billing(owner, error="The billing portal is unavailable.")),
         ("account.html", web._page_account(owner)),
         ("account-error.html", web._page_account(owner, error="Email address did not match.")),
         ("deleted.html", web._page_deleted()),

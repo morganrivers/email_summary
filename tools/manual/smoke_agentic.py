@@ -2,15 +2,15 @@
 """Smoke test for agentic_drafter — feeds a contrived 'are you free?' email
 so we can see whether DeepSeek calls the calendar tool."""
 
-import sys
-from dotenv import load_dotenv
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-from backend.drafting import agentic_drafter
 from backend.accounts import account
-from backend.drafting import draft_replies
+from backend.drafting import agentic_drafter, draft_replies
+from backend.integrations import llm_client
 
 acct = account.owner_account()
 instructions = draft_replies.drafting_instructions(acct)
@@ -25,7 +25,9 @@ fake_email = {
     "from": "Alice Example <alice@example.com>",
     "date": "Mon, Jun 30, 2026 at 10:00 AM",
     "subject": "Coffee this Thursday or Friday?",
-    "body": f"Hi {acct.display_name}, I'd love to grab coffee. Could you do Thursday afternoon (after 2pm) or Friday morning this week? Either works for me. Best, Alice",
+    "body": f"Hi {acct.display_name}, I'd love to grab coffee. Could you do Thursday "
+            f"afternoon (after 2pm) or Friday morning this week? Either works for me. "
+            f"Best, Alice",
 }
 
 sys_prompt = instructions + DRAFTER_INSTRUCTION
@@ -41,12 +43,10 @@ user_prompt = (
     + "\n\nDraft a reply."
 )
 
-client = agentic_drafter.make_client(acct)
+client = llm_client.make_client(acct)
 print("--- Calling agentic_drafter.draft ---", flush=True)
-body, url = agentic_drafter.draft(client, sys_prompt, user_prompt, account=acct,
-                                  fence=fence)
+body = agentic_drafter.draft(client, sys_prompt, user_prompt, account=acct,
+                             fence=fence)
 print("\n=== DRAFT BODY ===")
 print(body)
-print("\n=== RUN URL ===")
-print(url)
 print(f"\n=== em-dash present: {agentic_drafter.contains_em_dash(body)} ===")

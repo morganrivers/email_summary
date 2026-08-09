@@ -29,8 +29,7 @@ import socket
 import subprocess
 import sys
 
-from backend import egress
-from backend import site
+from backend import egress, site
 
 PROBE_HOST = "example.com"
 # Cloudflare's resolver: a stable routable address that is not in the allowlist

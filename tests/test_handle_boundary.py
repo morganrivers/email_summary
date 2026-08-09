@@ -21,7 +21,6 @@ address after a real refresh.
 import ast
 
 import pytest
-
 from harness import python_sources, relative
 
 from backend.accounts import account

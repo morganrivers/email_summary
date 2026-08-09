@@ -14,12 +14,10 @@ import json
 import re
 import time
 
+import harness
 import pytest
 
-import harness
-from backend import audit
-from backend import paths
-from backend import site
+from backend import audit, paths, site
 from backend.accounts import account
 from backend.drafting import personal_context
 

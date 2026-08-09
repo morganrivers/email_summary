@@ -33,15 +33,15 @@ not put a network call behind every file read.
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import time
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from backend import paths
 from backend.accounts import account as account_store
 from backend.custody import client as cosigner
 from backend.custody import wrapping
-
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 DEK_FILE = "dek.bin"
 RECORD_MAGIC = b"LLDK"
@@ -69,11 +69,6 @@ DEK_TTL = 300
 
 _lock = threading.Lock()
 _dek_cache = {}
-
-
-def log(msg):
-    sys.stderr.write(f"keyring {msg}\n")
-    sys.stderr.flush()
 
 
 class NoDataKey(wrapping.CustodyError):
@@ -124,14 +119,19 @@ def decode_record(blob):
 
 
 def store_record(uid, outer, key_version=wrapping.KEY_VERSION):
-    """Write one account's wrapped data key. 0600 inside a 0700 directory: the
-    mode is worth nothing under a world-readable parent, and the enclave's units
-    are not the only processes on the box."""
+    """Write one account's wrapped data key. Restricted to the application's own
+    group inside a directory of the same: the mode is worth nothing under a
+    world-readable parent, and the enclave's units are not the only processes on
+    the box.
+
+    Shared rather than mail-only because this record is what the web tier hands
+    the co-signer to unwrap for a document render. It is ciphertext the web tier
+    cannot open alone, which is the whole point of the outer layer."""
     path = dek_path(uid)
     account_store.secure_dir(path.parent)
     tmp = path.with_suffix(".tmp")
     tmp.write_bytes(encode_record(key_version, outer))
-    tmp.chmod(0o600)
+    tmp.chmod(paths.file_mode())
     tmp.replace(path)
     return path
 
@@ -319,7 +319,7 @@ def path_for(account, name):
     return account_store.account_dir(uid) / name
 
 
-def write_encrypted(account, name, text):
+def write_encrypted(account, name, text, shared=True):
     """Store one of this account's documents, encrypted under its data key.
 
     Mints the key if the account has none. In practice it always has one --
@@ -328,7 +328,14 @@ def write_encrypted(account, name, text):
     key" for a user who has done nothing wrong, and there is no state in which
     storing the document in the clear instead would be the better answer.
     Creating it here costs the account's single `/wrap`, which is the same one
-    onboarding would have spent."""
+    onboarding would have spent.
+
+    `shared=False` writes a file only the mail uid may read afterwards, and the
+    refresh token is the one caller that asks for it. Everything else here is a
+    document the web tier renders. The distinction is a mode rather than a
+    second key because both files open under the same data key: what separates
+    them is which process can obtain the ciphertext, not which can obtain the
+    key."""
     uid, handle = identify(account)
     if not has_key(uid):
         create(uid, handle)
@@ -337,7 +344,7 @@ def write_encrypted(account, name, text):
     blob = encrypt(dek_for(account), handle, name, text)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_bytes(blob)
-    tmp.chmod(0o600)
+    tmp.chmod(paths.file_mode(shared))
     tmp.replace(path)
     return path
 

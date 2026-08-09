@@ -20,19 +20,18 @@ sys.path.insert(0, str(REPO_ROOT))
 os.environ["DEEPSEEK_API_KEY"] = "test-key-not-real"
 os.environ["TELEGRAM_BOT_TOKEN"] = "test-bot-token"
 os.environ["TELEGRAM_CHAT_ID"] = "test-chat-id"
-os.environ.pop("LANGCHAIN_API_KEY", None)
-os.environ.pop("LANGSMITH_API_KEY", None)
 
 import dotenv
+
 dotenv.load_dotenv = lambda *args, **kwargs: False
 
 from backend import secrets as app_secrets
-app_secrets._loaded = True
 
-import pytest
+app_secrets._loaded = True
 
 import harness
 import identity_fixture
+import pytest
 
 # owner_identity() reads these through secrets.get at call time, so they can be
 # set after the app modules import. There is deliberately no default in the
@@ -58,13 +57,10 @@ def audit_log(tmp_path):
 @pytest.fixture
 def wire(monkeypatch, tmp_path):
     import requests
+
+    from backend.accounts import account, state
+    from backend.drafting import agentic_drafter, schedule_from_sent, voice_dna
     from backend.integrations import llm_client
-    from backend.accounts import state
-    from backend.accounts import account
-    from backend.drafting import draft_replies
-    from backend.drafting import agentic_drafter
-    from backend.drafting import schedule_from_sent
-    from backend.drafting import voice_dna
 
     rec = harness.Recorder()
 

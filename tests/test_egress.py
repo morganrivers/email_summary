@@ -22,8 +22,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from backend import egress
-from backend import site
+from backend import egress, site
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal import google_client
 

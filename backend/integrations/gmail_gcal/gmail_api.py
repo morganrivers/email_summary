@@ -21,7 +21,6 @@ from googleapiclient.errors import HttpError
 
 from backend.integrations.gmail_gcal.google_client import GMAIL, service
 
-
 PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 HTTP_TIMEOUT = 30
 

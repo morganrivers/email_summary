@@ -30,13 +30,11 @@ from urllib.parse import urlencode
 
 import requests
 
-from backend import audit
-from backend import paths
+from backend import audit, paths
 from backend.accounts import account
 from backend.billing import billing
 from backend.custody import client as cosigner
-from backend.custody import tokens
-from backend.custody import wrapping
+from backend.custody import tokens, wrapping
 from backend.integrations.gmail_gcal import gmail_api, google_client, oauth_app
 from backend.onboarding import watch_renew
 

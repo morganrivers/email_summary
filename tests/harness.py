@@ -21,7 +21,6 @@ import json
 import os
 import re
 import threading
-from collections import deque
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -286,10 +285,10 @@ def custody_available(tmp_path, monkeypatch):
     Not a substitute for the real thing: `running_cosigner` is what the custody
     suites use, because a fake above the wire is exactly what let the two halves
     disagree about base64 while both suites passed."""
-    from backend.custody import client as cosigner
-    from backend.custody import keyring
-    from backend.custody import wrapping
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from backend.custody import client as cosigner
+    from backend.custody import keyring, wrapping
     from cosigner import protocol
 
     monkeypatch.setenv(wrapping.DEV_SECRET_ENV, "harness-app-secret-0123456789")
@@ -340,11 +339,7 @@ def running_cosigner(tmp_path, monkeypatch):
     failed once: each half faked the other above the wire, both suites passed,
     and the halves could not talk to each other in production
     (docs/plan_token_custody.md §J8)."""
-    from cosigner import attest
-    from cosigner import audit
-    from cosigner import keys
-    from cosigner import policy
-    from cosigner import server
+    from cosigner import attest, audit, keys, policy, server
 
     monkeypatch.setenv("COSIGNER_ATTESTATION", attest.DEV_INSECURE)
     monkeypatch.delenv("TEE_REQUIRED", raising=False)

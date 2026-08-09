@@ -16,14 +16,13 @@ import datetime
 import sys
 import traceback
 
-from backend import paths
-from backend import secrets
+from backend import paths, secrets
 from backend.accounts import account as account_mod
-from backend.integrations import llm_client
-from backend.integrations.gmail_gcal import mailbox
 from backend.drafting.agentic_drafter import new_fence
 from backend.drafting.draft_replies import gmail_thread_link
-from backend.integrations.telegram import send_telegram, notify_error
+from backend.integrations import llm_client
+from backend.integrations.gmail_gcal import mailbox
+from backend.integrations.telegram import notify_error, send_telegram
 
 PROMPT_FILE = paths.config_file("prompt_for_email")
 
@@ -48,7 +47,7 @@ def fetch_todays_emails_and_events(account) -> dict:
     return mailbox.fetch_daily(account)
 
 
-# ── Inference Provider (Deepseek or Near AI) ─────────────────────────────────────────────────────────────────
+# ── Inference Provider (Deepseek or Near AI) ─────────────────────────────────
 
 def _prompt_text():
     """The operator's summary prompt when the box has one, else a built-in.
@@ -111,6 +110,7 @@ def summarise(account, emails, events, community_events) -> str:
         ],
         max_tokens=16000,
         identity=account.identity,
+        protect=(fence.nonce,),
     )
     msg = resp.choices[0].message
     content = (msg.content or "").strip()

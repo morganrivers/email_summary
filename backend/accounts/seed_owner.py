@@ -21,7 +21,6 @@ different first name) in .env before running this. See account.owner_identity().
 """
 
 import sys
-from pathlib import Path
 
 from backend import paths
 from backend.accounts import account

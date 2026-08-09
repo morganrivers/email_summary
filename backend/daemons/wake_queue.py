@@ -2,52 +2,47 @@
 
 The FIFO wake is a content-free byte: it says "work arrived" but not for whom.
 This spool carries the routing key. On an inbound Pub/Sub push the webhook
-resolves the emailAddress to an account and enqueue()s that account id, then
-pokes the FIFO; the daemon drain()s the spool and processes only the queued
-accounts instead of fanning out over every mailbox.
+enqueue()s the address Google named and pokes the FIFO; the daemon drain()s the
+spool and processes only those mailboxes instead of fanning out over every one.
 
-Single source of truth for the queue file, its lock, and the framing, so the
-webhook and daemon can never disagree on the protocol. enqueue is append-only
-under an exclusive lock; drain reads-then-truncates under the same lock, so a
-push landing mid-drain is either fully included or left for the next wake, never
-lost or half-read. Multiple wakes between drains coalesce (deduped by id).
+What crosses is the address, not an account id, and that is the whole reason
+the receiver can run without read access to the account store. Resolving an
+address to an account means reading `database/accounts.json`, which is the
+list of every user and whether they are paid up; a process that verifies a JWT
+and appends a line has no business holding it. `account.get_account` matches an
+id or any address in the account's identity, so the daemon's lookup is
+unchanged and unregistered addresses are dropped there instead of here.
+
+Single source of truth for the queue file, its lock and the framing, so the
+webhook and daemon can never disagree on the protocol. Locking and modes come
+from `backend/spool.py`, shared with the billing spool; the group is
+paths.WAKE_GROUP, whose members are these two units alone.
 """
 
-import fcntl
-import json
-
 from backend import paths
+from backend.spool import Spool
 
-QUEUE_FILE = paths.RUN_DIR / "wake_queue.jsonl"
-LOCK_FILE = paths.RUN_DIR / "wake_queue.lock"
+_SPOOL = Spool("wake_queue", paths.wake_gid)
 
 
-def enqueue(account_id):
-    assert account_id, "cannot enqueue an empty account id"
-    paths.ensure_run_dir()
-    with open(LOCK_FILE, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        with open(QUEUE_FILE, "a") as qf:
-            qf.write(json.dumps({"account_id": account_id}) + "\n")
+def enqueue(email):
+    assert email, "cannot enqueue an empty address"
+    _SPOOL.append({"email": email})
 
 
 def drain():
-    """Return the deduped list of queued account ids and clear the spool."""
-    paths.ensure_run_dir()
-    with open(LOCK_FILE, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        if not QUEUE_FILE.exists():
-            return []
-        lines = QUEUE_FILE.read_text().splitlines()
-        QUEUE_FILE.write_text("")
-    ids = []
-    seen = set()
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        aid = json.loads(line)["account_id"]
-        if aid not in seen:
-            seen.add(aid)
-            ids.append(aid)
-    return ids
+    """The deduped list of queued addresses, in arrival order, spool cleared.
+
+    Multiple pushes for one mailbox between drains coalesce: Gmail sends one
+    per message and the daemon's pass reads the whole delta from that account's
+    stored cursor either way.
+
+    `account_id` is read as well as `email` so entries spooled by the previous
+    release drain rather than stranding a push across the deploy that changes
+    the key. Both resolve through the same lookup."""
+    seen = []
+    for entry in _SPOOL.drain():
+        value = entry.get("email") or entry.get("account_id")
+        if value and value not in seen:
+            seen.append(value)
+    return seen

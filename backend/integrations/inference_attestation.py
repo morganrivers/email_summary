@@ -61,7 +61,7 @@ import certifi
 import requests
 
 from backend.tee import quote_policy
-from backend.tee.quote_policy import DEV_INSECURE, REQUIRED
+from backend.tee.quote_policy import DEV_INSECURE
 
 DEFAULT_ALLOWLIST = Path(__file__).resolve().parent / "inference_allowlist.json"
 

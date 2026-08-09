@@ -6,11 +6,6 @@ below the honest measured recall, so a big regression breaks the build without
 the suite going flaky on inherently-missed adversarial cases (spelled-out PII).
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import pytest
 
 from backend.masking import pseudonymizer

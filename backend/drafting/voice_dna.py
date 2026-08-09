@@ -54,8 +54,7 @@ from pathlib import Path
 from backend import paths
 from backend.accounts import account
 from backend.custody import keyring
-from backend.drafting import agentic_drafter
-from backend.drafting import tool_executors
+from backend.drafting import agentic_drafter, tool_executors
 from backend.integrations import llm_client
 
 # Every place a voice profile can live, in one place. The neutral profile is for

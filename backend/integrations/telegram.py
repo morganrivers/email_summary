@@ -11,10 +11,14 @@ daemon crashed, someone used the contact form) belong to the operator, and it
 reads the operator's own chat from the environment.
 
 Linking a chat is a verification, not a text field. new_link_code() and
-claim_chat_id() implement it: the UI shows a one-time code, the user sends that
-code to the bot, and we read it back off getUpdates. The chat id we store is one
-we have seen the user post from, so nobody can point their notifications at a
-stranger's chat by typing its number.
+posts_of() are the halves of it: the UI shows a one-time code, the user sends
+that code to the bot, and we read it back off getUpdates. The chat id we store
+is one we have seen the user post from, so nobody can point their notifications
+at a stranger's chat by typing its number.
+
+Who is allowed to make that change is not decided here -- it is
+backend.accounts.chat_link, which owns the codes and the rule. This module only
+answers which chats posted a code and when.
 """
 
 import html
@@ -180,22 +184,29 @@ def new_link_code():
     return "LL-" + "".join(secrets.choice(alphabet) for _ in range(8))
 
 
-def claim_chat_id(code):
-    """The chat id that posted `code` to the bot, or None if nobody has yet.
+def posts_of(code):
+    """[(chat id, unix seconds)] for every message carrying `code`, newest first.
+
+    The one read of the bot's inbox, so linking a chat and confirming a change
+    to one cannot disagree about what counts as having sent a code.
 
     Reads getUpdates without advancing the offset, so several users can be
-    mid-link at once and each still finds their own code. Telegram keeps
-    unconfirmed updates for 24h, which is far longer than a link takes."""
-    assert code, "claim_chat_id needs a code"
+    mid-change at once and each still finds their own code. Telegram keeps
+    unconfirmed updates for 24h, which is far longer than a link takes and is
+    also why the timestamp comes back with the chat id: a caller deciding on the
+    strength of a message has to be able to refuse one sent before it asked.
+    """
+    assert code, "posts_of needs a code"
     updates = call("getUpdates", {"limit": 100, "timeout": 0})
     if not isinstance(updates, list):
-        return None
+        return []
+    found = []
     for update in reversed(updates):
         message = update.get("message") or update.get("channel_post") or {}
-        text = message.get("text") or ""
-        if code not in text:
+        if code not in (message.get("text") or ""):
             continue
         chat_id = (message.get("chat") or {}).get("id")
-        if chat_id is not None:
-            return str(chat_id)
-    return None
+        if chat_id is None:
+            continue
+        found.append((str(chat_id), int(message.get("date") or 0)))
+    return found

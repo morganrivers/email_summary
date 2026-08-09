@@ -10,8 +10,7 @@ one box and not the other, which is the failure this file turns into a test.
 
 import pytest
 
-from deploy import render_pyproject
-from deploy import requirements
+from deploy import render_pyproject, requirements
 
 
 def test_committed_pyproject_matches_requirements():

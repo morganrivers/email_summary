@@ -90,14 +90,23 @@ def _google_hosts():
     runs, plus the two API roots. ``oauth_app.TOKEN_ENDPOINT`` is
     ``cosigner.protocol``'s, which is the same string the co-signer's policy
     pins ``htu`` against, so one edit moves the allowlist and the policy
-    together."""
+    together.
+
+    ``calendar_public.ICS_ROOT`` is a different host from the API roots because
+    it is a different kind of request: no credentials, the public feed as a
+    stranger sees it. It is listed unconditionally rather than behind
+    ``oauth_app.acl_scope_registered()``, for the reason ``_billing_hosts``
+    lists both Polar deployments -- the proxy cannot read the app's environment,
+    and an allowlist that flips with a toggle breaks the first time the toggle
+    moves."""
     from backend.daemons import gmail_hook_server
-    from backend.integrations.gmail_gcal import oauth_app
+    from backend.integrations.gmail_gcal import calendar_public, oauth_app
 
     return {
         _host(oauth_app.AUTH_ENDPOINT),
         _host(oauth_app.TOKEN_ENDPOINT),
         _host(gmail_hook_server.TOKENINFO_URL),
+        _host(calendar_public.ICS_ROOT),
     } | set(GOOGLE_API_HOSTS)
 
 

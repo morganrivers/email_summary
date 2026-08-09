@@ -34,12 +34,7 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from cosigner import attest
-from cosigner import audit
-from cosigner import keys
-from cosigner import policy
-from cosigner import protocol
-from cosigner import retention
+from cosigner import attest, audit, keys, policy, protocol, retention
 
 HOST = os.environ.get("COSIGNER_BIND", "127.0.0.1")
 PORT = int(os.environ.get("COSIGNER_PORT", str(protocol.PORT)))

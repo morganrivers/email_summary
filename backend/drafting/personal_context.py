@@ -62,11 +62,6 @@ class ContextError(Exception):
     """A refused save with a message meant for the user to read."""
 
 
-def context_path(acct):
-    """Where this account's personal information document lives."""
-    return keyring.path_for(acct, CONTEXT_NAME)
-
-
 def load(acct):
     """The document as the user last saved it, or "" when there is none. Returns
     it verbatim: what is stored is what the drafter reads."""

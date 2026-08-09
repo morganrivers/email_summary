@@ -132,13 +132,17 @@ def connect():
     global _CONN
     if _CONN is None:
         path = db_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        paths.shared_dir(path.parent)
         conn = sqlite3.connect(str(path), check_same_thread=False)
         conn.execute("PRAGMA secure_delete=ON")
         conn.executescript(SCHEMA)
         conn.commit()
         try:
-            path.chmod(0o600)
+            # Both the web tier and the background writers open this file and
+            # they are no longer the same uid. SQLite gives the rollback journal
+            # the database file's own mode, so setting it here covers the file
+            # the other uid has to be able to create beside it.
+            path.chmod(paths.file_mode())
         except OSError:
             pass
         _CONN = conn

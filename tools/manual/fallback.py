@@ -1,5 +1,6 @@
 """Re-run manual_draft on the failed bot email to verify thread fallback."""
 from dotenv import load_dotenv
+
 load_dotenv(".env")
 import json
 

@@ -19,8 +19,7 @@ import os
 import sys
 import urllib.parse
 
-from backend import secrets
-from backend import site
+from backend import secrets, site
 from backend.accounts import account
 from backend.billing import polar_api
 

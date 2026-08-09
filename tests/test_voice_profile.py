@@ -8,10 +8,7 @@ payloads the golden tests already cover.
 
 from identity_fixture import OWNER_ALT_EMAIL, OWNER_FIRST
 
-from backend.drafting import agentic_drafter
-from backend.drafting import draft_replies
-from backend.drafting import personal_context
-from backend.drafting import voice_dna
+from backend.drafting import agentic_drafter, draft_replies, personal_context, voice_dna
 
 
 def test_default_text_carries_the_constraints():

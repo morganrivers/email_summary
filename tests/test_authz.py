@@ -25,7 +25,6 @@ import pytest
 from backend import paths
 from backend.accounts import account
 
-
 WEB_SERVER = paths.REPO_ROOT / "frontend" / "web_server.py"
 
 # Modules whose functions take an account identifier first. `provisioning` is

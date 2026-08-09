@@ -6,13 +6,15 @@ spool coalesces, and that unparseable pushes fall back to a full sweep.
 """
 
 import base64
+import inspect
 import json
 
 from identity_fixture import OWNER_EMAIL
 
+from backend import paths
 from backend.accounts import account
-from backend.daemons import wake_queue
 from backend.daemons import gmail_hook_server as hook
+from backend.daemons import wake_queue
 
 
 def _manifest(tmp_path, entries):
@@ -85,20 +87,29 @@ def test_seeded_owner_is_row_one_and_survives_a_later_signup(tmp_path, monkeypat
 
 
 def test_wake_queue_roundtrip_and_dedup(tmp_path, monkeypatch):
-    monkeypatch.setattr(wake_queue, "QUEUE_FILE", tmp_path / "q.jsonl")
-    monkeypatch.setattr(wake_queue, "LOCK_FILE", tmp_path / "q.lock")
+    monkeypatch.setattr(paths, "RUN_DIR", tmp_path)
     assert wake_queue.drain() == []
-    wake_queue.enqueue("a"); wake_queue.enqueue("b"); wake_queue.enqueue("a")
+    for email in ("a", "b", "a"):
+        wake_queue.enqueue(email)
     assert wake_queue.drain() == ["a", "b"]     # deduped, order preserved
     assert wake_queue.drain() == []             # cleared
 
 
-def test_route_push(tmp_path, monkeypatch):
-    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
-        _entry("bob@x.com", "Bob", "Fox", "222"),
-    ]))
-    monkeypatch.setattr(wake_queue, "QUEUE_FILE", tmp_path / "q.jsonl")
-    monkeypatch.setattr(wake_queue, "LOCK_FILE", tmp_path / "q.lock")
+def test_wake_queue_drains_entries_from_the_previous_release(tmp_path, monkeypatch):
+    """A push spooled before the deploy that swapped the key still routes.
+    Both forms resolve through account.get_account, which matches either."""
+    monkeypatch.setattr(paths, "RUN_DIR", tmp_path)
+    (tmp_path / "wake_queue.jsonl").write_text('{"account_id": "bob@x.com"}\n')
+    assert wake_queue.drain() == ["bob@x.com"]
+
+
+def test_route_push_spools_the_address_without_reading_the_store(tmp_path, monkeypatch):
+    """The receiver does not resolve, so it needs no manifest at all: an
+    unregistered address is spooled and dropped by the daemon's lookup. Pointing
+    MANIFEST at a path that does not exist is the assertion -- reading it would
+    raise rather than quietly pass."""
+    monkeypatch.setattr(account, "MANIFEST", tmp_path / "absent" / "accounts.json")
+    monkeypatch.setattr(paths, "RUN_DIR", tmp_path)
     signals = []
     monkeypatch.setattr(hook, "signal_daemon", lambda: signals.append(1))
 
@@ -106,9 +117,17 @@ def test_route_push(tmp_path, monkeypatch):
     assert wake_queue.drain() == ["bob@x.com"] and signals == [1]
 
     signals.clear()
-    hook.route_push(_push_body("stranger@x.com"))       # unregistered: drop, no wake
-    assert wake_queue.drain() == [] and signals == []
+    hook.route_push(_push_body("stranger@x.com"))       # unregistered: the daemon drops it
+    assert wake_queue.drain() == ["stranger@x.com"] and signals == [1]
 
     signals.clear()
     hook.route_push(b"not-json")                         # unparseable: full-sweep fallback
     assert wake_queue.drain() == [] and signals == [1]
+
+
+def test_hook_does_not_import_the_account_store():
+    """The receiver's whole isolation is that it holds no account data. An
+    import of the store is the thing that would quietly undo it."""
+    source = inspect.getsource(hook)
+    assert "accounts import account" not in source
+    assert "accounts.account" not in source

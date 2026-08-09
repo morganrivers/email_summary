@@ -11,9 +11,7 @@ behavior.
 import traceback
 
 from backend.custody import tokens
-from backend.drafting import draft_replies
-from backend.drafting import manual_draft
-from backend.drafting import schedule_from_sent
+from backend.drafting import draft_replies, manual_draft, schedule_from_sent
 from backend.integrations.gmail_gcal import mailbox
 
 

@@ -10,11 +10,9 @@ shows up as a golden diff.
 
 import json
 
-from harness import assert_golden, NEUTRAL_IDENTITY
-from identity_fixture import (
-    OTHER_ALIASES, OTHER_EMAIL, OTHER_FIRST, OTHER_LAST,
-    OWNER_ALT_EMAIL, OWNER_BOT_ALIAS, OWNER_FIRST, OWNER_FROM,
-)
+from harness import NEUTRAL_IDENTITY, assert_golden
+from identity_fixture import (OTHER_ALIASES, OTHER_EMAIL, OTHER_FIRST, OTHER_LAST, OWNER_ALT_EMAIL,
+                              OWNER_BOT_ALIAS, OWNER_FIRST, OWNER_FROM)
 
 
 def record(rec, **extra):
@@ -94,8 +92,10 @@ def test_auto_reply_no_tools(wire):
     from backend.drafting import draft_replies
     rec = wire.install(
         responses=[
-            {"content": decisions({"index": 0, "needs_reply": True, "reason": "Personal lunch request"})},
-            {"content": f"Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\n{OWNER_FIRST}"},
+            {"content": decisions(
+                {"index": 0, "needs_reply": True, "reason": "Personal lunch request"})},
+            {"content": f"Hi Alice,\n\nLunch sounds great. How about Tuesday?"
+                        f"\n\nBest,\n{OWNER_FIRST}"},
         ],
         gmail_outputs=DRAFT_OUT,
     )
@@ -107,7 +107,8 @@ def test_auto_reply_with_calendar_tool(wire):
     from backend.drafting import draft_replies
     rec = wire.install(
         responses=[
-            {"content": decisions({"index": 0, "needs_reply": True, "reason": "Asks about meeting"})},
+            {"content": decisions(
+                {"index": 0, "needs_reply": True, "reason": "Asks about meeting"})},
             {"tool_calls": [{"name": "get_calendar_events", "arguments": json.dumps(
                 {"start_iso": "2026-07-23T00:00:00Z", "end_iso": "2026-07-24T00:00:00Z"})}]},
             {"content": f"Hi Alice,\n\nThursday afternoon works. Say 3pm?\n\nBest,\n{OWNER_FIRST}"},
@@ -305,8 +306,10 @@ def test_process_once_end_to_end(wire):
             # bot request draft (no tools)
             {"content": f"Hi Bob,\n\nYes, Friday works. Say 2pm?\n\nBest,\n{OWNER_FIRST}"},
             # auto classify + draft
-            {"content": decisions({"index": 0, "needs_reply": True, "reason": "Personal lunch request"})},
-            {"content": f"Hi Alice,\n\nLunch sounds great. How about Tuesday?\n\nBest,\n{OWNER_FIRST}"},
+            {"content": decisions(
+                {"index": 0, "needs_reply": True, "reason": "Personal lunch request"})},
+            {"content": f"Hi Alice,\n\nLunch sounds great. How about Tuesday?"
+                        f"\n\nBest,\n{OWNER_FIRST}"},
             # schedule extract
             {"content": json.dumps({"events": [
                 {"summary": "Meeting with Dave", "start": "2026-07-21T15:00:00",

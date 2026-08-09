@@ -11,6 +11,13 @@
 # deploy/audit.py for why the lock is the thing worth auditing.
 pip-audit==2.10.1
 pytest==9.0.2
+# The linters, run from tests/test_lint.py, because a check nobody remembers to
+# run is not a check. flake8 is the pyflakes engine plus pycodestyle and mccabe,
+# so pyflakes is pinned by it rather than beside it: two pins for one analyzer
+# is two versions that can disagree about what a warning is. Both read their
+# configuration from setup.cfg.
+flake8==7.3.0
+isort==8.0.1
 # uv is a test dependency because deploy/audit.py reads the closure through
 # `uv export --frozen` and CI regenerates the lock on Dependabot branches. Pinned
 # to the version that wrote the committed lock (`revision = 3`), so a newer uv

@@ -154,7 +154,8 @@ def test_a_cached_pass_is_not_served_to_an_endpoint_that_ignores_our_nonce(
     subject = f"nearai-glm:{recorded.identity()}"
     att._CACHE.put(subject, quote_policy.Verdict(True, subject, attested=True))
     payload = copy.deepcopy(recorded.payload)
-    monkeypatch.setattr(att, "fetch", lambda p, nonce=None: att.Report(payload, "a-nonce-we-just-made"))
+    monkeypatch.setattr(att, "fetch",
+                        lambda p, nonce=None: att.Report(payload, "a-nonce-we-just-made"))
 
     verdict = att.verify(provider("nearai-glm"))
 

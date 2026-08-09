@@ -23,7 +23,6 @@ from googleapiclient.discovery import build
 from backend.custody import tokens
 from backend.integrations.gmail_gcal import oauth_app
 
-
 # httplib2, under the Google client, is not thread-safe, and the web UI builds
 # voice profiles on a background thread while the daemon drafts. One service per
 # thread per account costs a discovery parse and removes the whole question.
@@ -51,7 +50,7 @@ def credentials_for(account):
     assert getattr(account, "id", None), "credentials_for needs a loaded Account"
     return Credentials(
         None,
-        scopes=list(oauth_app.SCOPES),
+        scopes=list(oauth_app.scopes()),
         refresh_handler=tokens.refresh_handler_for(account),
     )
 
