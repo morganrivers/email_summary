@@ -174,13 +174,21 @@ image inherits the default, since a commented-out pin is not rendered.
 
 ## How the enclave is split
 
-Three containers from one image, not four processes under one uid.
+Three containers, one per role, and now three images — one per role, each
+carrying only the code that role's entry points reach, not four processes under
+one uid and no longer one shared image either.
 `deploy/phala/docker-compose.yml` names a role per service (`mail`, `web`,
-`hook`), `flake.nix` bakes the three accounts and the two shared groups
+`hook`) and a distinct image per service (`tee-email-bot-{mail,web,hook}`),
+`flake.nix` bakes the three accounts and the two shared groups
 (`letterlock-data`, `letterlock-wake`) into `/etc/passwd` and `/etc/group` under
 the same names `backend/paths.py` resolves, so one piece of code sets modes on
-the box and in the image. TDX answers the host operator; it does nothing about a
-bug in our own code, which is what this answers.
+the box and in every image. TDX answers the host operator; it does nothing about
+a bug in our own code, which is what this answers. The per-role image split adds
+one more thing it answers: the code that reads mail is not even present in the
+container the open internet posts to (`tests/test_image_manifest.py` pins the
+receiver's image against the custody and inference modules), so a bug in the
+receiver has no custody stack in its address space to reach for — belt to the
+uid/group/secret suspenders, not a replacement for them.
 
 The compose file is the partition and not merely its description. dstack
 decrypts `.encrypted-env` to the guest filesystem, `app-compose.service` reads
@@ -226,32 +234,47 @@ than accepting a value nothing checked.
 
 ## What the enclave image carries
 
-`deploy/phala/image_files.nix` is the image's file list and `flake.nix` copies
-exactly it. Generated, like the pyproject and the Caddyfile:
+`deploy/phala/image_files.nix` is the file list **per role** — a
+`{ mail; web; hook; }` attrset — and `flake.nix` builds one image per role
+copying exactly that role's list. Generated, like the pyproject and the
+Caddyfile:
 
 ```bash
-python -m deploy.render_image_manifest          # rewrite the list
+python -m deploy.render_image_manifest          # rewrite the per-role lists
 python -m deploy.render_image_manifest --check  # exit 1 if it is stale
 ```
 
 `tests/test_image_manifest.py` fails on drift, so a new import that pulls a new
-module into the enclave is caught there rather than in a CVM.
+module into a role's image is caught there rather than in a CVM.
 
-Derived from what actually starts: `tools/reachability.py` walks imports from
-the `python -m` entry points in `flake.nix` itself, so a module ships because
-something that runs imports it. It replaced a filter over file extensions that
-was wrong both ways — it shipped `cosigner/` whole (the outer key derivation,
-the request policy, the audit store) plus the egress proxy, the billing webhook
-and poller and `tools/` into an image that starts none of them, and it shipped
-no data file at all, because `.py`-or-`.css` matches neither `default_voice.md`
-nor `inference_allowlist.json` nor a favicon. Only the co-signer's wire contract
-(`cosigner/protocol.py`) belongs in the enclave; a test asserts that.
+Derived from what actually starts, per role: `tools/reachability.py` walks
+imports from each role's `python -m` entry points, so a module ships into a
+container because something *that container starts* imports it — mail from the
+daemon plus its crontab and gate, web from the web server plus the gate, hook
+from the receiver alone. `render_image_manifest.ROLE_ROOTS` is that partition
+(the flake's `case` cannot be one grep), asserted to union to
+`reachability.enclave_roots()` so a `python -m` added to the flake without a
+home fails the render. The reachability walk counts function-local imports the
+same as top-level ones, because a lazy import can still execute and the image
+must carry what could run; that is why cutting a role's reach means moving code
+off its import graph, not deferring the import (see `backend/secrets_checks.py`).
+It replaced a filter over file extensions that was wrong both ways — it shipped
+`cosigner/` whole plus the egress proxy, the billing webhook and poller and
+`tools/` into an image that starts none of them, and shipped no data file at
+all. Only the co-signer's wire contract (`cosigner/protocol.py`) belongs in any
+enclave image; a test asserts that, per role.
+
+The receiver (`hook`) is the payoff: its image is 11 modules — the JWT verifier,
+the wake spool, paths/secrets-core/site and the wire contract — and carries none
+of the inference client, Telegram, billing or custody code the mail role's
+imports reach. A test pins that absence.
 
 Two lists in that module cannot be derived and carry a reason each.
 `EXTRA_MODULES` is commands nothing starts that must still be there because
-their data is only there (`accounts.whois`, `custody.rotate`). `DATA_FILES` is
-what a module reads at runtime, since no import graph says a module opens a JSON
-file beside it; the renderer asserts each exists.
+their data is only there, each tagged with the role that holds the data
+(`accounts.whois`, `custody.rotate` — both `mail`). `DATA_FILES` is what a
+module reads at runtime; a data file ships into a role's image when that role
+reaches its reader, and the renderer asserts each exists.
 
 `python -m tools.reachability --coverage <cov.json>` is the report behind it,
 and answers the question coverage alone cannot: unreachable (nothing calls it)
@@ -389,15 +412,23 @@ daemon also honors `restart.flag`; the webhook needs a real service restart.
 Keep these centralized. If you need behavior that lives here, import — don't copy.
 
 - `backend/secrets.py` — how a secret reaches the process. `secrets.load()` is
-  the only read of `.env` (idempotent; injected environment wins). The
-  `*_configured()` checks are the only definition of "this value is present",
-  answered by calling the same code the services call (`PolarBilling()`,
-  `telegram.operator_target()`) and owning the variable name where presence is a
-  lookup — `frontend/session.py` reads `SESSION_SECRET_ENV` and
-  `SESSION_SECRET_PREVIOUS_ENV` from here, not the reverse. `tee_boot.run_gate()`
-  and `deploy/preflight.py` both build on them, so the enclave's fail-closed set
-  and the deploy's skip set cannot drift. `fingerprint()` names a secret in a log
-  without printing it. Under `TEE_REQUIRED` no file is read at all;
+  the only read of `.env` (idempotent; injected environment wins). It owns the
+  variable-name constants where presence is a lookup — `frontend/session.py`
+  reads `SESSION_SECRET_ENV` and `SESSION_SECRET_PREVIOUS_ENV` from here, not the
+  reverse. `fingerprint()` names a secret in a log without printing it. Under
+  `TEE_REQUIRED` no file is read at all. It imports nothing heavy, which is the
+  point: a role that needs only `load()` (the Pub/Sub receiver) reaches nothing
+  through it.
+- `backend/secrets_checks.py` — the `*_configured()` presence checks, the only
+  definition of "this value is present", answered by calling the same code the
+  services call (`PolarBilling()`, `telegram.operator_target()`). Split out of
+  `secrets` because each check imports the module that owns its judgement
+  (`llm_client`, `telegram`, `billing`, `oauth_app`) and the enclave image ships
+  every module a role imports, function-local imports included — so a receiver
+  whose one use of `secrets` is `load()` used to carry the whole inference,
+  alerting, billing and custody fan-out behind those checks. Its two callers are
+  `tee_boot.run_gate()` and `deploy/preflight.py`, so the enclave's fail-closed
+  set and the deploy's skip set cannot drift; neither is the receiver.
   `volume_secrets()` is the one list of files whose mere presence fails the boot
   gate (`.env`, `oauth_app.keys_path()`), so the gate refuses exactly what the
   loaders refuse, and `google_oauth_configured()` answers through

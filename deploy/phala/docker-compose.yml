@@ -37,7 +37,11 @@
 # and the boot of each role should be watched the first time it deploys.
 
 x-common: &common
-  image: tee-email-bot:latest
+  # No shared image: each role runs its own, carrying only its own reachable
+  # code (see flake.nix and deploy/phala/image_files.nix). The per-service
+  # `image:` lines below are what a role runs, and each is measured into the
+  # compose-hash, so the receiver's image cannot silently gain the mail role's
+  # custody stack.
   restart: always
   environment: &common-env
     # Fail-closed attestation gate; see backend/tee/tee_boot.py. Also what makes
@@ -53,12 +57,13 @@ services:
   # Applies spooled Polar events, which is why it carries the Polar API token.
   mail:
     <<: *common
-    # This line is rewritten to a pinned registry digest by
+    # Each `image:` line is rewritten to a pinned registry digest by
     #   REGISTRY=<repo> deploy/phala/build_and_publish.sh --push
     # It must carry a literal @sha256 digest in production (not a tag): the
     # compose file is measured into the dstack attestation, so a mutable tag or
     # a ${VAR} would let the operator swap the image and break the trust story.
-    # The bare tag in x-common is only a pre-publish placeholder.
+    # The bare tag here is only a pre-publish placeholder.
+    image: tee-email-bot-mail:latest
     command: ["mail"]
     user: "10001:10001"
     # The enclave's SupplementaryGroups=, and it has to be spelled out: a
@@ -115,6 +120,7 @@ services:
   # though one provider were configured.
   web:
     <<: *common
+    image: tee-email-bot-web:latest
     command: ["web"]
     user: "10002:10002"
     # letterlock-data only. Not letterlock-wake: writing the wake spool starts a
@@ -154,6 +160,7 @@ services:
   # process that can open it can derive this app's sealing key.
   hook:
     <<: *common
+    image: tee-email-bot-hook:latest
     command: ["hook"]
     user: "10003:10003"
     # letterlock-wake alone: the FIFO and the wake spool, and nothing else in

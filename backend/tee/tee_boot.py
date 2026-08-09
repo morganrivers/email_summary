@@ -30,7 +30,7 @@ import os
 import sys
 from pathlib import Path
 
-from backend import secrets
+from backend import secrets, secrets_checks
 from backend.tee.dstack_client import DstackClient, DstackError, DstackUnavailable
 
 APP_KEY_PATH = "tee-email-bot/app"
@@ -85,7 +85,7 @@ def run_gate() -> int:
             print("[tee_boot] no dstack socket and TEE_REQUIRED unset (dev/non-TEE host).")
         return 0
 
-    on_volume = secrets.volume_secrets()
+    on_volume = secrets_checks.volume_secrets()
     if on_volume:
         for path in on_volume:
             print(
@@ -117,11 +117,11 @@ def run_gate() -> int:
         return 1
 
     # Which secrets must be present, and what "present" means, live in
-    # backend/secrets.py -- the same checks the deploy preflight runs. This was
-    # a list of four variable names here, so the gate passed without
+    # backend/secrets_checks.py -- the same checks the deploy preflight runs.
+    # This was a list of four variable names here, so the gate passed without
     # SESSION_SECRET, the Polar credentials or the Google OAuth client secret:
     # a gate that names its own subset drifts from the services it gates.
-    gaps = secrets.missing()
+    gaps = secrets_checks.missing()
     if gaps:
         for reason in gaps:
             print(f"[tee_boot] FAIL-CLOSED: attested but not provisioned: {reason}",

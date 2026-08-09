@@ -12,7 +12,7 @@ from deploy import preflight
 
 def test_a_mail_unit_waits_for_the_cosigner_on_the_same_box(monkeypatch):
     monkeypatch.setattr(preflight, "_manifest_present", lambda: None)
-    monkeypatch.setattr(preflight.secrets, "google_oauth_configured", lambda: None)
+    monkeypatch.setattr(preflight.secrets_checks, "google_oauth_configured", lambda: None)
     monkeypatch.setattr(preflight, "unit_for_module", lambda module: "cosigner.service")
     monkeypatch.setattr(preflight, "_cosigner_configured",
                         lambda: "sealed credentials missing: /etc/credstore.encrypted/x")
@@ -27,7 +27,7 @@ def test_a_cosigner_on_another_box_is_not_judged_from_here(monkeypatch):
     credentials and cannot probe it either -- its site block demands a client
     certificate. Reporting nothing beats guessing."""
     monkeypatch.setattr(preflight, "_manifest_present", lambda: None)
-    monkeypatch.setattr(preflight.secrets, "google_oauth_configured", lambda: None)
+    monkeypatch.setattr(preflight.secrets_checks, "google_oauth_configured", lambda: None)
     monkeypatch.setattr(preflight, "unit_for_module", lambda module: None)
 
     assert preflight._mail_configured() is None

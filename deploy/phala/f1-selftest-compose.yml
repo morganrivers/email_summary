@@ -5,12 +5,13 @@
 #   phala deploy -c deploy/phala/f1-selftest-compose.yml
 # then read the CVM logs; a healthy enclave prints "[f1] SUCCESS".
 #
-# Uses the digest-pinned image so the running measurement equals the published,
-# source-reproducible hash (deploy/phala/IMAGE_HASH.txt). Replace <digest> with
-# the sha256 from a `docker load` + push of the Nix image tarball.
+# Uses the digest-pinned mail image (it carries tee_boot and runs the gate) so
+# the running measurement equals the published, source-reproducible hash
+# (deploy/phala/IMAGE_HASH.txt, the mail row). Replace <digest> with the sha256
+# from a `docker load` + push of the Nix mail image tarball.
 services:
   f1-selftest:
-    image: tee-email-bot@sha256:REPLACE_WITH_PUBLISHED_DIGEST
+    image: tee-email-bot-mail@sha256:REPLACE_WITH_PUBLISHED_DIGEST
     entrypoint: ["python", "-m", "backend.tee.tee_boot", "--selftest"]
     restart: "no"
     volumes:

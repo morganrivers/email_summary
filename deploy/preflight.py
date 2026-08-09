@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from backend import paths, secrets
+from backend import paths, secrets, secrets_checks
 
 UNIT_DIR = Path(__file__).resolve().parent / "hetzner"
 _EXEC_MODULE = re.compile(r"^ExecStart=.*?\s-m\s+(\S+)", re.MULTILINE)
@@ -51,9 +51,9 @@ def _mail_configured():
     """What a unit that touches a mailbox needs before it is worth starting: the
     account store, the shared Google OAuth app every token refresh is signed
     with, and custody. The enclave gates on the same OAuth pair through
-    ``secrets.REQUIRED``; this is the Hetzner half of it, so the box does not
-    check a strict subset of what the CVM fails closed on."""
-    return (_manifest_present() or secrets.google_oauth_configured()
+    ``secrets_checks.REQUIRED``; this is the Hetzner half of it, so the box does
+    not check a strict subset of what the CVM fails closed on."""
+    return (_manifest_present() or secrets_checks.google_oauth_configured()
             or _custody_available() or _inference_attestable())
 
 
@@ -92,7 +92,7 @@ def _web_configured():
     token or the client secret that would obtain one. A box missing either takes
     the daemon out of this report, which is where the remedy is; the site itself
     stays up with everything except sign-in."""
-    return secrets.session_configured() or _custody_available()
+    return secrets_checks.session_configured() or _custody_available()
 
 
 def _definitely_absent(path):
@@ -143,9 +143,9 @@ def _cosigner_configured():
 
 
 # module -> extra configuration check, run only after the module imports. The
-# secret checks come from backend/secrets.py, which the TEE boot gate also
-# applies: a unit skipped here for a missing value is the same unit that would
-# fail closed in the enclave, for the same stated reason.
+# secret checks come from backend/secrets_checks.py, which the TEE boot gate
+# also applies: a unit skipped here for a missing value is the same unit that
+# would fail closed in the enclave, for the same stated reason.
 CONFIG_CHECKS = {
     "cosigner.server": _cosigner_configured,
     "backend.daemons.egress_proxy": _egress_allowlist_derivable,
@@ -153,8 +153,8 @@ CONFIG_CHECKS = {
     # reads .env.billing alone, so the webhook secret is the whole of what it
     # needs. Checking polar_configured() here would skip the unit for a missing
     # value it never reads, or pass it on one it cannot see.
-    "backend.billing.billing_webhook": secrets.polar_webhook_configured,
-    "backend.billing.billing_poller": secrets.polar_api_configured,
+    "backend.billing.billing_webhook": secrets_checks.polar_webhook_configured,
+    "backend.billing.billing_poller": secrets_checks.polar_api_configured,
     "frontend.web_server": _web_configured,
     # The daemon applies the spooled billing events, so the API token is its
     # concern now. Not a hard requirement: a box with no Polar configured

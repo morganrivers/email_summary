@@ -11,28 +11,30 @@ at-rest leak the custody design removes everywhere else, so under
 ``TEE_REQUIRED`` this module reads no file at all and ``file_backed()`` is
 empty by construction rather than by convention.
 
-Three things live here and nothing else should copy them:
+Two things live here and nothing else should copy them:
 
   * ``load()`` -- the one read of ``.env``, idempotent, skipped under
     ``TEE_REQUIRED``. Injected environment always wins over the file, so a
     stale checkout cannot shadow what the KMS released.
-  * the ``*_configured()`` checks -- whether a secret is present.
-    ``tee_boot.run_gate()`` and ``deploy/preflight.py`` are both built on them,
-    so the boot gate and the deploy check cannot disagree about what
-    "configured" means.
   * ``fingerprint()`` -- how a secret is named in a log. Every service captures
     its secrets once at startup, so "is this process holding what the file now
     says" is a question only a startup line can answer, and it must be
     answerable without printing the value.
 
-A check asks the owning module whenever presence is a judgement rather than a
-lookup: ``PolarBilling()`` applies the sandbox/prod suffix switch,
-``telegram.operator_target()`` wants a token *and* a chat. Where presence is
-just "was this variable injected", the name lives here and the consumer reads
-it from here -- ``frontend/session.py`` takes ``SESSION_SECRET_ENV`` off this
-module rather than the reverse, so nothing in backend/ reaches up into
-frontend/ to ask. Those service imports are deferred into the check bodies
-because the services import this one for ``load()``.
+The variable-name constants live here too, because deciding where a secret
+comes from is this module's job: ``frontend/session.py`` takes
+``SESSION_SECRET_ENV`` off this module rather than the reverse, so nothing in
+backend/ reaches up into frontend/ to ask.
+
+The ``*_configured()`` presence checks used to be a third thing here, but each
+one imports the module that owns its judgement -- ``llm_client``, ``telegram``,
+``billing``, ``oauth_app`` -- and the enclave image ships every module a role
+imports, function-local imports included. So a role that imported this one only
+for ``load()`` -- the Pub/Sub receiver above all -- carried the whole inference,
+alerting and billing fan-out behind it. The checks now live in
+``backend.secrets_checks`` (still their single definition, just off the import
+graph of a process that only needs to read a variable). ``tee_boot.run_gate()``
+and ``deploy/preflight.py``, the two callers, import that module directly.
 """
 
 import hashlib
@@ -76,22 +78,6 @@ def tee_required():
     The one read of the flag; tee_boot's gate and the loader below both ask
     here, so 'we are in the enclave' means the same thing to both."""
     return os.environ.get("TEE_REQUIRED", "").strip().lower() in _TRUTHY
-
-
-def volume_secrets():
-    """Secret files sitting on the volume, in the order they are worth naming.
-
-    Under TEE_REQUIRED every one of these is a provisioning error rather than a
-    fallback: a file the KMS does not gate and the measurement does not cover.
-    The list lives here rather than in ``tee_boot`` so the gate refuses exactly
-    the files the loaders refuse -- ``load()`` reads no ``.env`` and
-    ``oauth_app.load_keys()`` reads no key file once TEE_REQUIRED is set, and a
-    gate that enumerated its own subset would let a re-added mount through."""
-    from backend.integrations.gmail_gcal import oauth_app
-
-    return tuple(p for p in (paths.ENV_FILE, paths.BILLING_ENV_FILE,
-                             paths.ALERTS_ENV_FILE,
-                             oauth_app.keys_path()) if p.exists())
 
 
 def secret_files():
@@ -202,101 +188,3 @@ def google_oauth_client():
     if not client_id or not client_secret:
         return None
     return client_id, client_secret
-
-
-def inference_configured():
-    """Reason no drafting can happen, or None.
-
-    Every provider in the catalog must be reachable, not just the default: the
-    web UI offers a route only when its key is present, so a box missing the
-    confidential provider's key silently narrows the user's choice instead of
-    failing where an operator would see it."""
-    from backend.integrations import llm_client
-
-    absent = sorted({p.key_env for p in llm_client.PROVIDERS.values() if not p.configured()})
-    return f"{', '.join(absent)} not set" if absent else None
-
-
-def telegram_configured():
-    """Reason box-level failure alerts cannot be delivered, or None. The
-    operator chat is what reports a co-signer outage or a refused unwrap, so an
-    unprovisioned one is a gap in the alerting path, not a preference."""
-    from backend.integrations import telegram
-
-    if telegram.operator_target() is None:
-        return "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set"
-    return None
-
-
-def session_configured():
-    """Reason the web UI cannot sign anyone in, or None. The cookie signer reads
-    the same name through ``require()``, so it is stated once."""
-    if not get(SESSION_SECRET_ENV):
-        return f"{SESSION_SECRET_ENV} not set"
-    return None
-
-
-def polar_api_configured():
-    """Reason the Polar API client cannot be built, or None. PolarBilling's own
-    asserts are the check, so the sandbox/prod suffix switch is applied exactly
-    once."""
-    from backend.billing import billing
-
-    try:
-        billing.PolarBilling()
-    except AssertionError as err:
-        return str(err)
-    return None
-
-
-def polar_webhook_configured():
-    """Reason a Polar webhook cannot be verified, or None. Read through
-    ``billing.webhook_secret()`` so the check and the verifier sit on the same
-    side of the sandbox toggle."""
-    from backend.billing import billing
-
-    if not billing.webhook_secret():
-        return "POLAR_WEBHOOK_SECRET not set"
-    return None
-
-
-def polar_configured():
-    """Both halves of the billing surface: mint checkouts and verify events."""
-    return polar_api_configured() or polar_webhook_configured()
-
-
-def google_oauth_configured():
-    """Reason nobody can sign in with Google, or None.
-
-    Asked of ``oauth_app.load_keys()`` rather than answered here, because which
-    source counts is that module's decision and it differs by environment: the
-    volume file is a valid answer on the box and a refusal inside the enclave.
-    A copy of the rule here would approve a source the reader rejects, which is
-    a gate that passes and a sign-in that 500s."""
-    from backend.integrations.gmail_gcal import oauth_app
-
-    try:
-        oauth_app.load_keys()
-    except (AssertionError, OSError, ValueError) as err:
-        return str(err)
-    return None
-
-
-# Everything a fully provisioned box needs before it is allowed to touch a
-# mailbox. The boot gate refuses on any of these; the deploy preflight applies
-# them per unit, since a Hetzner box legitimately runs only some services.
-REQUIRED = (
-    inference_configured,
-    telegram_configured,
-    session_configured,
-    polar_api_configured,
-    polar_webhook_configured,
-    google_oauth_configured,
-)
-
-
-def missing():
-    """Why this box is not fully provisioned, one reason per gap. Empty when it
-    is. Reasons name variables, never values."""
-    load()
-    return [reason for reason in (check() for check in REQUIRED) if reason]

@@ -64,6 +64,26 @@ def test_every_role_is_present_and_none_of_them_is_root():
     assert len(set(uids.values())) == len(ROLES), f"roles share a uid: {uids}"
 
 
+def test_each_role_runs_its_own_image():
+    """Three images now, one per role, each carrying only its reachable code
+    (flake.nix, deploy/phala/image_files.nix). The compose names a distinct
+    image per service and each is measured into the compose-hash, so the
+    receiver's image cannot silently gain the mail role's custody stack the way
+    one shared image left it able to. A service that inherited a single shared
+    image, or two services naming the same one, would undo that."""
+    blocks = _service_blocks()
+    images = {}
+    for role, block in blocks.items():
+        found = re.search(r"^\s+image:\s*(\S+)", block, re.M)
+        assert found, f"{role} names no image of its own"
+        images[role] = found.group(1)
+    assert len(set(images.values())) == len(ROLES), (
+        f"roles share an image: {images}")
+    for role, ref in images.items():
+        assert f"tee-email-bot-{role}" in ref, (
+            f"{role} runs {ref}, not its own tee-email-bot-{role} image")
+
+
 def test_the_push_receiver_reaches_no_account_data_and_no_kms():
     """The process Google posts to is the most exposed and needs the least.
 
