@@ -220,6 +220,13 @@ def _h(text):
             .replace('"', "&quot;"))
 
 
+def _csrf_field(email):
+    """The hidden anti-CSRF input for a state-changing form, bound to the
+    signed-in email. Every authenticated POST form carries one; `_posted_form`
+    on the handler is the single place they are checked."""
+    return f'<input type="hidden" name="csrf" value="{_h(sess.csrf_token(email))}">'
+
+
 def _layout(title, body, active=None, user_email=None, refresh=None):
     public_nav = [
         ("/", "Home"),
@@ -999,8 +1006,9 @@ writing voice profile. The page refreshes itself.
     editable = own or voice_dna.default_text()
     reset_html = ""
     if own:
-        reset_html = """
+        reset_html = f"""
 <form method="post" action="/voice/reset" style="display:inline;margin-left:8px;">
+  {_csrf_field(acct.id)}
   <button type="submit" class="form-submit">Revert to default</button>
 </form>
 """
@@ -1027,6 +1035,7 @@ is sent anywhere else. <b>Caution: Generating a result replaces whatever is in t
 </p>
 
 <form method="post" action="/voice/generate" style="display:inline">
+  {_csrf_field(acct.id)}
   <button type="submit" class="form-submit">Generate from sent mail</button>
 </form>
 {reset_html}
@@ -1047,6 +1056,7 @@ just asking: it is a switch in <a href="/settings">Settings</a>.
 
 <div class="contact-form" style="max-width:100%;">
   <form method="post" action="/voice">
+    {_csrf_field(acct.id)}
     <textarea name="profile" rows="26" style="width:100%;font-family:monospace;font-size:12px;"
               maxlength="{voice_dna.MAX_PROFILE_CHARS}">{_h(editable)}</textarea>
     <button type="submit" class="form-submit">Save profile</button>
@@ -1119,6 +1129,7 @@ Generating a voice profile does not touch this box.
 
 <div class="contact-form" style="max-width:100%;">
   <form method="post" action="/personal">
+    {_csrf_field(acct.id)}
     <textarea name="context" rows="16" style="width:100%;font-family:monospace;font-size:12px;"
               maxlength="{personal_context.MAX_CONTEXT_CHARS}"
               placeholder="{_h(placeholder)}">{_h(text)}</textarea>
@@ -1186,6 +1197,7 @@ def _telegram_section(acct, pending=None, error=None, notice=None):
   </p>
   <p>Then come back here and press the button.</p>
   <form method="post" action="/settings/telegram/confirm" style="display:inline">
+    {_csrf_field(acct.id)}
     <button type="submit" class="form-submit">I have sent the code</button>
   </form>
 </div>
@@ -1200,6 +1212,7 @@ def _telegram_section(acct, pending=None, error=None, notice=None):
   is ready, plus the daily summary.
 </p>
 <form method="post" action="/settings/telegram/start" style="display:inline">
+  {_csrf_field(acct.id)}
   <button type="submit" class="form-submit">Unlink</button>
 </form>
 """
@@ -1211,6 +1224,7 @@ def _telegram_section(acct, pending=None, error=None, notice=None):
   Link a chat to get a message when a draft is ready, plus your daily summary.
 </p>
 <form method="post" action="/settings/telegram/start" style="display:inline">
+  {_csrf_field(acct.id)}
   <button type="submit" class="form-submit">Link Telegram</button>
 </form>
 """
@@ -1308,6 +1322,7 @@ def _page_settings(acct, saved=False, pending=None, error=None, notice=None,
 
 <div class="contact-form" style="max-width:520px;">
   <form method="post" action="/settings">
+    {_csrf_field(acct.id)}
     <div class="form-row">
       <label for="timezone">Timezone</label>
       <input type="text" id="timezone" name="timezone" value="{_h(acct.timezone)}"
@@ -1495,6 +1510,7 @@ def _page_account(acct, error=None):
 
 <div class="contact-form" style="max-width:400px;">
   <form method="post" action="/account/delete">
+    {_csrf_field(acct.id)}
     <div class="form-row">
       <label>Type your email address to confirm</label>
       <input type="email" name="confirm_email" required maxlength="200"
@@ -1590,6 +1606,22 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect("/auth/login")
             return None
         return acct
+
+    def _posted_form(self, acct):
+        """The form body for a state-changing POST, or None when the request was
+        malformed or failed the anti-CSRF check -- in which case an error page
+        has already been sent. One chokepoint, so a new mutating handler cannot
+        forget the token: it reads the body here or it does not read it at all.
+        Defence in depth behind the session cookie's SameSite=Lax."""
+        form = self._read_body()
+        if form is None:
+            self._send(400, _page_error(400, "Malformed request."))
+            return None
+        if not sess.csrf_ok(form.get("csrf", ""), acct.id):
+            self._send(400, _page_error(
+                400, "This form has expired. Reload the page and try again."))
+            return None
+        return form
 
     def _read_body(self):
         """Form fields from the request body, or None when the request is
@@ -1807,9 +1839,9 @@ class Handler(BaseHTTPRequestHandler):
             acct = self._require_auth()
             if acct is None:
                 return
-            form = self._read_body()
+            form = self._posted_form(acct)
             if form is None:
-                return self._send(400, _page_error(400, "Malformed request."))
+                return
             try:
                 tz = form.get("timezone", "").strip() or account.DEFAULT_TIMEZONE
                 if not _valid_timezone(tz):
@@ -1855,6 +1887,8 @@ class Handler(BaseHTTPRequestHandler):
             acct = self._require_auth()
             if acct is None:
                 return
+            if self._posted_form(acct) is None:
+                return
             try:
                 action, code, username = handoff.chat_begin(acct.id)
             except handoff.RemoteRefusal as e:
@@ -1870,6 +1904,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/settings/telegram/confirm":
             acct = self._require_auth()
             if acct is None:
+                return
+            if self._posted_form(acct) is None:
                 return
             # Display state only. The code that counts is the daemon's, and a
             # refusal below is its answer rather than this dictionary's.
@@ -1893,9 +1929,9 @@ class Handler(BaseHTTPRequestHandler):
             acct = self._require_auth()
             if acct is None:
                 return
-            form = self._read_body()
+            form = self._posted_form(acct)
             if form is None:
-                return self._send(400, _page_error(400, "Malformed request."))
+                return
             try:
                 acct = voice_dna.save(acct, form.get("profile", ""))
             except voice_dna.VoiceError as e:
@@ -1906,9 +1942,9 @@ class Handler(BaseHTTPRequestHandler):
             acct = self._require_auth()
             if acct is None:
                 return
-            form = self._read_body()
+            form = self._posted_form(acct)
             if form is None:
-                return self._send(400, _page_error(400, "Malformed request."))
+                return
             text = form.get("context", "")
             try:
                 personal_context.save(acct, text)
@@ -1921,6 +1957,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/voice/generate":
             acct = self._require_auth()
             if acct is None:
+                return
+            if self._posted_form(acct) is None:
                 return
             try:
                 handoff.voice_start(acct.id)
@@ -1939,6 +1977,8 @@ class Handler(BaseHTTPRequestHandler):
             acct = self._require_auth()
             if acct is None:
                 return
+            if self._posted_form(acct) is None:
+                return
             acct = voice_dna.clear(acct)
             return self._send(200, _page_voice(
                 acct, notice="Profile removed. Drafts use the default profile again."))
@@ -1947,9 +1987,9 @@ class Handler(BaseHTTPRequestHandler):
             acct = self._require_auth()
             if acct is None:
                 return
-            form = self._read_body()
+            form = self._posted_form(acct)
             if form is None:
-                return self._send(400, _page_error(400, "Malformed request."))
+                return
             confirm = form.get("confirm_email", "").strip().lower()
             if confirm != acct.id.lower():
                 # The one refusal worth a row of its own: deletion is the

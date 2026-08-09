@@ -47,13 +47,14 @@ def test_a_session_round_trips():
 
 
 def test_both_cookies_carry_the_attributes_that_do_the_defending():
-    """There is no CSRF token anywhere in the web tier, and there does not need
-    to be one -- but only because `SameSite=Lax` means a cross-site POST arrives
-    without the session cookie. That makes these three attributes the whole of
-    the defence rather than hardening on top of it: dropping SameSite silently
-    turns every mutating handler into a CSRF target, dropping Secure puts the
-    cookie on the first plaintext request, and dropping HttpOnly hands it to any
-    script that reaches the page."""
+    """`SameSite=Lax` is the primary CSRF defence: a cross-site POST arrives
+    without the session cookie. There is now a synchroniser token behind it
+    (`csrf_token`/`csrf_ok`, checked by web_server._posted_form) so the defence
+    does not rest on this one attribute alone, but these three still matter and
+    each fails silently: dropping SameSite widens the window to shapes a Lax
+    cookie follows, dropping Secure puts the cookie on the first plaintext
+    request, and dropping HttpOnly hands it to any script that reaches the
+    page."""
     for cookie in (sess.make_cookie("dana@example.com"),
                    sess.state_cookie(sess.new_state(), {})):
         attributes = {part.strip().lower() for part in cookie.split(";")[1:]}
@@ -127,6 +128,49 @@ def test_a_session_cookie_is_not_a_state_and_a_state_is_not_a_session():
     session_value = sess.make_cookie("dana@example.com").split("=", 1)[1].split(";")[0]
     assert not sess.state_is_ours(
         session_value, headers_for(f"{sess.STATE_COOKIE}={session_value}"))
+
+
+# --- the anti-CSRF token --------------------------------------------------
+
+
+def test_a_csrf_token_round_trips():
+    token = sess.csrf_token("dana@example.com")
+    assert sess.csrf_ok(token, "dana@example.com")
+
+
+def test_a_csrf_token_is_bound_to_its_account():
+    """Knowing the shape of a token is not enough to post as someone else: it
+    verifies only against the email it was minted for."""
+    token = sess.csrf_token("dana@example.com")
+    assert not sess.csrf_ok(token, "mallory@example.com")
+
+
+def test_a_missing_or_empty_csrf_token_is_refused():
+    assert not sess.csrf_ok("", "dana@example.com")
+    assert not sess.csrf_ok(None, "dana@example.com")
+    assert not sess.csrf_ok(sess.csrf_token("dana@example.com"), "")
+
+
+def test_a_session_cookie_is_not_a_csrf_token():
+    """One key signs both; the purpose inside the signed string keeps a session
+    value from being replayed as a CSRF token for that same account."""
+    session_value = sess.make_cookie("dana@example.com").split("=", 1)[1].split(";")[0]
+    assert not sess.csrf_ok(session_value, "dana@example.com")
+
+
+def test_an_expired_csrf_token_is_refused(monkeypatch):
+    token = sess.csrf_token("dana@example.com")
+    later = time.time() + sess.SESSION_TTL + 1
+    monkeypatch.setattr(sess.time, "time", lambda: later)
+    assert not sess.csrf_ok(token, "dana@example.com")
+
+
+def test_a_csrf_token_survives_a_rotation(monkeypatch):
+    """It is minted from the session keyring, so a secret rotation must not
+    reject the token on a form a user already has open."""
+    token = sess.csrf_token("dana@example.com")
+    rotate(monkeypatch, current=ROTATED, previous=CURRENT)
+    assert sess.csrf_ok(token, "dana@example.com")
 
 
 # --- rotation -------------------------------------------------------------

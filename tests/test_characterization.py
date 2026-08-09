@@ -45,6 +45,9 @@ def bot_email():
         "id": "b1", "threadId": "t9",
         "to": OWNER_BOT_ALIAS,
         "from": OWNER_FROM,
+        # The owner forwarded this, so Gmail stamps SENT; that is what
+        # manual_draft trusts as authorship, not the From header.
+        "labelIds": ["SENT", "INBOX"],
         "subject": "Fwd: Project sync",
         "date": "Mon, 20 Jul 2026 10:00:00 +0000",
         "body": (
@@ -63,6 +66,7 @@ def bot_email_no_marker():
         "id": "b2", "threadId": "t8",
         "to": OWNER_BOT_ALIAS,
         "from": OWNER_FROM,
+        "labelIds": ["SENT", "INBOX"],
         "subject": "Fwd: Budget",
         "date": "Mon, 20 Jul 2026 11:00:00 +0000",
         "body": "Can you reply to this thread for me?",

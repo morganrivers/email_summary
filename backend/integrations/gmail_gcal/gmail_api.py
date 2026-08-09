@@ -117,6 +117,10 @@ def fetch_message(account, message_id):
     return {
         "id": message_id,
         "threadId": full.get("threadId"),
+        # Gmail's own labels, carried through so a caller can tell a message the
+        # owner sent (SENT) from one an outsider delivered. manual_draft reads
+        # this to refuse the trusted +bot path for mail the owner did not send.
+        "labelIds": full.get("labelIds") or [],
         "from": head.get("from", "unknown"),
         "to": head.get("to", ""),
         "subject": head.get("subject", "(no subject)"),

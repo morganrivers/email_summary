@@ -196,6 +196,39 @@ def get_email(headers):
                         SESSION_TTL)
 
 
+# --- the anti-CSRF token --------------------------------------------------
+#
+# Defence in depth behind SameSite=Lax, not a replacement for it. The cookie
+# attribute is what keeps the session cookie off a cross-site POST, and it is
+# the primary defence; this is the synchroniser token that still stands if that
+# attribute is ever dropped, relaxed to SameSite=None, or a mutating action is
+# moved onto a request shape a Lax cookie does follow.
+#
+# It is signed from the same keyring as the session, with its own purpose and
+# bound to the signed-in email, so a token minted for one account cannot
+# authorise a POST for another. Rotating the secret does not invalidate the
+# tokens on pages already open, for the same reason a session survives a
+# rotation, and a restart mid-form does not reject the next save.
+
+CSRF_PURPOSE = "csrf"
+
+
+def csrf_token(email):
+    """A fresh anti-CSRF token bound to the signed-in email, for a form."""
+    assert email, "csrf_token needs the signed-in email"
+    return _signed(CSRF_PURPOSE, email, int(time.time()))
+
+
+def csrf_ok(token, email):
+    """Whether `token` is one we minted for this signed-in email and is still
+    within the session TTL. Bound to the email, so knowing the shape of a token
+    is not enough to post as another account."""
+    if not token or not email:
+        return False
+    signed = _open_signed(CSRF_PURPOSE, token, SESSION_TTL)
+    return signed is not None and hmac.compare_digest(signed, email)
+
+
 # --- the OAuth state ------------------------------------------------------
 #
 # The state is signed the way the session is, with the same keyring and the

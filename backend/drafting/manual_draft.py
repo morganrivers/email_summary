@@ -45,8 +45,33 @@ def bot_alias(account):
     return f"{local}+{BOT_TAG}@{domain}".lower()
 
 
+def is_from_owner(email):
+    """Whether the account owner themselves sent this message.
+
+    Gmail stamps its SENT label on a message the mailbox owner sent and on no
+    message an outsider delivers. That is the same authorship signal
+    `gmail_api.thread_has_user_message` trusts, and unlike a `From:` header it
+    cannot be forged from outside and unlike an address allow-list it needs no
+    knowing every send-as alias the owner uses: only the owner's own action
+    produces SENT."""
+    return "SENT" in (email.get("labelIds") or [])
+
+
 def is_bot_request(email, account):
-    return bot_alias(account) in (email.get("to") or "").lower()
+    """A forward the owner sent to their own +bot alias, and only that.
+
+    Both halves are required and each answers a different question. The alias in
+    `To:` says the message was meant for the bot; the SENT label says the owner
+    is the one who sent it, not an outsider addressing the public plus-alias
+    (Gmail delivers `owner+bot@` to anyone who types it). The manual path treats
+    the text above the forward marker as the owner's trusted, un-fenced drafting
+    instructions and hands the drafter the mailbox-search tool, so admitting a
+    message the owner did not send would give both to whoever knows the address.
+    Anything else falls through to the auto-reply path, which fences the body and
+    replies to the real sender."""
+    if bot_alias(account) not in (email.get("to") or "").lower():
+        return False
+    return is_from_owner(email)
 
 
 def parse_forward(body):
