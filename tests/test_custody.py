@@ -259,9 +259,9 @@ def test_an_id_that_escapes_its_own_directory_is_refused(bad):
     It is checked rather than assumed because the value arrives from Google's
     profile response, and `check_id` is the single guard that `account_dir` and
     `provisioning.provision` both call."""
-    with pytest.raises(AssertionError):
+    with pytest.raises(account_store.InvalidAccountData):
         account_store.check_id(bad)
-    with pytest.raises(AssertionError):
+    with pytest.raises(account_store.InvalidAccountData):
         account_store.account_dir(bad)
 
 
@@ -279,7 +279,7 @@ def test_only_an_opaque_handle_reaches_the_cosigner(bad):
     case that is not obviously wrong: passing the account id would work at every
     layer, derive a different key, and only surface later as records that will
     not open."""
-    with pytest.raises(AssertionError):
+    with pytest.raises(account_store.InvalidAccountData):
         account_store.check_handle(bad)
 
 

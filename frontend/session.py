@@ -109,7 +109,11 @@ def _mac(key, purpose, payload):
     emailless session cookie and a state would be interchangeable to the
     verifier. The kid is signed too, so which key was meant is not something a
     holder can edit."""
-    assert key, "_mac needs a key"
+    if not key:
+        # An empty key is a MAC anyone can compute, so every cookie this
+        # process minted or verified under one would be forgeable. Raised and
+        # not asserted because the key comes from the environment.
+        raise RuntimeError("_mac needs a key")
     return hmac.new(key, f"{purpose}:{payload}".encode(),
                     hashlib.sha256).hexdigest()
 

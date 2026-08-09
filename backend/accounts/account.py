@@ -108,6 +108,18 @@ class AccountLimitReached(Exception):
     """Raised by register_account when the box is already at MAX_ACCOUNTS."""
 
 
+class InvalidAccountData(ValueError):
+    """A value that would name the wrong account, or no account at all.
+
+    Every value refused with this crossed a trust boundary before it got here:
+    an address out of Google's profile response, a status derived from a Polar
+    event body, a calendar id typed into the settings form, a handle read back
+    from the manifest. None of those is a programmer error the way a caller
+    precondition is, so none of them may be an assert: they are inputs to
+    refuse, and a caller that can turn a refusal into a status code needs a type
+    to catch."""
+
+
 class Account:
     def __init__(self, id, identity, state, telegram=None, token_file=None,
                  plan_status="active", polar_customer_id=None,
@@ -182,15 +194,16 @@ def new_handle():
 
 
 def check_handle(handle):
-    """The handle, or an assertion. Everything that sends one to the co-signer
+    """The handle, or a refusal. Everything that sends one to the co-signer
     or derives a key from one calls this first: a caller that passed an account
     id by mistake would otherwise put the address back on the wire and, worse,
     derive a different key with it, so the mistake would surface as unopenable
     records rather than as a leak anyone noticed."""
-    assert handle and HANDLE_RE.match(str(handle)), (
-        f"not an account handle: {handle!r}. An account registered before "
-        "handles existed has none; re-onboard it through /auth/callback."
-    )
+    if not handle or not HANDLE_RE.match(str(handle)):
+        raise InvalidAccountData(
+            f"not an account handle: {handle!r}. An account registered before "
+            "handles existed has none; re-onboard it through /auth/callback."
+        )
     return str(handle)
 
 
@@ -249,10 +262,11 @@ def check_id(account_id):
     own home or reads another account's. Exported because custody, onboarding
     and the document modules all build paths from it; one guard is one that
     cannot be relaxed for a single caller."""
-    assert (
-        account_id and "/" not in account_id and "\\" not in account_id
-        and ".." not in account_id
-    ), f"refusing to build an account path from {account_id!r}"
+    if (not account_id or "/" in account_id or "\\" in account_id
+            or ".." in account_id):
+        raise InvalidAccountData(
+            f"refusing to build an account path from {account_id!r}"
+        )
     return account_id
 
 
@@ -263,9 +277,10 @@ def account_dir(account_id):
     Sole definition, so `_owned_paths` (and therefore `delete_account`) cannot
     fall out of step with the modules that write into it."""
     home = ACCOUNTS_DIR / check_id(account_id)
-    assert home.parent == ACCOUNTS_DIR, (
-        f"account id {account_id!r} does not name a directory in the store"
-    )
+    if home.parent != ACCOUNTS_DIR:
+        raise InvalidAccountData(
+            f"account id {account_id!r} does not name a directory in the store"
+        )
     return home
 
 
@@ -512,13 +527,17 @@ def register_account(email, first, last, *, token_file=None, first_aliases=(),
     so the ceiling is what stops a scripted signup flood from exhausting disk and
     Google quota."""
     email = (email or "").strip().lower()
-    assert email and "@" in email, f"register_account needs a real email, got {email!r}"
+    if not email or "@" not in email:
+        raise InvalidAccountData(
+            f"register_account needs a real email, got {email!r}"
+        )
     # The email becomes a directory name under the store; a separator in it
     # would put an account's files outside its own home. Google will not issue
-    # one, which is exactly why it must be asserted rather than assumed.
-    assert not set(email) & {"/", "\\"} and ".." not in email, (
-        f"refusing to register an account id with path separators: {email!r}"
-    )
+    # one, which is exactly why it must be checked rather than assumed.
+    if set(email) & {"/", "\\"} or ".." in email:
+        raise InvalidAccountData(
+            f"refusing to register an account id with path separators: {email!r}"
+        )
     telegram = {}
     if telegram_chat_id:
         telegram["chat_id"] = str(telegram_chat_id)
@@ -601,7 +620,8 @@ def set_plan_status(account_id, status):
     """Persist `status` ('active'|'inactive') for account_id and return the prior
     status. The sole writer of plan gating: billing flips entitlement only through
     here, so the sealed-store swap stays contained to this module."""
-    assert status in ("active", "inactive"), f"invalid plan_status {status!r}"
+    if status not in ("active", "inactive"):
+        raise InvalidAccountData(f"invalid plan_status {status!r}")
     data = _read_manifest()
     assert data is not None, "cannot set plan_status without an accounts manifest"
     aid = (account_id or "").strip().lower()
@@ -742,10 +762,11 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
             entry[field] = value
     if community_calendar is not None:
         calendar = community_calendar.strip().lower()
-        assert not calendar or CALENDAR_ID_RE.fullmatch(calendar), (
-            f"{calendar!r} is not a calendar id; the caller validates this before "
-            "asking, so reaching here means an unchecked path"
-        )
+        if calendar and not CALENDAR_ID_RE.fullmatch(calendar):
+            raise InvalidAccountData(
+                f"{calendar!r} is not a calendar id; the caller validates this "
+                "before asking, so reaching here means an unchecked path"
+            )
         if entry.get("community_calendar", "") != calendar:
             changed += ("community_calendar",)
         if calendar:

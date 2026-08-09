@@ -186,7 +186,7 @@ def exchange_code(code, redirect_uri, state):
         raise ProvisionError(502, "Google returned no access_token")
     try:
         email = gmail_api.profile_address(access_token)
-    except requests.RequestException as err:
+    except (requests.RequestException, ValueError) as err:
         raise ProvisionError(502, f"could not read the mailbox address: {err}") from err
     first, last = split_name(_id_token_claims(payload.get("id_token")), email)
     return {"email": email, "first": first, "last": last,
@@ -211,7 +211,13 @@ def provision(code, redirect_uri, state):
     # refused before the co-signer is asked to wrap anything for it -- but
     # through the same function, because two spellings of a path-traversal guard
     # is one that can be relaxed without the other noticing.
-    email = account.check_id(profile["email"])
+    try:
+        email = account.check_id(profile["email"])
+    except account.InvalidAccountData as err:
+        # 502 and not 400: the address came from Google's profile response, so a
+        # shape this store cannot hold is an upstream answer we refuse, not
+        # something the browser got wrong.
+        raise ProvisionError(502, f"unusable mailbox address: {err}") from err
     # A returning user keeps the handle they already have: every record they own
     # is encrypted with it as the salt and the AAD, and the co-signer's
     # wrap-once rule is keyed on it. Custody is taken before the manifest entry

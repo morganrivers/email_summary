@@ -82,7 +82,7 @@ def test_the_rule_can_fail():
     "0123456789ABCDEF0123456789ABCDEF",      # one value, one spelling
 ])
 def test_the_guard_refuses_anything_that_is_not_a_handle(value):
-    with pytest.raises(AssertionError):
+    with pytest.raises(account.InvalidAccountData):
         account.check_handle(value)
 
 

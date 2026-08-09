@@ -105,7 +105,11 @@ def main():
     Handler.billing = DeferredBilling()
     Handler.billing.log_startup("billing-webhook")
     secret = webhook_secret()
-    assert secret, "POLAR_WEBHOOK_SECRET required"
+    if not secret:
+        # A startup refusal, not an invariant: without it the verifier is built
+        # over an empty secret and every unsigned body verifies. SystemExit so
+        # the unit fails to start; deploy/preflight.py already reports it.
+        raise SystemExit("POLAR_WEBHOOK_SECRET required")
     Handler.verifier = Webhook(base64.b64encode(secret.encode("utf-8")).decode("utf-8"))
 
     host = os.environ.get("BILLING_WEBHOOK_HOST", "127.0.0.1")

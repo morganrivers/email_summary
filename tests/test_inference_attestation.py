@@ -84,7 +84,7 @@ def test_binding_rejects_a_quote_bound_to_something_else():
 
 
 def test_an_empty_binding_is_refused():
-    with pytest.raises(AssertionError):
+    with pytest.raises(quote_policy.AllowlistInvalid):
         quote_policy._binds(b"anything", b"")
 
 
@@ -96,7 +96,7 @@ def test_an_allowlist_entry_must_pin_mr_td(tmp_path):
         "measurements": [{"name": "pins nothing", "scope": "nearai-glm"}],
     }))
     att.reset_for_test(path)
-    with pytest.raises(AssertionError) as err:
+    with pytest.raises(quote_policy.AllowlistInvalid) as err:
         att.policy().match({"mr_td": "whatever"}, "nearai-glm")
     assert "does not pin mr_td" in str(err.value)
 
@@ -110,7 +110,7 @@ def test_a_pin_authorizes_only_its_own_provider():
 
 
 def test_dev_insecure_is_refused_on_a_pinned_box():
-    with pytest.raises(AssertionError) as err:
+    with pytest.raises(quote_policy.AllowlistInvalid) as err:
         att.policy().mode("dev-insecure")
     assert "looks provisioned for production" in str(err.value)
 

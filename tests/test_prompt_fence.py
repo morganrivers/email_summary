@@ -15,8 +15,11 @@ that makes the nonce work at all, which is that the masking layer leaves it
 alone.
 """
 
+from collections import deque
+from types import SimpleNamespace
+
 import pytest
-from harness import python_sources, relative
+from harness import FakeOpenAI, Recorder, python_sources, relative
 
 from backend.drafting import agentic_drafter, voice_dna
 from backend.masking import pseudonymizer
@@ -145,13 +148,31 @@ def test_masking_leaves_the_nonce_alone_for_every_nonce_not_just_this_one(analyz
 
 
 def test_an_unprotected_delimiter_is_a_failed_run_not_a_silent_one():
-    """The assert is the other half of the fix. protect() is what a caller has
+    """The refusal is the other half of the fix. protect() is what a caller has
     to remember, so forgetting it must be loud: a masking layer that ate a
     delimiter used to produce a prompt, and now produces an exception."""
     state = pseudonymizer.new_state(_identity(False))
     pseudonymizer.protect(state, "+1-555-0101")
-    with pytest.raises(AssertionError, match="protected token"):
+    with pytest.raises(pseudonymizer.MaskingFailed, match="protected token"):
         pseudonymizer.pseudonymize("call +1-555-0101 now", state)
+
+
+def test_a_masking_failure_stops_the_request_rather_than_degrading_it(monkeypatch):
+    """The refusal only means anything if nobody sends the text anyway. A
+    caught MaskingFailed that fell back to the unmasked prompt would be worse
+    than the assert was, because it would read as handled."""
+    rec = Recorder()
+    client = FakeOpenAI(rec, deque([{"content": "should never be reached"}]))
+
+    def refuse(text, state):
+        raise pseudonymizer.MaskingFailed("a protected token was rewritten")
+
+    monkeypatch.setattr(pseudonymizer, "pseudonymize", refuse)
+    account = SimpleNamespace(identity=_identity(False), ban_dashes=True)
+    with pytest.raises(pseudonymizer.MaskingFailed):
+        agentic_drafter.draft(client, "sys", "user", account=account,
+                              fence=agentic_drafter.new_fence())
+    assert not rec.llm_calls, "a masking failure still reached the provider"
 
 
 def test_drafting_refuses_a_call_with_no_fence():

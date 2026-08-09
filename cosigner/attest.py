@@ -103,7 +103,7 @@ def configured():
     rather than discovered by every unwrap failing."""
     try:
         current = mode()
-    except AssertionError as err:
+    except (quote_policy.AllowlistInvalid, AttestationRefused) as err:
         return str(err)
     if current == REQUIRED:
         if not policy().entries():

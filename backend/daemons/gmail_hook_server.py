@@ -259,7 +259,8 @@ def route_push(body):
         log(f"unparseable push body ({err}); waking full sweep as fallback")
         signal_daemon()
         return
-    assert email, "verified push carried no emailAddress"
+    if not email:
+        raise HookError(400, "verified push carried no emailAddress")
     wake_queue.enqueue(email)
     log("queued push and signaling daemon")
     signal_daemon()
@@ -291,7 +292,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._reject(413, f"body too large ({length} bytes)")
         body = self.rfile.read(length) if length else b""
         log("OK verified, routing push")
-        route_push(body)
+        try:
+            route_push(body)
+        except HookError as err:
+            # A push whose body parsed and named no mailbox. Answered rather
+            # than left to escape the handler, so Pub/Sub gets a status instead
+            # of a closed connection and retries a body that will never improve.
+            return self._reject(err.code, err.msg)
         self.send_response(204)
         self.send_header("Content-Length", "0")
         self.end_headers()

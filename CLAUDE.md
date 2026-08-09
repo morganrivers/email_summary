@@ -384,6 +384,42 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
 Code changes take effect on service restart, which `deploy/deploy.sh` does. The
 daemon also honors `restart.flag`; the webhook needs a real service restart.
 
+## Asserts and refusals
+
+An `assert` states an invariant that is a programmer error if false. Anything
+validating a value that crossed a trust boundary is an explicit `raise`, because
+it is not a bug to catch in testing, it is a hostile or malformed input to
+refuse in production. Concretely: an argument handed in by our own caller stays
+an assert (`assert handle and inner`); a value that came back from Google, the
+co-signer, the KMS, a web form, a model, or a file on disk raises
+(`raise CustodyError(...)`). The types each module refuses with are
+`account.InvalidAccountData`, `pseudonymizer.MaskingFailed`,
+`quote_policy.AllowlistInvalid`, `keyring.DataKeyExists`,
+`wrapping.CustodyError` and its subclasses, `attest.AttestationRefused`,
+`gmail_hook_server.HookError`. `docs/plan_assert_conversion.md` is the
+conversion's own record of which checks are in which class and why.
+
+Two reasons it is not a style preference. An `AssertionError` reaching a request
+handler is an unhandled 500, while a named type is something a caller converts
+into a status code — `onboarding/provisioning.py` turns `CustodyError` into a
+502/503 and `InvalidAccountData` into a 502. And in a log an `AssertionError` is
+indistinguishable from a genuine bug, where the type says which control fired.
+A converted check caught into a fallback is worse than the assert was, because
+it reads as handled: `MaskingFailed` in particular must never become "send it
+unmasked", and `tests/test_prompt_fence.py` pins that.
+
+`runtime_guard.py` is why an assert is still an acceptable way to spell a
+control here. Several of them are the control rather than a note about one — the
+path guard in `custody.tokens.token_path`, the `"d" not in jwk` check standing
+between a library change and the co-signer publishing its signing key, the
+length and version checks in `cosigner.keys.unwrap` — and under `-O` or
+`PYTHONOPTIMIZE=1` every one disappears while the process keeps running.
+`require_asserts()` refuses that boot, called from `backend/__init__.py` and
+`cosigner/__init__.py` so no entry point can miss it, and it protects the asserts
+written after today as well as the ones written before. It is not a substitute
+for the rule above: it is one file, and a check that raises on its own does not
+depend on an entry point still importing the package it lives in.
+
 ## Single sources of truth
 
 Keep these centralized. If you need behavior that lives here, import — don't copy.

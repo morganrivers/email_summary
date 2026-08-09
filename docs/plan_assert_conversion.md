@@ -1,7 +1,37 @@
 # Converting boundary asserts to explicit refusals
+Done as of 2026-08-09. Every site below is converted; the rule and the
+deliberately-still-asserts list at the end are what remains useful. The rule now
+also lives in `CLAUDE.md`, so the next person writing a control knows which of
+the two classes they are in without finding this file.
 
-Status as of 2026-08-09. Self-contained: everything needed to finish the work is
-here, including how to relocate each site if line numbers have drifted.
+Five places the work departed from the plan as written, each with its reason in
+the code:
+
+- `custody/tokens.py` (the missing DPoP nonce, the 200 with no `access_token`)
+  raises `wrapping.CustodyError`, not `ReauthRequired`. `daemons/pipeline.py`
+  catches `ReauthRequired` and tells the user to consent again, and neither of
+  these is a refused grant, so that message would send someone through a
+  sign-in that fixes nothing.
+- `tee/quote_policy.py` converted two sites beyond the four listed:
+  `Policy.__init__`'s missing-file and not-an-object checks. Both
+  `cosigner/attest.py::configured()` and
+  `inference_attestation.py::configured()` caught `AssertionError` around
+  `mode()` to report a missing allowlist at deploy time, so leaving those two
+  as asserts would have kept an `except AssertionError` alive for exactly the
+  class of thing this document is removing.
+- `custody/handoff.py::encode()` was converted after all. The judgement call
+  below asked whether a payload can grow from user-supplied text: the `sign-in`
+  payload carries the OAuth callback's query string, and the request line lets
+  a browser run that to about `MAX_BODY` on its own. `call()` now frames the
+  payload before it opens the socket, so an over-long one is not reported as a
+  daemon that could not be reached.
+- `daemons/gmail_hook_server.py::do_POST` now catches `HookError` around
+  `route_push`. Raising one there without a handler is an exception escaping
+  the request handler, which is not better than the assert was.
+- `onboarding/provisioning.py` converts two of the new refusals into
+  `ProvisionError(502)`: `check_id` on the address Google returned, and a
+  `ValueError` out of `gmail_api.profile_address`. 502 and not 400 because the
+  browser did nothing wrong.
 
 ## The rule
 
@@ -38,7 +68,7 @@ It does not make the conversion pointless, for three reasons:
    vendored copy of a module imported without the package `__init__`, loses it.
    A check that raises on its own does not depend on that.
 
-## What is already converted
+## What was converted first
 
 15 sites, all in `backend/custody/` and `cosigner/attest.py`:
 
@@ -89,10 +119,10 @@ converted:
 grep -rn "AssertionError" tests/
 ```
 
-## The remaining sites
+## The rest
 
-25 checks. Each row is: where, what it currently says, what crossed the
-boundary, and what to raise.
+25 checks, all converted. Each row is: where, what it used to say, what crossed
+the boundary, and what it raises now.
 
 ### `backend/accounts/account.py` — 7 sites, needs one new type
 
@@ -233,15 +263,12 @@ grep -rn "except.*CustodyError\|except Exception\|except:" --include=*.py backen
 A converted check caught into a fallback is worse than the assert was, because
 it reads as handled.
 
-## Suggested order
+## Order it was done in
 
-1. `account.py` path guards (~252, ~266) — highest consequence, self-contained.
-2. `pseudonymizer.py` ~518 — second highest, but check the callers first.
-3. `quote_policy.py` ~218 — small, and both attestation callers benefit.
-4. The rest, in any order.
-
-## Also worth doing
-
-`CLAUDE.md` does not mention `runtime_guard.py` or the assert-versus-raise rule.
-Both belong in it, or the next person writes a security control as an assert
-without knowing which of the two classes they are in.
+1. `account.py` path guards — highest consequence, self-contained.
+2. `pseudonymizer.py`'s protected-token check, after reading its callers:
+   nothing catches `MaskingFailed`, and
+   `test_a_masking_failure_stops_the_request_rather_than_degrading_it` now pins
+   that a failure reaches no provider.
+3. `quote_policy.py`, both attestation callers with it.
+4. The rest.
