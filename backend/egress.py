@@ -13,13 +13,25 @@ HTTP clients pointed at a loopback CONNECT proxy, so the set of destinations
 reachable from this machine is exactly ``hosts()`` and everything else is a
 refused tunnel with a line in the journal naming what was asked for.
 
-The list is derived, not typed. Every entry comes from the module that already
-names the host for its own reasons -- ``llm_client.PROVIDERS`` for inference,
-``oauth_app`` for Google's OAuth endpoints, ``telegram.API_ROOT``,
-``polar_api``'s two bases, both TDX allowlists' ``pccs_url``,
-``site.COSIGNER_HOST`` -- so adding a provider cannot leave the allowlist
-behind. There is nothing here to forget to edit. ``GOOGLE_API_HOSTS`` is the
-one exception and says why in its own comment.
+The list is derived, not typed, and derived at render time rather than here.
+Every entry comes from the module that already names the host for its own
+reasons -- ``llm_client.PROVIDERS`` for inference, ``oauth_app`` for Google's
+OAuth endpoints, ``telegram.API_ROOT``, ``polar_api``'s two bases, both TDX
+allowlists' ``pccs_url``, ``site.COSIGNER_HOST`` -- so adding a provider cannot
+leave the allowlist behind. There is nothing here to forget to edit.
+``deploy/render_egress_allowlist.py`` does that walk and writes
+``egress_allowlist.json``; this module reads it and imports nothing else.
+
+That split is not tidiness. Those imports are import edges whether they sit at
+module level or inside a function, and the enclave ships one image per role, so
+while the walk lived here the container holding the only route off the host
+carried ``custody.keyring``, ``custody.client``, ``secrets_checks``, billing and
+the inference client in its filesystem -- to compute thirteen strings. The
+process that holds the network is deliberately not the process that holds the
+API keys, and under a per-role image that has to be true of the filesystem too.
+``tests/test_egress.py`` still checks the shipped list against the live
+constants, so a provider added without a re-render fails there rather than in
+production.
 
 Exact matches only. No wildcards, no suffix rules, no regexes: every
 destination this system has is a specific name, and a suffix rule is how an
@@ -36,22 +48,13 @@ dependency that ships a release which phones home. Do not describe it as
 anything wider.
 """
 
-import importlib.util
+import json
 import os
-from urllib.parse import urlsplit
-
-from backend import site
+from pathlib import Path
 
 CONNECT_PORT = 443
 
-# Google's two API hosts are the only entries not read off a constant, because
-# there is no constant to read: googleapiclient takes the root URL out of the
-# discovery document bundled in the library, so the name lives in a vendored
-# JSON blob rather than in any module of ours. Naming them here would be a
-# drift risk exactly like the rest, so `test_egress.py` reads those documents
-# for the api/version pairs in `google_client.APIS` and fails if a rootUrl host
-# is missing from this tuple.
-GOOGLE_API_HOSTS = ("www.googleapis.com", "gmail.googleapis.com")
+ALLOWLIST_FILE = Path(__file__).resolve().parent / "egress_allowlist.json"
 
 # Additional hostnames, comma-separated. The escape hatch exists for one
 # specific reason rather than as general configurability: the proxy runs as its
@@ -61,96 +64,42 @@ GOOGLE_API_HOSTS = ("www.googleapis.com", "gmail.googleapis.com")
 EXTRA_HOSTS_ENV = "LETTERLOCK_EGRESS_EXTRA"
 
 
-def _host(url):
-    """The hostname in a URL, lowercased. Asserts rather than returning None:
-    every caller below passes a constant that is supposed to be an https URL,
-    and a silent empty string here would quietly shrink the allowlist."""
-    assert url, "cannot take a hostname out of an empty URL"
-    host = urlsplit(url).hostname
-    assert host, f"no hostname in {url!r}"
-    return host.lower()
+class AllowlistInvalid(Exception):
+    """The committed allowlist is missing or not what this module expects.
+
+    A raise and not an assert: the file crossed a trust boundary the moment it
+    became something on disk rather than something in this process, and it is
+    the one input whose absence must stop the proxy rather than open it. Raising
+    at read time is fail-closed in the direction that matters -- the proxy
+    refuses to start and nothing leaves the machine, which is louder and safer
+    than starting with an empty list and refusing every tunnel one at a time."""
 
 
-def _provider_hosts():
-    """Inference. Both the completions endpoint and, for a confidential
-    provider, the attestation endpoint: refusing the second would fail
-    ``inference_attestation.require()`` and take the provider down just as
-    surely as refusing the first."""
-    from backend.integrations import llm_client
+def _listed():
+    """The committed hostnames, as a frozenset.
 
-    hosts = set()
-    for provider in llm_client.PROVIDERS.values():
-        hosts.add(_host(provider.base_url))
-        if provider.attestation_url:
-            hosts.add(_host(provider.attestation_url))
-    return hosts
-
-
-def _google_hosts():
-    """Consent, token exchange and the token-info check the Pub/Sub webhook
-    runs, plus the two API roots. ``oauth_app.TOKEN_ENDPOINT`` is
-    ``cosigner.protocol``'s, which is the same string the co-signer's policy
-    pins ``htu`` against, so one edit moves the allowlist and the policy
-    together.
-
-    ``calendar_public.ICS_ROOT`` is a different host from the API roots because
-    it is a different kind of request: no credentials, the public feed as a
-    stranger sees it. It is listed unconditionally rather than behind
-    ``oauth_app.acl_scope_registered()``, for the reason ``_billing_hosts``
-    lists both Polar deployments -- the proxy cannot read the app's environment,
-    and an allowlist that flips with a toggle breaks the first time the toggle
-    moves."""
-    from backend.daemons import gmail_hook_server
-    from backend.integrations.gmail_gcal import calendar_public, oauth_app
-
-    return {
-        _host(oauth_app.AUTH_ENDPOINT),
-        _host(oauth_app.TOKEN_ENDPOINT),
-        _host(gmail_hook_server.CERTS_URL),
-        _host(calendar_public.ICS_ROOT),
-    } | set(GOOGLE_API_HOSTS)
-
-
-def _billing_hosts():
-    """Both Polar deployments, not whichever one ``POLAR_SANDBOX`` currently
-    selects. The proxy cannot read that flag, they are the same operator, and
-    an allowlist that flips with a toggle is one that breaks the first time the
-    toggle moves."""
-    from backend.billing import polar_api
-
-    return {_host(polar_api.PROD_BASE), _host(polar_api.SANDBOX_BASE)}
-
-
-def _pccs_hosts():
-    """The provisioning certification caching service each quote verifier on
-    this machine fetches collateral from. Asked of the allowlist files rather
-    than hardcoded, since re-pinning against a different PCCS is a thing those
-    files are allowed to do.
-
-    "On this machine" is the whole of the guard below. The co-signer is a
-    separate service on a separate box, and the enclave image deliberately
-    carries only its wire contract (`cosigner/protocol.py`) -- so where its code
-    is absent, the process that would fetch that collateral is absent too, and
-    an entry for it would be a host allowed for nobody. `find_spec` asks exactly
-    that question; the import that follows is by name so a static import graph
-    does not pull the module into an image that has no co-signer to run it.
-    Every other failure still raises: this is a deployment question, not an
-    exception to swallow."""
-    from backend.integrations import inference_attestation
-
-    urls = [inference_attestation.policy().get("pccs_url")]
-    if importlib.util.find_spec("cosigner.attest") is not None:
-        urls.append(importlib.import_module("cosigner.attest").policy().get("pccs_url"))
-    return {_host(url) for url in urls if url}
-
-
-def _alert_hosts():
-    """Telegram. Both trust domains reach it -- the app for a user's summary,
-    the co-signer for the one seam it keeps into ``backend/`` -- and both do it
-    through this same constant."""
-    from backend.integrations import telegram
-
-    return {_host(telegram.API_ROOT)}
+    Read on every call rather than cached, because the call sites are a CONNECT
+    handler and a test, the file is thirteen short strings, and a cache here is
+    a second thing to invalidate when `render_egress_allowlist` rewrites it."""
+    try:
+        raw = json.loads(ALLOWLIST_FILE.read_text())
+    except OSError as e:
+        raise AllowlistInvalid(
+            f"cannot read the egress allowlist at {ALLOWLIST_FILE}: {e}") from e
+    except ValueError as e:
+        raise AllowlistInvalid(
+            f"{ALLOWLIST_FILE} is not valid JSON: {e}") from e
+    found = raw.get("hosts") if isinstance(raw, dict) else None
+    if not isinstance(found, list) or not found:
+        raise AllowlistInvalid(
+            f"{ALLOWLIST_FILE} carries no 'hosts' list; run "
+            "python -m deploy.render_egress_allowlist")
+    for host in found:
+        if not isinstance(host, str) or not host or host != host.strip().lower():
+            raise AllowlistInvalid(
+                f"{ALLOWLIST_FILE} lists {host!r}, which is not a bare "
+                "lowercased hostname")
+    return frozenset(found)
 
 
 def _extra_hosts():
@@ -159,19 +108,9 @@ def _extra_hosts():
 
 
 def hosts():
-    """The whole allowlist, as a frozenset of lowercased hostnames.
-
-    Computed on every call rather than at import, so a test can set
-    ``LETTERLOCK_EGRESS_EXTRA`` and a long-lived proxy that is restarted picks
-    up a re-pinned PCCS without anyone remembering this module caches."""
-    found = set()
-    found |= _provider_hosts()
-    found |= _google_hosts()
-    found |= _billing_hosts()
-    found |= _pccs_hosts()
-    found |= _alert_hosts()
-    found.add(site.COSIGNER_HOST.lower())
-    found |= _extra_hosts()
+    """The whole allowlist, as a frozenset of lowercased hostnames: what was
+    rendered, plus whatever the proxy's own unit adds through the environment."""
+    found = set(_listed()) | _extra_hosts()
     assert all(found), "an empty hostname reached the allowlist"
     return frozenset(found)
 

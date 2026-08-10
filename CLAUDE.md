@@ -293,23 +293,23 @@ the wake spool, paths/secrets-core/site and the wire contract — and carries no
 of the inference client, Telegram, billing or custody code the mail role's
 imports reach. A test pins that absence.
 
-`egress` is the counter-example and is stated here so nobody reads the split as
-more than it is. Its image is 39 files, not 11: `backend/egress.py` derives the
-allowlist from the modules that already name the hosts, and `calendar_public`
-reaches `account`, which reaches the co-signer client, `secrets_checks`, billing
-and the inference client. Those edges execute — the proxy really does build the
-allowlist at startup — so it is a description of the process, not a manifest bug.
-It still holds no key, because the compose hands it `TEE_REQUIRED` and
-`EGRESS_PROXY_BIND` and nothing else. What it does not carry is the drafting
-stack, the Gmail and Calendar clients and `custody.tokens`, and
-`tests/test_image_manifest.py` pins that pair: the proxy ships into exactly one
-image and reads no mailbox from it. Shrinking the rest of that fan-out is
-outstanding work.
+`egress` is 11 files too, and was 39 until the allowlist stopped being derived
+inside it. The derivation is the right idea — every host comes from the module
+that already names it, so adding a provider cannot leave the allowlist behind —
+but performing it at startup meant `calendar_public` reaching `account`, and
+through it the co-signer client, `secrets_checks`, billing and the inference
+client. Those edges execute, so the container with the only route off the host
+carried the custody stack in order to compute thirteen strings. A lazy import is
+not an escape: `tools/reachability.py` counts a function-local import exactly
+like a top-level one, because it can still run.
 
-That test is also why `backend/egress.py` asks `find_spec` before reading the
-co-signer's allowlist for its PCCS host: a plain `from cosigner import attest`
-is an import edge, and the edge would drag the co-signer's allowlist reader into
-the image the moment the enclave started running the proxy.
+So the walk moved to render time, where `image_files.nix`, the pyproject and the
+Caddyfile already live: `python -m deploy.render_egress_allowlist` writes
+`backend/egress_allowlist.json`, `backend/egress.py` reads it and imports
+`json`, `os` and `pathlib` and nothing of ours. Derived-not-typed is unchanged;
+`tests/test_egress.py` compares the shipped file against the live constants, so
+a provider added without a re-render fails there rather than as an outage that
+reads like the provider being down.
 
 Two lists in that module cannot be derived and carry a reason each.
 `EXTRA_MODULES` is commands nothing starts that must still be there because
@@ -439,9 +439,11 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
   service (`127.0.0.1:8792`, not behind Caddy). An HTTP CONNECT proxy and the
   only process with unrestricted network access; every other unit runs under
   `IPAddressDeny=any` / `IPAddressAllow=localhost` pointed here, so the machine's
-  reachable set is exactly `backend/egress.py`. Runs as `egress`, its own
-  account: the process holding the network must not be the one holding the API
-  keys. Hard dependency with no bypass — a fallback to direct connections would
+  reachable set is exactly `backend/egress_allowlist.json`. Runs as `egress`, its
+  own account: the process holding the network must not be the one holding the
+  API keys, which is also why it reads that list rather than deriving it — see
+  `backend/egress.py`. Hard dependency with no bypass — a fallback to direct
+  connections would
   silently turn the control off. Written in-repo rather than tinyproxy/squid
   because it faces an attacker with code execution and a memory-unsafe C parser
   is the wrong thing there.
@@ -536,18 +538,24 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   is doing at startup. `COSIGNER_PORT` is re-exported from
   `cosigner/protocol.py`, not defined here.
 - `backend/egress.py` — every hostname anything on this box may connect to, and
-  the check that decides one connection. Derived, not typed: each entry comes
-  from the module that already names the host (`llm_client.PROVIDERS`,
-  `oauth_app`, `telegram.API_ROOT`, `polar_api`'s two bases, the TDX
-  allowlists' `pccs_url` of every verifier that runs here,
-  `site.COSIGNER_HOST`). "Runs here" is why the co-signer's allowlist is read
-  behind a `find_spec`: that service is a separate box and the enclave image
-  carries only its wire contract, so where its code is absent the process that
-  would fetch that collateral is absent too. Exact matches only — a suffix
-  rule for `near.ai` is what permits `evil.near.ai`. `GOOGLE_API_HOSTS` holds the
-  one pair no constant of ours produces (googleapiclient reads them from bundled
-  discovery documents); `tests/test_egress.py` reads those documents and fails if
-  one is missing. Names only, no addresses, so no bare IP is reachable.
+  the check that decides one connection. Derived, not typed, and derived at
+  render time: `deploy/render_egress_allowlist.py` walks the modules that
+  already name each host (`llm_client.PROVIDERS`, `oauth_app`,
+  `telegram.API_ROOT`, `polar_api`'s two bases, both TDX allowlists' `pccs_url`,
+  `site.COSIGNER_HOST`) and writes `backend/egress_allowlist.json`; this module
+  reads that file and imports `json`, `os` and `pathlib` and nothing of ours.
+  The split is the point rather than a tidy-up — the walk's imports are import
+  edges wherever they sit, so performing it here put the custody stack and the
+  inference client in the filesystem of the one container with a route off the
+  host. `AllowlistInvalid` on a missing or malformed file, so the proxy refuses
+  to start instead of starting with an empty list and refusing every tunnel one
+  at a time. Exact matches only — a suffix rule for `near.ai` is what permits
+  `evil.near.ai`. `render_egress_allowlist.GOOGLE_API_HOSTS` holds the one pair
+  no constant of ours produces (googleapiclient reads them from bundled
+  discovery documents); `tests/test_egress.py` reads those documents and fails
+  if one is missing, and compares the whole committed file against the live
+  constants so a stale render fails there rather than in production. Names only,
+  no addresses, so no bare IP is reachable.
   This does not defend against prompt injection: the drafter's tools fetch no
   URLs. It is for the post-compromise case and for a dependency that phones home.
   `deploy/check_egress.py` proves it is on — `IPAddressDeny=` needs cgroup v2
@@ -734,7 +742,7 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   docstring: a Workspace `domain` share is not public and passes, and public
   free/busy-only is refused where the ACL path allows it. It holds no
   credentials and imports no Google client, which is why it is its own module
-  and why `backend/egress.py` can read `ICS_ROOT` off it — the feed host is on
+  and why `deploy/render_egress_allowlist.py` can read `ICS_ROOT` off it — the feed host is on
   the allowlist unconditionally, since the proxy cannot read this switch.
   Either way it fails closed when the question cannot be answered: a token
   minted before the scope answers 403, an outage answers nothing, the feed

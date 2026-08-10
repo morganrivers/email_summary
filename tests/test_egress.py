@@ -4,11 +4,18 @@ Two failure shapes are worth a test, and they point in opposite directions.
 
 Too narrow is an outage that reads as a provider being down: a host added to
 some module and not to the allowlist means the proxy refuses a tunnel nobody
-was expecting it to refuse. The derivation in `backend/egress.py` is what stops
-that for every host named by one of our own constants, so what is left to test
-is the pair it cannot derive -- Google's API roots, which live in a discovery
-document inside googleapiclient -- and the systemd drop-in, which is static
-text holding a port number that has to match `site.EGRESS_PROXY_PORT`.
+was expecting it to refuse. The derivation in `deploy/render_egress_allowlist.py`
+is what stops that for every host named by one of our own constants, so what is
+left to test is the pair it cannot derive -- Google's API roots, which live in a
+discovery document inside googleapiclient -- and the systemd drop-in, which is
+static text holding a port number that has to match `site.EGRESS_PROXY_PORT`.
+
+The checks below read `egress.hosts()`, which is now the committed file rather
+than a walk performed in the proxy, so each of them compares what actually ships
+against the live constants. That is what keeps "derived, not typed" true after
+the derivation moved to render time: a provider added without a re-render fails
+here, and `test_the_committed_allowlist_is_what_the_constants_derive` says so in
+one line rather than leaving it to be inferred from whichever check trips first.
 
 Too wide is the control quietly not being one. `refusal()` taking a suffix, a
 bare IP or a second port would each turn the allowlist into something that
@@ -16,6 +23,7 @@ looks enforced and is not, so those are asserted directly rather than left to
 the shape of the list.
 """
 
+import ast
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -25,10 +33,67 @@ import pytest
 from backend import egress, site
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal import google_client
+from deploy import render_egress_allowlist
 
 HARDENING = Path(__file__).resolve().parent.parent / "deploy" / "hetzner" / "hardening.conf"
 PROXY_DROPIN = (Path(__file__).resolve().parent.parent / "deploy" / "hetzner"
                 / "egress-proxy.service.d" / "20-egress-proxy.conf")
+
+
+def test_the_committed_allowlist_is_what_the_constants_derive():
+    """The drift test, and the whole price of moving the walk to render time.
+
+    Nothing else notices a stale file: the proxy reads it happily, the shipped
+    list is a plausible one, and the symptom is a provider that looks down for
+    everyone. So the renderer runs here and the answer has to match byte for
+    byte, the same bargain `tests/test_image_manifest.py` and
+    `tests/test_requirements.py` already make for the other generated files."""
+    assert render_egress_allowlist.main(["--check"]) == 0, (
+        "backend/egress_allowlist.json is stale; run "
+        "python -m deploy.render_egress_allowlist")
+
+
+def test_the_proxy_reads_the_allowlist_without_importing_the_app():
+    """Why the derivation moved at all. The egress container is the one process
+    with a route off the host, and while the walk lived in `backend/egress.py`
+    its image carried `custody.keyring`, `custody.client`, `secrets_checks`,
+    billing and the inference client -- to compute thirteen strings.
+
+    An import test rather than a manifest test because the manifest is derived
+    from exactly this: `tools/reachability.py` counts a function-local import
+    the same as a top-level one, so re-deriving the list inside a function would
+    put the whole fan-out back and this is the check that says so."""
+    tree = ast.parse(Path(egress.__file__).read_text())
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    assert not any(name.startswith(("backend", "cosigner", "frontend"))
+                   for name in imported), (
+        f"backend/egress.py reaches back into the app: {sorted(imported)}")
+    assert imported <= {"json", "os", "pathlib"}, (
+        f"backend/egress.py imports more than it needs to read a file: "
+        f"{sorted(imported)}")
+
+
+def test_a_missing_or_malformed_allowlist_stops_the_proxy(tmp_path, monkeypatch):
+    """Fail closed, and loudly. An unreadable list must not become an empty one:
+    both refuse every tunnel, but one of them says why and the other reads as
+    every destination on the internet having gone down at once."""
+    monkeypatch.setattr(egress, "ALLOWLIST_FILE", tmp_path / "absent.json")
+    with pytest.raises(egress.AllowlistInvalid):
+        egress.hosts()
+
+    bad = tmp_path / "bad.json"
+    monkeypatch.setattr(egress, "ALLOWLIST_FILE", bad)
+    for content in ('{"hosts": []}', '{"hosts": "api.telegram.org"}',
+                    '{"hosts": ["API.Telegram.org"]}', '{"hosts": [""]}',
+                    '{"hosts": [" api.telegram.org "]}', '[]', 'not json'):
+        bad.write_text(content)
+        with pytest.raises(egress.AllowlistInvalid):
+            egress.hosts()
 
 
 def test_every_provider_endpoint_is_allowed():
@@ -49,7 +114,8 @@ def test_google_api_roots_are_allowed():
     googleapiclient takes each API's root URL out of a discovery document
     bundled in the library, so the names sit in vendored JSON. This reads that
     JSON for the api/version pairs `google_client` actually builds, which is
-    what makes `egress.GOOGLE_API_HOSTS` a checked copy rather than a guess."""
+    what makes `render_egress_allowlist.GOOGLE_API_HOSTS` a checked copy rather
+    than a guess."""
     import googleapiclient.discovery
 
     documents = Path(googleapiclient.discovery.__file__).parent / "discovery_cache" / "documents"

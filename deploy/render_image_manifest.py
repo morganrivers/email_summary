@@ -83,6 +83,7 @@ ROLE_ROOTS = {
 # renamed asset that silently drops out of an image is the failure this whole
 # module is about.
 DATA_FILES = {
+    "backend/egress_allowlist.json": "backend.egress",
     "backend/drafting/default_voice.md": "backend.drafting.voice_dna",
     "backend/integrations/inference_allowlist.json":
         "backend.integrations.inference_attestation",

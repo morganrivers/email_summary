@@ -74,39 +74,44 @@ def test_the_egress_proxy_is_in_its_own_image_and_no_other():
         assert "backend/daemons/egress_proxy.py" not in listed, role
 
 
-def test_the_proxy_reads_no_mailbox_and_mints_no_token():
+def test_the_proxy_carries_the_allowlist_and_nothing_that_derives_it():
     """The reason it is a container and not a thread in the mail daemon: the
     process holding the network must not be the one holding the API keys, and
     under a per-role image that becomes a statement about the filesystem and not
-    only about the uid and the environment. So the drafting stack, the Gmail and
-    Calendar clients and `custody.tokens` -- the only path from a stored record
-    to a usable access token -- are absent from it.
+    only about the uid and the environment.
 
-    What is *not* absent, stated here because the number is surprising and a
-    reader should not have to derive it: the proxy's image is 39 files, because
-    `backend/egress.py` derives the allowlist from the modules that already name
-    the hosts, and `calendar_public` reaches `account` and through it the
-    co-signer client, `secrets_checks`, billing and the inference client. Those
-    are import edges the proxy really does execute when it builds the allowlist,
-    so this is a description of the process and not a manifest bug. It holds no
-    key regardless -- compose hands it `TEE_REQUIRED` and `EGRESS_PROXY_BIND` and
-    nothing else, which `tests/test_enclave_boundary.py` pins -- but the code is
-    there, and shrinking that fan-out is the follow-up this test is here to keep
-    visible."""
+    That statement was false when the split landed. `backend/egress.py` derived
+    the allowlist at runtime from the modules that name the hosts, and
+    `calendar_public` reaches `account` and through it the co-signer client,
+    `secrets_checks`, billing and the inference client -- so the image was 39
+    files, and the container with the only route off the host held the custody
+    stack in order to compute thirteen strings. The derivation moved to
+    `deploy/render_egress_allowlist.py`, which ships into no image, and the
+    proxy reads `backend/egress_allowlist.json`.
+
+    So this is two assertions that only hold together: the list is there, and
+    what would have produced it is not."""
     egress = set(render_image_manifest.render_paths("egress"))
+    assert "backend/egress_allowlist.json" in egress, (
+        "the proxy has no allowlist to read and would refuse every tunnel")
     forbidden = {
+        "backend/custody/keyring.py",
+        "backend/custody/client.py",
         "backend/custody/tokens.py",
+        "backend/custody/wrapping.py",
+        "backend/accounts/account.py",
+        "backend/integrations/llm_client.py",
+        "backend/integrations/telegram.py",
+        "backend/integrations/inference_attestation.py",
+        "backend/billing/billing.py",
+        "backend/secrets_checks.py",
+        "backend/tee/tee_boot.py",
         "backend/drafting/agentic_drafter.py",
-        "backend/drafting/draft_replies.py",
-        "backend/drafting/tool_executors.py",
         "backend/integrations/gmail_gcal/gmail_api.py",
         "backend/integrations/gmail_gcal/google_client.py",
-        "backend/integrations/gmail_gcal/mailbox.py",
-        "backend/integrations/gmail_gcal/drafts.py",
-        "backend/onboarding/provisioning.py",
     }
     leaked = forbidden & egress
-    assert not leaked, f"the proxy image carries mail-reading code: {sorted(leaked)}"
+    assert not leaked, f"the proxy image carries what it must not: {sorted(leaked)}"
 
 
 def test_the_receiver_carries_none_of_the_mail_roles_reach():

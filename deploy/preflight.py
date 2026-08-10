@@ -107,15 +107,24 @@ def _definitely_absent(path):
 
 
 def _egress_allowlist_derivable():
-    """The proxy computes its allowlist at startup from the modules that name
-    the hosts, so an import that broke one of them is an empty or short list and
-    an empty list is every unit offline. Checked here rather than left to the
-    assert in main() because the sandbox this deploy installs points every other
-    unit at this proxy: it starting is the precondition for the rest of the box
-    having a network at all."""
+    """The proxy reads its allowlist from a committed file, so a deploy that
+    rsynced a tree without it -- or with one this code cannot parse -- is a proxy
+    that refuses to start, and the sandbox this deploy installs points every
+    other unit at that proxy. It starting is the precondition for the rest of the
+    box having a network at all, which is why this is checked before the restart
+    rather than found afterwards.
+
+    Staleness is not checked here and deliberately so: re-deriving the list needs
+    the modules that name the hosts, which is the fan-out the proxy stopped
+    carrying. `tests/test_egress.py` compares the committed file against those
+    constants, so a stale list fails in CI, where the fix is a re-render and a
+    commit rather than an edit on a box."""
     from backend import egress
 
-    allowed = egress.hosts()
+    try:
+        allowed = egress.hosts()
+    except egress.AllowlistInvalid as e:
+        return str(e)
     if not allowed:
         return "the egress allowlist came back empty; no unit could reach anything"
     return None
