@@ -1,8 +1,10 @@
-"""The two signed cookies: the session, and the OAuth state.
+"""The signed cookies: the session, the OAuth state and the Polar checkout.
 
 The state moved in here from web_server because it answers the same question
 the session does -- did this box mint this, and how long ago -- and because a
-single-slot cookie made a second sign-in tab look like a CSRF attack.
+single-slot cookie made a second sign-in tab look like a CSRF attack. The
+checkout binding is the third of the same shape: a round trip through a third
+party that comes back naming what it started.
 """
 
 import time
@@ -100,15 +102,15 @@ def test_only_the_most_recent_states_are_kept():
     ages out rather than lingering behind newer ones."""
     cookie = None
     states = []
-    for _ in range(sess.MAX_PENDING_STATES + 2):
+    for _ in range(sess.MAX_PENDING + 2):
         state = sess.new_state()
         states.append(state)
         cookie = sess.state_cookie(state, headers_for(cookie) if cookie else None)
 
     browser = headers_for(cookie)
     kept = [s for s in states if sess.state_is_ours(s, browser)]
-    assert len(kept) == sess.MAX_PENDING_STATES
-    assert kept == states[-sess.MAX_PENDING_STATES:]
+    assert len(kept) == sess.MAX_PENDING
+    assert kept == states[-sess.MAX_PENDING:]
 
 
 def test_an_expired_state_is_refused(monkeypatch):
@@ -117,6 +119,21 @@ def test_an_expired_state_is_refused(monkeypatch):
     later = time.time() + sess.STATE_TTL + 1
     monkeypatch.setattr(sess.time, "time", lambda: later)
     assert not sess.state_is_ours(state, headers_for(cookie))
+
+
+def test_a_state_is_one_shot_once_it_is_consumed():
+    """Membership alone left a state usable for the rest of its half hour on
+    every callback that did not clear the whole cookie -- so a refused sign-in
+    left a reusable token behind, and `provisioning.pkce_verifier` derives the
+    verifier from the state, which makes state reuse verifier reuse."""
+    first, second = sess.new_state(), sess.new_state()
+    cookie = sess.state_cookie(second, headers_for(sess.state_cookie(first)))
+    browser = headers_for(cookie)
+    assert sess.state_is_ours(first, browser) and sess.state_is_ours(second, browser)
+
+    after = headers_for(sess.state_cookie_without(first, browser))
+    assert not sess.state_is_ours(first, after), "the consumed state is still live"
+    assert sess.state_is_ours(second, after), "the other tab's consent was evicted"
 
 
 def test_a_session_cookie_is_not_a_state_and_a_state_is_not_a_session():
@@ -258,3 +275,54 @@ def test_the_startup_line_names_both_keys_without_printing_them(monkeypatch):
 
     rotate(monkeypatch, current=ROTATED)
     assert f"{sess.secrets.SESSION_SECRET_PREVIOUS_ENV}=(unset)" in sess.describe_keys()
+
+
+# --- the Polar checkout ---------------------------------------------------
+
+
+def test_a_checkout_is_bound_to_the_browser_that_started_it():
+    """`/billing/return` is a GET taking an id from a query string, and
+    SameSite=Lax follows a cross-site top-level navigation -- so an
+    attacker-supplied link fires that handler with the victim's session. The
+    metadata stamp answers whose checkout it is; this answers who started it."""
+    cookie = sess.checkout_cookie("co_1")
+    browser = headers_for(cookie)
+    assert sess.checkout_is_ours("co_1", browser)
+    assert not sess.checkout_is_ours("co_2", browser)
+    assert not sess.checkout_is_ours("co_1", headers_for()), "no cookie, no binding"
+    assert not sess.checkout_is_ours("", browser)
+
+
+def test_a_checkout_id_cannot_be_forged_without_the_key():
+    """The cookie is signed, so writing the id into it by hand proves nothing."""
+    assert not sess.checkout_is_ours(
+        "co_1", headers_for(f"{sess.CHECKOUT_COOKIE}=co_1"))
+
+
+def test_two_checkouts_can_be_pending_and_one_is_consumed_at_a_time():
+    """Same reason two consents can be: a second tab must not evict the first.
+    Consumed on return, so a link is one-shot."""
+    first = sess.checkout_cookie("co_1")
+    browser = headers_for(sess.checkout_cookie("co_2", headers_for(first)))
+    assert sess.checkout_is_ours("co_1", browser)
+    assert sess.checkout_is_ours("co_2", browser)
+
+    after = headers_for(sess.checkout_cookie_without("co_1", browser))
+    assert not sess.checkout_is_ours("co_1", after)
+    assert sess.checkout_is_ours("co_2", after)
+    assert sess.checkout_cookie_without("co_1", after) is None, (
+        "nothing to consume twice")
+
+
+def test_an_expired_checkout_binding_is_refused(monkeypatch):
+    cookie = sess.checkout_cookie("co_1")
+    later = time.time() + sess.CHECKOUT_TTL + 1
+    monkeypatch.setattr(sess.time, "time", lambda: later)
+    assert not sess.checkout_is_ours("co_1", headers_for(cookie))
+
+
+def test_a_state_is_not_a_checkout():
+    """One key signs both cookies, so the purpose is inside the signed string."""
+    state = sess.new_state()
+    assert not sess.state_is_ours(
+        state, headers_for(f"{sess.STATE_COOKIE}={sess.checkout_cookie(state)}"))

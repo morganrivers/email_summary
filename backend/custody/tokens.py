@@ -144,6 +144,40 @@ def discard(acct):
     return keyring.clear_encrypted(acct, TOKEN_FILE)
 
 
+def revoke(acct):
+    """Withdraw the Google grant this account gave us. Returns True when Google
+    accepted the revocation.
+
+    Deleting an account destroys the data key, and from that moment the refresh
+    token is bytes nobody can read -- so this has to happen before the shred or
+    it can never happen at all. Until it did, a user who deleted their account
+    kept Letterlock listed on their Google security page with a live grant and
+    we held no way to withdraw it. `delete_account`'s docstring called that "not
+    revocation"; it was really "revocation we have made impossible".
+
+    No DPoP proof: `/revoke` takes the token itself, which is the one Google
+    call on this path that does not go through the co-signer. Best effort by
+    contract -- the caller deletes either way, because a user asking to be
+    erased must not be held up by an outage at Google."""
+    path = token_path(acct)
+    if not path.exists():
+        return False
+    refresh_token = keyring.read_encrypted(acct, TOKEN_FILE)
+    if not refresh_token:
+        return False
+    response = requests.post(
+        oauth_app.REVOKE_ENDPOINT,
+        data={"token": refresh_token},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        timeout=HTTP_TIMEOUT,
+    )
+    # 200 is revoked. 400 is Google saying the token is already invalid, which
+    # is the state this call exists to reach, so it is not a failure.
+    ok = response.status_code in (200, 400)
+    log(f"{acct.id}: revoke returned {response.status_code}")
+    return ok
+
+
 # --- the refresh itself ---------------------------------------------------
 
 def _post_token(form, proof):
@@ -331,3 +365,18 @@ def forget(acct=None):
         else:
             _access_cache.pop(acct.id, None)
     keyring.forget(None if acct is None else acct.id)
+
+
+def forget_id(account_id):
+    """The same eviction for an account whose manifest entry is already gone.
+
+    An id and not an Account, which everything else here refuses -- but nothing
+    is derived from it. Both caches are keyed by id and this only removes, so
+    the wrong id evicts somebody else's cache entry rather than deriving
+    somebody else's key. The Account cannot be produced anyway: a deletion that
+    raced this one has already dropped the row it would be built from, and the
+    key must still be released from memory."""
+    assert account_id, "forget_id needs an account id"
+    with _lock:
+        _access_cache.pop(account_id, None)
+    keyring.forget(account_id)

@@ -15,8 +15,12 @@ nor requirements-dev.txt, and a boundary test is a bad reason to add a
 dependency to a list whose whole point is being the only list.
 """
 
+import os
 import re
 from pathlib import Path
+from unittest import mock
+
+from backend import secrets
 
 REPO = Path(__file__).resolve().parent.parent
 COMPOSE = REPO / "deploy" / "phala" / "docker-compose.yml"
@@ -47,6 +51,82 @@ def _service_blocks():
         elif current:
             blocks[current].append(line)
     return {name: "\n".join(lines) for name, lines in blocks.items()}
+
+
+def _common_env_names():
+    """Names in the `x-common` anchor every service merges. They are handed to
+    all three roles, so a per-role check that ignored them would call
+    TEE_REQUIRED absent."""
+    text = COMPOSE.read_text()
+    block = text.split("\nx-common:", 1)[1].split("\nservices:", 1)[0]
+    return set(re.findall(r"^\s+([A-Z][A-Z0-9_]*):\s", block, re.M))
+
+
+def _env_names(role):
+    """Every variable a role's container actually receives."""
+    return _common_env_names() | set(
+        re.findall(r"^\s+([A-Z][A-Z0-9_]*):\s", _service_blocks()[role], re.M))
+
+
+def test_each_role_is_handed_exactly_the_secrets_its_boot_gate_demands():
+    """The gate and the partition, checked against each other.
+
+    These are the two halves of one fact and they used to be written
+    independently: `tee_boot` applied the whole-box `secrets.REQUIRED`, which no
+    role satisfies -- `web` is deliberately handed no inference key and `mail`
+    no SESSION_SECRET -- so both crash-looped on first boot behind
+    `restart: always`. The repair an operator reaches for under that pressure is
+    to give every container every variable, which is the partition RTMR3
+    measures, undone.
+
+    Answered by running the real checks against an environment holding exactly
+    what the compose file interpolates, rather than by a second list of variable
+    names here: a list is the drift. Values are dummies because every check asks
+    only whether a value arrived."""
+    for role in ROLES:
+        env = {name: "x" for name in _env_names(role)}
+        # `hook` merges the common block and nothing else, so it inherits
+        # TEE_REQUIRED from there; spelled out so the intent survives an edit.
+        env["TEE_REQUIRED"] = "1"
+        with mock.patch.dict(os.environ, env, clear=True):
+            gaps = secrets.missing(role)
+        assert gaps == [], f"the {role} container cannot pass its own boot gate: {gaps}"
+
+
+def test_no_enclave_role_is_asked_for_the_polar_webhook_secret():
+    """The one check no role can satisfy, named rather than quietly dropped.
+
+    No role is a Polar receiver: entitlement in the enclave is `confirm_checkout()`
+    in `web` plus the reconcile in `mail`, both of which read Polar's API. So
+    there is no correct value of POLAR_WEBHOOK_SECRET to inject, and a gate that
+    demanded one would be unsatisfiable by construction."""
+    assert secrets.polar_webhook_configured in secrets.ROLE_EXEMPT
+    for role in ROLES:
+        assert "POLAR_WEBHOOK_SECRET" not in _env_names(role)
+
+
+def test_the_gate_runs_per_role_and_the_entrypoint_says_which():
+    """A gate given no role cannot know what to require, so it refuses. The
+    entrypoint has to pass the compose `command:` through for that to work."""
+    flake = FLAKE.read_text()
+    assert 'python -m backend.tee.tee_boot "$role"' in flake, (
+        "the entrypoint runs the gate without naming the role")
+
+
+def test_every_role_names_this_deployments_hostnames():
+    """`backend/site.py` compiles in the Hetzner hosts, and every externally
+    visible URL is built from them. A role left on the defaults sends its users
+    to the other box, which holds a different SESSION_SECRET -- so the consent
+    round trip either refuses as "did not start in this browser" or lets the box
+    exchange the authorization code and take custody of the refresh token.
+
+    Interpolated with no `:-` default on purpose: an unset value must be visibly
+    empty rather than quietly the box's hostname."""
+    blocks = _service_blocks()
+    for role in ("mail", "web"):
+        for name in ("LETTERLOCK_HOST", "LETTERLOCK_API_HOST"):
+            assert f'{name}: "${{{name}}}"' in blocks[role], (
+                f"{role} does not name {name}, or gives it a fallback")
 
 
 def test_every_role_is_present_and_none_of_them_is_root():

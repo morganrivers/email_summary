@@ -19,6 +19,18 @@ does not, so the two capabilities are handed out separately. A group that does
 not exist yet -- a laptop, or the box before the deploy that creates it --
 leaves the files owner-only, which stops the webhook writing rather than
 opening the spool to everyone.
+
+What a spool holds, and for how long, since neither file is touched by account
+deletion and both name people. The wake spool carries raw email addresses; the
+billing spool carries whole Polar event bodies, `customer_email` included. Each
+entry lives until the next drain, which is the daemon's next pass -- so the
+bound is "until the daemon runs", and a daemon that is down is a plaintext list
+of who has mail waiting. That is the stated lifetime rather than an oversight:
+a deleted account's entry clears on the next pass because the daemon drops an
+address it cannot resolve, and nothing here is a record anyone reads later.
+Anything wanted for longer belongs in `backend/audit.py`, which has a retention
+policy; a spool does not, because a spool that keeps things is a queue that
+never drains.
 """
 
 import fcntl

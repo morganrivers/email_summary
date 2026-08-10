@@ -33,6 +33,19 @@ used: the daemon pulls the delta from that account's stored lastHistoryId
 cursor (single source of truth). emailAddress is trusted only because the JWT
 proves the push came from Google.
 
+The token is a bearer credential and there is deliberately no replay cache. It
+carries no ``jti``, it lives about an hour, and Pub/Sub mints one and reuses it
+across many pushes inside that window -- so refusing a second use of the same
+token would refuse nearly every push after the first. Anything that captures one
+can therefore drive wakes for the rest of that hour, and the only place to close
+that is where TLS is terminated. On the box that is Caddy on loopback. In the
+enclave the compose file publishes this port in plaintext and something outside
+the containers terminates it, which has to be settled before the hook role is
+published: either a TLS listener in this container holding a certificate the
+enclave derives, or a written acknowledgement that the push address list is
+visible to the gateway operator. What a captured token buys is bounded by
+`route_push` refusing a body it cannot parse rather than escalating to a sweep.
+
 This process does not resolve the address, and that is deliberate rather than
 an omission. Resolving it means reading `database/accounts.json`, which is
 every user's address and whether they are paid up, and this is a program that
@@ -249,16 +262,24 @@ def route_push(body):
     """Spool the address a verified push names and wake the daemon for it.
 
     Whether that address belongs to anyone is the daemon's question, not this
-    process's: see the module docstring. An unparseable body falls back to a
-    full sweep so no mail is silently lost."""
+    process's: see the module docstring. An unparseable body is refused and
+    nothing is woken.
+
+    That used to fall back to an address-less wake, which the daemon reads as
+    "process every account". A genuine Google push is never unparseable, so the
+    branch was reachable only by something already holding a valid Pub/Sub OIDC
+    token -- but that token is a bearer credential with no `jti`, no replay
+    cache and roughly an hour of life, so anything that captures one can drive
+    repeated full sweeps. A sweep spends one co-signer unwrap-and-sign per
+    account, which is precisely what `cosigner.policy._sweep_refusal` exists to
+    refuse, and its refusal stops mail for everyone until an operator clears it.
+    A fallback that exists so one mail is not lost could stop all mail."""
     try:
         envelope = json.loads(body)
         data = base64.b64decode(envelope["message"]["data"])
         email = json.loads(data)["emailAddress"]
     except Exception as err:
-        log(f"unparseable push body ({err}); waking full sweep as fallback")
-        signal_daemon()
-        return
+        raise HookError(400, f"verified push body does not parse: {err}")
     if not email:
         raise HookError(400, "verified push carried no emailAddress")
     wake_queue.enqueue(email)
@@ -295,9 +316,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             route_push(body)
         except HookError as err:
-            # A push whose body parsed and named no mailbox. Answered rather
-            # than left to escape the handler, so Pub/Sub gets a status instead
-            # of a closed connection and retries a body that will never improve.
+            # A verified push that names no mailbox we can route: the body did
+            # not parse, or parsed and carried no address. Answered rather than
+            # left to escape the handler, so Pub/Sub gets a status instead of a
+            # closed connection and retries a body that will never improve.
             return self._reject(err.code, err.msg)
         self.send_response(204)
         self.send_header("Content-Length", "0")

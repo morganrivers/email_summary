@@ -193,6 +193,17 @@ partition is attested: move `SESSION_SECRET` to the mail container and
 never bind-mount `/dstack/.host-shared` (it holds the whole decrypted set), and
 every interpolated name must also be in `allowed_envs` in `app-compose.json`.
 
+The gate is per role for the same reason. `flake.nix`'s entrypoint passes the
+compose `command:` through as `python -m backend.tee.tee_boot "$role"`, and
+`tee_boot` refuses a role it cannot name rather than falling back to either the
+whole-box set (the old bug) or the empty one. Beyond the secrets it adds
+`CAPABILITIES_BY_ROLE`: whether the dcap-qvl wheel and the inference pins made
+it into the image (`mail`, since a build that dropped either starts cleanly and
+refuses every confidential draft at the first email), and whether
+`LETTERLOCK_HOST`/`LETTERLOCK_API_HOST` were set at all — left at
+`backend/site.py`'s compiled-in defaults, an enclave sends its users to the
+Hetzner box for consent and for the checkout return.
+
 `hook` gets no `database/` and no guest-agent socket, and so runs no attestation
 gate: that socket is unauthenticated and `GetKey` takes a caller-supplied
 derivation path, so anything able to open it derives the app's sealing key
@@ -292,7 +303,12 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
   entirely under `TEE_REQUIRED`. The box's fallback, not the enclave's.
 - `state/` — daemon scratch: `state.json`, `wake.fifo`, `wake_queue.jsonl`,
   `wake_queue.lock`, `billing_queue.jsonl`, `billing_queue.lock`, `restart.flag`.
-  Created by `paths.ensure_run_dir()`.
+  Created by `paths.ensure_run_dir()`. Both spools name people — raw addresses
+  in one, whole Polar event bodies in the other — and neither is touched by
+  account deletion. The stated lifetime is "until the next drain", so a deleted
+  account's entry clears on the daemon's next pass and a daemon that is down
+  holds a plaintext list of who has mail waiting. Anything wanted for longer
+  belongs in `backend/audit.py`, which has a retention policy.
 - `database/` — multi-tenant account store. `database/accounts.json` is the
   manifest (identity, opaque handle, token file, telegram targets, timezone, plan
   status) and the only plaintext left: it maps a handle back to a person, and
@@ -307,6 +323,15 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
   key would open. `backend/paths.py` owns all of it. Seed the owner once with
   `python -m backend.accounts.seed_owner`, then have them sign in through
   `/auth/callback`.
+  `database/accounts.lock` is beside the manifest and guards every write to it.
+  Each mutator reads the file whole, changes one field and writes it whole, so
+  without a lock the later writer's stale copy silently reverted the earlier
+  one — the web tier races itself across threads and the daemon is a second
+  process. `account._manifest_transaction()` holds `LOCK_EX` across the read and
+  the write, `_write_manifest` asserts it is held, and the write is skipped when
+  nothing changed. The one that mattered: `delete_account` racing any other
+  writer put the deleted row back, address and chat id and all, pointing at
+  files that were already crypto-shredded.
 - `config/` — operator prompts pushed from `~/.system_files`.
   `paths.config_file()` falls back to `~/.system_files` so a laptop checkout
   works unchanged.
@@ -325,7 +350,14 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
 - `gmail_hook_server.py` — HTTPS webhook, `email-webhook` service behind Caddy
   (`127.0.0.1:8787`). Verifies the Pub/Sub OIDC JWT, spools the address on
   `wake_queue` and pokes the FIFO. It does not resolve the address: that reads
-  the manifest, and this process holds none of it.
+  the manifest, and this process holds none of it. A verified push whose body
+  does not parse is a 400 and nothing is woken: that used to fall back to an
+  address-less wake, which the daemon reads as "process every account", one
+  co-signer unwrap-and-sign each. Only something already holding a Pub/Sub token
+  could reach it — and that token has no `jti`, no replay cache and an hour of
+  life, so a captured one drove repeated sweeps straight into
+  `cosigner.policy._sweep_refusal`, whose refusal stops mail for everyone. A
+  fallback that existed so one mail was not lost could stop all mail.
 - `backend/spool.py` — the one append-and-drain file protocol, under one lock,
   behind both `daemons/wake_queue.py` and `billing/billing_queue.py`. Each spool
   names its own group, since waking the daemon and settling a subscription are
@@ -361,6 +393,11 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
   (`/settings/telegram/start` for either direction, then `/confirm`), never by
   typing a chat id and never decided here. The old `/onboard` flow was
   removed; its OAuth sequence lives in `backend/onboarding/provisioning.py`.
+  `/contact` is the one unauthenticated relay: every submission writes a journal
+  line *and* sends on the operator's bot token, so it carries a per-source-IP
+  token bucket (`_contact_allowed`, three in hand refilling one per twenty
+  minutes) and a length cap refused rather than truncated. Buckets back at full
+  are swept, so the table is not a record of who has written to us.
 - `cosigner/server.py` — split-custody co-signer, `cosigner` service behind Caddy
   (`127.0.0.1:8791` on `COSIGNER_HOST`, the one site block demanding a client
   certificate). Holds the outer wrapping key and the DPoP signing key and no
@@ -425,7 +462,15 @@ depend on an entry point still importing the package it lives in.
 Keep these centralized. If you need behavior that lives here, import — don't copy.
 
 - `backend/secrets.py` — how a secret reaches the process. `secrets.load()` is
-  the only read of `.env` (idempotent; injected environment wins). The
+  the only read of `.env` (idempotent; injected environment wins). `REQUIRED` is
+  the whole box and `REQUIRED_BY_ROLE` the same question per enclave container,
+  because the compose file hands each one a different subset: a gate applying
+  the whole-box tuple refuses `web` for holding no inference key and `mail` for
+  holding no `SESSION_SECRET`, both absent by design, so both crash-loop on
+  first boot and the repair an operator reaches for is the partition undone.
+  `ROLE_EXEMPT` names the one check no role can satisfy (`POLAR_WEBHOOK_SECRET`;
+  no role is a receiver) and an assert keeps the union covering `REQUIRED`, so a
+  new check cannot be added to one and forgotten in the other. The
   `*_configured()` checks are the only definition of "this value is present",
   answered by calling the same code the services call (`PolarBilling()`,
   `telegram.operator_target()`) and owning the variable name where presence is a
@@ -438,8 +483,8 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   gate (`.env`, `oauth_app.keys_path()`), so the gate refuses exactly what the
   loaders refuse, and `google_oauth_configured()` answers through
   `oauth_app.load_keys()` so it cannot approve a source the reader rejects.
-- `frontend/session.py` — the two signed cookies (session, OAuth state) and the
-  keyring verifying them. Each is `kid:value:iat:mac`, the `kid` naming the
+- `frontend/session.py` — the signed cookies (session, OAuth state, Polar
+  checkout) and the keyring verifying them. Each is `kid:value:iat:mac`, the `kid` naming the
   signing key, so several keys are live at once and verification still has one
   key to try. That is what makes the secret rotatable: new value in
   `SESSION_SECRET`, outgoing one in `SESSION_SECRET_PREVIOUS`, restart, nobody
@@ -447,6 +492,17 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   Drop `SESSION_SECRET_PREVIOUS` later to retire them; `SESSION_TTL` (30 days) is
   how long that takes by itself. The OAuth state inherits all of it, which is why
   a restart mid-consent is no longer a CSRF alarm.
+  `PendingValues` is the shared half of the two round-trip cookies: parse,
+  expire, cap at `MAX_PENDING`, render. Both hold several at once because a
+  second tab must not evict what the first is waiting on, and both are consumed
+  on return — `state_cookie_without` on *every* `/auth/callback` outcome
+  including the refusals, since membership alone left a state reusable for the
+  rest of its half hour and `provisioning.pkce_verifier` derives the verifier
+  from it. `checkout_cookie`/`checkout_is_ours` is the same shape pointed at
+  Polar: `/billing/return` is a GET taking an id from a query string and
+  `SameSite=Lax` follows a cross-site top-level navigation, so the metadata
+  stamp answers whose checkout it is and this answers who started it. A buyer
+  who lost the cookie is refused nothing — the reconcile still settles them.
 - `backend/site.py` — public hostnames (`APP_HOST` = product, `API_HOST` =
   Pub/Sub push + Polar webhook), loopback ports, and every externally visible URL
   built from them. Overridable via `LETTERLOCK_HOST`, `LETTERLOCK_API_HOST`,
@@ -553,6 +609,23 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   yes/no question was the only thing keeping them in the web tier. Everything
   else the web UI does with an account needs the data key and not a token, and
   it gets that from the co-signer directly.
+  `account-forget` is a fourth reason and the pressing one is ordering.
+  Deletion runs in the *web* process, so `keyring.destroy` clears that
+  process's cache while the daemon goes on holding the account's data key for
+  `DEK_TTL`, its access token for an hour, a Google service object per thread
+  and a voice job `clear_status` will not remove while it runs — and a
+  generation finishing afterwards recreated `database/<id>/` after the user
+  asked to be erased. It also does the two things that stop being *possible*
+  once the key is gone rather than merely being skipped: revoke the Google grant
+  (`tokens.revoke`, `oauth_app.REVOKE_ENDPOINT`) and `users.stop` the mailbox
+  watch, which Google otherwise keeps pushing for seven days. Every step is best
+  effort and the web tier deletes either way; what makes it correct rather than
+  merely tidy is `keyring._refuse_if_deleted`, which will not mint a key for an
+  account that has left the manifest — the `(id, handle)` pair onboarding passes
+  is exempt by construction, since it writes a token before the row exists.
+  `RENDERABLE_CODE` (409) is the one status whose `msg` the web tier puts on a
+  page as it stands; `web_server._refusal()` is the single place that decides,
+  and everything else becomes a sentence with the detail left in the journal.
   A unix socket rather than the wake spool because the spool is one way: a
   synchronous sign-in would poll for a result file, and that file would hold a
   live authorization code at rest. It is `state/custody.sock` at 0660 in a setgid
@@ -756,7 +829,16 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   a rule rather than a suggestion; `force_unlink()` is the operator's way out
   for a user who has lost the Telegram account, reachable only from
   `python -m backend.accounts.unlink_telegram` and deliberately never a route.
-  `tests/test_chat_link.py` pins the refusals and both caller sets.
+  `finish()` compares the *current* target against the one the pending entry
+  named, not only the derived action: `action_for` distinguishes linked from
+  unlinked and nothing else, so a target moved from chat A to chat B inside one
+  window left the action still `CHAT_UNLINK` and a code posted from A unlinked
+  B — the one path where the chat asked was not the chat replaced.
+  `USER_MESSAGES` is every refusal this module can give, spelled out, because
+  the web tier renders them unaltered: `ChangeRefused` asserts its message is
+  one of them and `handoff_server.dispatch` asserts it again on the way out, so
+  a future refusal interpolating a chat id or an exception string cannot reach a
+  browser. `tests/test_chat_link.py` pins the refusals and both caller sets.
 - `draft_replies.drafting_instructions()` — everything the drafter is told about
   an account before it sees an email: voice profile, then personal information.
   One assembly, so the auto-reply and forwarded-email paths cannot hand the model
@@ -844,6 +926,19 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   id took the subscription. `checkout_url()` stamps
   `billing.CHECKOUT_ACCOUNT_KEY` into the session metadata to make the binding
   exact; `customer_email` is buyer-editable, so it is the fallback, not the test.
+  That fallback may introduce a link and never move one: an account already
+  naming a different Polar customer was linked by something exact, and only an
+  unstamped object reaches the email branch at all. `_static_checkout_url()` is
+  the one thing that mints unstamped objects, and it is refused under
+  `TEE_REQUIRED` — `/billing/checkout` renders "unavailable" instead, since
+  inside the enclave there is no operator to notice the difference.
+  `confirm_checkout()` links the customer *after* the paid-status check, and
+  `account.set_polar_customer_id()` refuses a customer another account already
+  holds (asserted again in `all_accounts()` for a manifest that already
+  drifted). Both halves close one attack: mint a checkout so the stamp names
+  you, type a victim's address on Polar's page so Polar attaches their existing
+  customer to it, come back — and `portal_url()` then mints a customer-portal
+  session for their payment methods, invoices and cancel button.
 - `draft_replies.build_draft_payload()` — canonical draft payload shape.
 - `draft_replies.submit_draft(account, payload, draft_id=None)` — sole boundary to
   `gmail_gcal.drafts`. Pass `draft_id` to update in place.

@@ -129,8 +129,9 @@ def test_two_accounts_never_share_a_handle(tmp_path, monkeypatch):
     account.register_account("dana@x.com", "Dana", "R")
     account.register_account("eve@x.com", "Eve", "R")
 
-    data = account._read_manifest()
-    data["accounts"][1]["handle"] = data["accounts"][0]["handle"]
-    account._write_manifest(data)
+    # Written through the transaction because that is the only way in: nothing
+    # in this module writes the manifest outside the lock, hand-edits included.
+    with account._manifest_transaction("corrupt the store for a test") as data:
+        data["accounts"][1]["handle"] = data["accounts"][0]["handle"]
     with pytest.raises(AssertionError, match="share an opaque handle"):
         account.all_accounts()

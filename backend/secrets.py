@@ -19,7 +19,10 @@ Three things live here and nothing else should copy them:
   * the ``*_configured()`` checks -- whether a secret is present.
     ``tee_boot.run_gate()`` and ``deploy/preflight.py`` are both built on them,
     so the boot gate and the deploy check cannot disagree about what
-    "configured" means.
+    "configured" means. ``REQUIRED`` is the whole box; ``REQUIRED_BY_ROLE`` is
+    the same question per enclave container, because the compose file hands
+    each one a different subset and the gate must not refuse a role for
+    lacking a secret the partition deliberately withholds from it.
   * ``fingerprint()`` -- how a secret is named in a log. Every service captures
     its secrets once at startup, so "is this process holding what the file now
     says" is a question only a startup line can answer, and it must be
@@ -294,9 +297,52 @@ REQUIRED = (
     google_oauth_configured,
 )
 
+# The same question asked per enclave role, because the enclave answers it per
+# role. `deploy/phala/docker-compose.yml` hands each container exactly the
+# secrets its own `environment:` block names, and that partition is measured
+# into RTMR3 -- so a gate applying the whole-box tuple refuses `web` for having
+# no inference key and `mail` for having no SESSION_SECRET, and both roles
+# crash-loop on first boot. The obvious fix under time pressure is to give every
+# container every variable, which is the partition undone, so the gate has to be
+# the thing that knows better.
+#
+# Names the roles `flake.nix`'s entrypoint accepts. `hook` requires nothing: it
+# verifies a Pub/Sub JWT and appends an address to a spool, and its own
+# WEBHOOK_AUD / PUBSUB_SERVICE_ACCOUNT are not secrets.
+REQUIRED_BY_ROLE = {
+    "mail": (inference_configured, telegram_configured, polar_api_configured,
+             google_oauth_configured),
+    "web": (session_configured, polar_api_configured),
+    "hook": (),
+}
 
-def missing():
-    """Why this box is not fully provisioned, one reason per gap. Empty when it
-    is. Reasons name variables, never values."""
+# Checks in REQUIRED that no enclave role can satisfy, and why. Separated rather
+# than dropped so the assert below still covers REQUIRED whole: adding a check
+# to REQUIRED and forgetting every role is the drift this catches, and an
+# exemption has to be argued for in writing here.
+#
+# No role is a Polar receiver. Entitlement inside the enclave is exactly
+# `confirm_checkout()` in `web` and the 3-hourly reconcile in `mail`, both of
+# which read Polar's API rather than verify an event signature, so there is no
+# correct value of POLAR_WEBHOOK_SECRET to inject.
+ROLE_EXEMPT = (polar_webhook_configured,)
+
+assert set(REQUIRED) == set(ROLE_EXEMPT).union(*REQUIRED_BY_ROLE.values()), (
+    "REQUIRED and REQUIRED_BY_ROLE disagree about what a deployment needs; "
+    "a new check must be given to the roles that need it or exempted by name"
+)
+
+
+def missing(role=None):
+    """Why this deployment is not fully provisioned, one reason per gap. Empty
+    when it is. Reasons name variables, never values.
+
+    With no role this is the whole box, which is what `deploy/preflight.py`
+    narrows per unit. With one it is that enclave container alone."""
     load()
-    return [reason for reason in (check() for check in REQUIRED) if reason]
+    if role is None:
+        checks = REQUIRED
+    else:
+        assert role in REQUIRED_BY_ROLE, f"unknown role {role!r}"
+        checks = REQUIRED_BY_ROLE[role]
+    return [reason for reason in (check() for check in checks) if reason]

@@ -46,6 +46,7 @@ Authenticated:
 import html
 import os
 import sys
+import threading
 import time
 import urllib.parse
 import zoneinfo
@@ -184,6 +185,52 @@ def _valid_timezone(name):
     return True
 
 
+# The contact form is the one unauthenticated path that both writes a journal
+# line and sends on the operator's Telegram bot token, so a script pointed at it
+# floods two places at once. A honeypot field stops a naive bot and nothing
+# else, and `MAX_BODY` allows 128 KB per submission.
+#
+# A bucket rather than a cooldown: a person who writes twice in a minute because
+# they forgot something is the ordinary case, and a cooldown refuses that while
+# a bucket refuses the hundredth. Per source address, in this process only --
+# there is one web process, and an attacker with a pool of addresses is a
+# problem for the layer in front, not for a contact form.
+CONTACT_BURST = 3
+CONTACT_REFILL_SECONDS = 1200
+CONTACT_MAX_CHARS = 3000
+
+_CONTACT_BUCKETS = {}
+_CONTACT_LOCK = threading.Lock()
+
+
+def _refilled(entry, now):
+    """A bucket's tokens as of `now`. Continuous rather than stepped, so the
+    limit reads as "one more every twenty minutes, three in hand" rather than as
+    a window boundary somebody can wait out."""
+    tokens, last = entry
+    return min(CONTACT_BURST, tokens + (now - last) / CONTACT_REFILL_SECONDS)
+
+
+def _contact_allowed(source):
+    """Whether this address may send now, spending a token if so.
+
+    Sweeps buckets that have refilled on the way past. An entry only means
+    something while it holds a deficit, and without the sweep this table is a
+    per-address record of who has written to us -- which is more than a contact
+    form should keep and grows without bound besides."""
+    now = time.monotonic()
+    with _CONTACT_LOCK:
+        for other in [k for k, v in _CONTACT_BUCKETS.items()
+                      if k != source and _refilled(v, now) >= CONTACT_BURST]:
+            del _CONTACT_BUCKETS[other]
+        tokens = _refilled(_CONTACT_BUCKETS.get(source, (CONTACT_BURST, now)), now)
+        if tokens < 1:
+            _CONTACT_BUCKETS[source] = (tokens, now)
+            return False
+        _CONTACT_BUCKETS[source] = (tokens - 1, now)
+        return True
+
+
 def _deliver_contact(name, email, message):
     """Put a contact message somewhere a person will see it. The form used to
     write one stderr line and tell the sender we would get back to them, which
@@ -192,7 +239,7 @@ def _deliver_contact(name, email, message):
     text = (
         "✉️ <b>Contact form</b>\n"
         f"From: {_h(name or 'anonymous')} &lt;{_h(email or 'no address given')}&gt;\n\n"
-        f"{_h(message[:3000])}"
+        f"{_h(message)}"
     )
     if not telegram.send_telegram(text, telegram.operator_target()):
         log("contact form: no operator Telegram target; message is in the log only")
@@ -940,6 +987,23 @@ def _voice_forget(account_id):
         log(f"voice status not cleared for {account_id}: {err}")
 
 
+def _refusal(err):
+    """What to put on the page for a `RemoteRefusal`.
+
+    Only `handoff.RENDERABLE_CODE` carries text meant for a person: it is the
+    code `handoff_server` gives a `chat_link.ChangeRefused`, whose message is
+    one of a fixed set checked on both sides of the socket. Everything else the
+    daemon refuses with was written for its own journal -- a `ProvisionError`
+    carries whatever Google put in the callback's `error` parameter, a plain
+    refusal names the account -- so it stays there and the browser gets a
+    sentence. The rule is one function because the alternative is each handler
+    deciding, and a new handler deciding wrong."""
+    if err.code == handoff.RENDERABLE_CODE:
+        return err.msg
+    log(f"refusal {err.code} withheld from the page: {err.msg}")
+    return "That request could not be completed. Please try again."
+
+
 def _chat_forget(account_id):
     """Drop any half-finished Telegram change. Best effort on a path that has
     already deleted the account: the pending entry expires on its own, and the
@@ -948,6 +1012,24 @@ def _chat_forget(account_id):
         handoff.chat_forget(account_id)
     except (handoff.HandoffUnavailable, handoff.RemoteRefusal) as err:
         log(f"pending telegram change not cleared for {account_id}: {err}")
+
+
+def _account_forget(account_id):
+    """Have the daemon release this account and withdraw its Google grant,
+    before the deletion that makes both impossible.
+
+    Best effort, and deliberately not a precondition: the user asked to be
+    deleted, and a daemon that is down must not turn that into an error page.
+    What is lost when it is down is the grant at Google -- said in the log
+    rather than swallowed, because nothing later can go back for it. The daemon
+    also refuses to open a key for an account that has left the manifest, which
+    is what covers the caches when this call never lands."""
+    try:
+        return handoff.account_forget(account_id)
+    except (handoff.HandoffUnavailable, handoff.RemoteRefusal) as err:
+        log(f"account {account_id} deleted without the daemon releasing it "
+            f"({err}); the Google grant was not revoked")
+        return None
 
 
 def _page_voice(acct, error=None, notice=None):
@@ -1699,21 +1781,32 @@ class Handler(BaseHTTPRequestHandler):
             # daemon is the answer, because nothing over there can see a cookie.
             state = query.get("state", "")
             state_ok = bool(state) and sess.state_is_ours(state, self.headers)
+            # Consumed on every outcome below, refusals included. Membership
+            # alone left the state valid for the rest of its half hour after a
+            # failed callback, which makes it a reusable token rather than a
+            # one-shot -- and `provisioning.pkce_verifier` derives the verifier
+            # from the state, so state reuse is verifier reuse.
+            spent = ("Set-Cookie", sess.state_cookie_without(state, self.headers))
             try:
                 account_id, location = handoff.sign_in(query, state_ok, REDIRECT_URI)
             except handoff.RemoteRefusal as e:
                 log(f"auth/callback rejected: {e.msg}")
                 return self._send(e.code, _page_error(
-                    e.code, "Could not complete sign-in. Please try again."))
+                    e.code, "Could not complete sign-in. Please try again."),
+                    extra=[spent])
             except handoff.HandoffUnavailable as e:
                 log(f"auth/callback could not reach the daemon: {e}")
                 return self._send(503, _page_error(
-                    503, "Sign-in is temporarily unavailable. Please try again in a few minutes."))
+                    503, "Sign-in is temporarily unavailable. "
+                         "Please try again in a few minutes."), extra=[spent])
             except Exception as e:
                 log(f"auth/callback error: {e}")
-                return self._send(500, _page_error(500, "Sign-in failed. Please try again."))
+                return self._send(500, _page_error(
+                    500, "Sign-in failed. Please try again."), extra=[spent])
             audit.record(account_id, audit.SIGN_IN, "ok")
             session_cookie = sess.make_cookie(account_id)
+            # The whole cookie goes on success: the browser that just signed in
+            # has no pending consent left worth keeping.
             return self._redirect(location, extra=[
                 ("Set-Cookie", sess.clear_state_cookie()),
                 ("Set-Cookie", session_cookie),
@@ -1764,11 +1857,29 @@ class Handler(BaseHTTPRequestHandler):
             if acct is None:
                 return
             query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
-            paid, detail = _confirm_checkout(acct, query.get("checkout_id"))
+            checkout_id = query.get("checkout_id")
+            # This is a GET taking an id out of a query string, and SameSite=Lax
+            # follows a cross-site top-level navigation, so an attacker-supplied
+            # link fires this handler with the victim's session. The cookie is
+            # the binding that answers it: settle only a checkout this browser
+            # started. A buyer who lost the cookie -- another browser, a cleared
+            # jar, an hour on a bank's 3-D Secure page -- is not refused
+            # anything. The webhook and the reconcile still settle them, and the
+            # page below already says a flip may be in flight.
+            if not sess.checkout_is_ours(checkout_id, self.headers):
+                log(f"checkout return for {acct.id}: "
+                    f"{checkout_id!r} was not started in this browser")
+                acct = account.account_for_email(acct.id, include_inactive=True) or acct
+                return self._send(200, _page_checkout_return(acct, False))
+            paid, detail = _confirm_checkout(acct, checkout_id)
             log(f"checkout return for {acct.id}: paid={paid} {detail}")
             # Reload either way: the webhook may have flipped the plan already.
             acct = account.account_for_email(acct.id, include_inactive=True) or acct
-            return self._send(200, _page_checkout_return(acct, paid))
+            # Consumed on every outcome, so a return link is one-shot the way a
+            # consent callback is.
+            spent = sess.checkout_cookie_without(checkout_id, self.headers)
+            return self._send(200, _page_checkout_return(acct, paid),
+                              extra=[("Set-Cookie", spent)] if spent else None)
 
         if path == "/billing/checkout":
             acct = self._require_auth()
@@ -1779,12 +1890,18 @@ class Handler(BaseHTTPRequestHandler):
                     "Your subscription is already active, so there is nothing "
                     "to buy. Use Manage subscription to change or cancel it."
                 )))
-            location = provisioning.checkout_redirect(acct.id, fallback="")
+            location, checkout_id = provisioning.checkout_redirect(acct.id, fallback="")
             if not location:
                 return self._send(200, _page_billing(acct, error=(
                     "Checkout is unavailable right now. Please try again shortly."
                 )))
-            return self._redirect(location)
+            # Recorded in the buyer's own browser, so the return trip can say
+            # this browser started this checkout rather than only that the
+            # checkout resolves to this account. Nothing to record on the static
+            # fallback, which mints no session.
+            extra = ([("Set-Cookie", sess.checkout_cookie(checkout_id, self.headers))]
+                     if checkout_id else None)
+            return self._redirect(location, extra=extra)
 
         if path == "/billing/portal":
             acct = self._require_auth()
@@ -1829,6 +1946,17 @@ class Handler(BaseHTTPRequestHandler):
             message = form.get("message", "").strip()
             if not message:
                 return self._send(200, _page_contact(error="Message is required."))
+            if len(message) > CONTACT_MAX_CHARS:
+                # Refused rather than truncated. Delivery already cut the text
+                # to fit one Telegram message, so a long submission arrived
+                # silently clipped and the sender was told it was received.
+                return self._send(200, _page_contact(error=(
+                    f"That message is {len(message)} characters and the limit is "
+                    f"{CONTACT_MAX_CHARS}. Please shorten it.")))
+            if not _contact_allowed(self._source_ip()):
+                return self._send(429, _page_contact(error=(
+                    "You have sent several messages already. Please wait a "
+                    "little while before sending another.")))
             name = form.get("name", "").strip()
             email = form.get("email", "").strip()
             _deliver_contact(name, email, message)
@@ -1892,7 +2020,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 action, code, username = handoff.chat_begin(acct.id)
             except handoff.RemoteRefusal as e:
-                return self._send(200, _page_settings(acct, error=e.msg))
+                return self._send(200, _page_settings(acct, error=_refusal(e)))
             except handoff.HandoffUnavailable as e:
                 log(f"telegram change could not be started for {acct.id}: {e}")
                 return self._send(200, _page_settings(acct, error=(
@@ -1913,7 +2041,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 chat_id = handoff.chat_finish(acct.id)
             except handoff.RemoteRefusal as e:
-                return self._send(200, _page_settings(acct, pending=pending, error=e.msg))
+                return self._send(200, _page_settings(acct, pending=pending,
+                                                      error=_refusal(e)))
             except handoff.HandoffUnavailable as e:
                 log(f"telegram change could not be completed for {acct.id}: {e}")
                 return self._send(200, _page_settings(acct, pending=pending, error=(
@@ -1998,10 +2127,18 @@ class Handler(BaseHTTPRequestHandler):
                 audit.record(acct.id, audit.ACCOUNT, "refused", ("confirm-mismatch",))
                 return self._send(200, _page_account(
                     acct, error="Email address did not match. Account not deleted."))
+            # Before the manifest row goes, not after. The daemon is a separate
+            # process holding this account's data key, its access token, a
+            # Google service object and possibly a running voice generation, and
+            # only it can still read the refresh token that revokes the grant
+            # and stops the mailbox watch. Once `delete_account` shreds the key
+            # none of that is available: the caches would age out on their own,
+            # but the grant at Google would stay standing with no way left to
+            # withdraw it.
+            _account_forget(acct.id)
             account.delete_account(acct.id)
             _PENDING_CHATS.pop(acct.id, None)
             _chat_forget(acct.id)
-            _voice_forget(acct.id)
             clear = sess.clear_cookie()
             return self._send(200, _page_deleted(), extra=[("Set-Cookie", clear)])
 

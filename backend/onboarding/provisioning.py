@@ -256,11 +256,16 @@ def provision(code, redirect_uri, state):
 
 
 def checkout_redirect(email, fallback="/dashboard"):
-    """Where to send a user who has asked to pay: Polar hosted checkout when
-    configured (carrying customer_email so the order.paid webhook resolves to
-    this account), else the caller's own landing spot. Reached from the billing
-    page, never from sign-in: signing in and subscribing are separate decisions,
-    and a subscriber sent back to checkout is refused by Polar."""
+    """Where to send a user who has asked to pay, and the id of the checkout
+    minted for them: Polar hosted checkout when configured (carrying
+    customer_email so the order.paid webhook resolves to this account), else the
+    caller's own landing spot. Reached from the billing page, never from
+    sign-in: signing in and subscribing are separate decisions, and a subscriber
+    sent back to checkout is refused by Polar.
+
+    Returns `(location, checkout_id)`; the id is None when nothing was minted.
+    The caller records it in the buyer's browser, which is what lets the return
+    trip say this browser started this checkout."""
     return billing.checkout_url(email, fallback=fallback)
 
 

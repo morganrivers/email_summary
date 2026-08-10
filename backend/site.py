@@ -25,8 +25,15 @@ from cosigner import protocol as cosigner_protocol
 
 secrets.load()
 
-APP_HOST = os.environ.get("LETTERLOCK_HOST", "letterlock.morganrivers.com")
-API_HOST = os.environ.get("LETTERLOCK_API_HOST", "hezner.morganrivers.com")
+# The Hetzner deployment, compiled in. Named rather than inlined because a
+# second deployment has to be able to tell "nobody set this" from "this is the
+# value someone chose": `tee_boot._host_overridden()` refuses to start an
+# enclave role still minting URLs that point at the box.
+DEFAULT_APP_HOST = "letterlock.morganrivers.com"
+DEFAULT_API_HOST = "hezner.morganrivers.com"
+
+APP_HOST = os.environ.get("LETTERLOCK_HOST", DEFAULT_APP_HOST)
+API_HOST = os.environ.get("LETTERLOCK_API_HOST", DEFAULT_API_HOST)
 
 # The split-custody co-signer. Its own hostname, not a path on one of the two
 # above, because its site block is the only one that demands a client

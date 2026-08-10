@@ -28,6 +28,7 @@ import pytest
 from harness import python_sources, relative
 
 from backend import paths
+from backend.accounts import chat_link
 from backend.custody import handoff, handoff_server
 from backend.onboarding import provisioning
 
@@ -198,6 +199,37 @@ def test_an_unexpected_failure_does_not_leak_its_detail(listening, monkeypatch):
         handoff.voice_status("a@example.com")
     assert err.value.code == 500
     assert "abc123" not in err.value.msg
+
+
+def test_the_callee_checks_the_type_of_the_browser_answer():
+    """`state_ok` becomes `if not state_ok(state)` in `handle_callback`, so any
+    truthy JSON value passes the browser check -- the string "false" among them.
+    The client asserts it too, but the callee must not trust the caller's type
+    discipline: that is the wrong side of the boundary."""
+    for bad in ("false", 1, {}, None):
+        reply = handoff_server.dispatch(
+            {handoff.F_OP: handoff.OP_SIGN_IN,
+             handoff.F_ARGS: {"query": {"code": "c", "state": "s"},
+                              "state_ok": bad, "redirect_uri": "https://x/cb"}},
+            lambda _msg: None,
+        )
+        assert reply[handoff.F_ERROR][handoff.F_CODE] == 500, bad
+        assert "state_ok" not in reply[handoff.F_ERROR][handoff.F_MSG]
+
+
+def test_only_a_vetted_refusal_reaches_the_browser_unaltered(listening, monkeypatch):
+    """`handoff.RENDERABLE_CODE` is the one status whose message the web tier
+    renders as it stands. Everything else was written for the daemon's journal:
+    a `ProvisionError` carries whatever Google put in the callback's `error`
+    parameter, a plain refusal names the account."""
+    from frontend import web_server
+
+    vetted = handoff.RemoteRefusal(handoff.RENDERABLE_CODE,
+                                   chat_link.CODE_EXPIRED)
+    assert web_server._refusal(vetted) == chat_link.CODE_EXPIRED
+
+    leaky = handoff.RemoteRefusal(403, "consent denied for victim@example.com")
+    assert "victim@example.com" not in web_server._refusal(leaky)
 
 
 def test_no_listener_is_unavailable_and_not_a_refusal(tmp_path, monkeypatch):

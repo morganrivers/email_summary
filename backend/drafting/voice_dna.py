@@ -373,8 +373,12 @@ _JOBS_LOCK = threading.Lock()
 
 def status(account_id):
     """This account's generation job as a dict (state, started, error), or None
-    when it has never run one in this process. state is running/done/failed."""
+    when it has never run one in this process. state is running/done/failed.
+
+    Sweeps the finished ones on the way past, since this is the call every
+    waiting page makes and the table has no other reader."""
     with _JOBS_LOCK:
+        _prune_finished(time.time())
         job = _JOBS.get(account_id)
         return dict(job) if job else None
 
@@ -385,6 +389,68 @@ def clear_status(account_id):
         job = _JOBS.get(account_id)
         if job and job["state"] != "running":
             del _JOBS[account_id]
+
+
+# How long an account deletion waits for a generation already under way. A run
+# is a Gmail sweep plus one model call, so this is the outer bound before the
+# deletion goes ahead regardless.
+#
+# It has to stay under `handoff.TIMEOUT` (90s), the window the web tier gives
+# this whole operation: a wait that outlasts it turns an orderly release into a
+# `HandoffUnavailable` on the deleting side, which then deletes anyway with the
+# Google grant still standing. Stated rather than imported, the same way
+# `keyring.DEK_TTL` states its relationship to the co-signer's window, and
+# asserted in tests/test_account_deletion.py.
+AWAIT_TIMEOUT = 60
+AWAIT_POLL = 0.5
+
+
+def await_job(account_id, timeout=None):
+    """Wait for this account's generation to finish, then drop its entry.
+    Returns what happened: "none", the finished state, or "timeout".
+
+    Deletion is why this exists. `_run_job` ends in `generate()` -> `save()` ->
+    `keyring.write_encrypted`, which mints a data key if the account has none
+    and recreates `database/<id>/` if it has to, so a deletion racing one puts
+    the account's directory back after the user asked to be erased. There is no
+    cancelling a thread mid-Gmail-fetch, so the honest answer is to wait for it
+    and then let the deletion proceed.
+
+    The timeout is not a hole: `keyring.write_encrypted` refuses an account that
+    is no longer in the manifest, so a run that outlasts this one writes
+    nothing. Waiting is what keeps the ordinary case tidy; that refusal is what
+    makes it correct."""
+    deadline = time.monotonic() + (AWAIT_TIMEOUT if timeout is None else timeout)
+    while True:
+        with _JOBS_LOCK:
+            job = _JOBS.get(account_id)
+            if job is None:
+                return "none"
+            if job["state"] != "running":
+                del _JOBS[account_id]
+                return job["state"]
+        if time.monotonic() >= deadline:
+            log(f"generation for {account_id} outlasted the deletion wait")
+            return "timeout"
+        time.sleep(AWAIT_POLL)
+
+
+# How long a finished job stays readable. Long enough that the waiting page's
+# next poll still sees the result, short enough that an account which never came
+# back does not leave its address in this process for the life of the daemon.
+JOB_RETENTION = 600
+
+
+def _prune_finished(now):
+    """Drop finished jobs nobody came back for. Caller holds `_JOBS_LOCK`.
+
+    Only `clear_status` removed anything before, and only for an account whose
+    page was reloaded -- so a user who closed the tab, or who deleted their
+    account, left an entry keyed by their address resident until the daemon
+    restarted."""
+    for key in [k for k, v in _JOBS.items()
+                if v["state"] != "running" and now - v["started"] > JOB_RETENTION]:
+        del _JOBS[key]
 
 
 def start(acct):

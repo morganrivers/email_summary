@@ -69,12 +69,47 @@ _lock = threading.Lock()
 _pending = {}
 
 
+# Every refusal this module can give, spelled out.
+#
+# The web tier renders these verbatim, which is the only place a message from
+# the daemon reaches a browser unaltered. That is safe exactly as long as the
+# set is fixed and written for users: a future refusal interpolating a Polar id,
+# a chat id or an exception string would be rendered the same way, and nothing
+# would have refused it. So the strings live here, `ChangeRefused` asserts its
+# message is one of them, and `handoff_server.dispatch` asserts it again on the
+# way out.
+NO_SUCH_ACCOUNT = "That account no longer exists."
+NOT_CONFIGURED = "Telegram is not configured on this server yet."
+CODE_EXPIRED = "That code expired. Start again."
+CHANGED_MEANWHILE = "Your Telegram settings changed in the meantime. Start again."
+CODE_NOT_SEEN = ("We have not seen that code yet. Send it to the bot, then press "
+                 "the button again.")
+CODE_NOT_SEEN_FROM_CHAT = (
+    "We have not seen that code arrive from the linked chat yet. Send it "
+    "from the chat that currently receives your summary, then press the "
+    "button again.")
+
+USER_MESSAGES = frozenset({
+    NO_SUCH_ACCOUNT, NOT_CONFIGURED, CODE_EXPIRED, CHANGED_MEANWHILE,
+    CODE_NOT_SEEN, CODE_NOT_SEEN_FROM_CHAT,
+})
+
+
 class ChangeRefused(Exception):
     """The change was asked for and this module said no.
 
     Carries a message the web tier renders as it stands, because every refusal
     here is something the user can act on: send the code, send it from the right
-    chat, or start again."""
+    chat, or start again. Which is why the message must be one of
+    `USER_MESSAGES` and not a string built at the raise site."""
+
+    def __init__(self, msg):
+        assert msg in USER_MESSAGES, (
+            f"{msg!r} is not one of chat_link.USER_MESSAGES; the web tier "
+            "renders this text unaltered, so a refusal it does not name is a "
+            "refusal nothing checked"
+        )
+        super().__init__(msg)
 
 
 def _now():
@@ -103,7 +138,7 @@ def _account(account_id):
     longer detach would be a worse answer than letting them detach it."""
     acct = account_store.account_for_email(account_id)
     if acct is None:
-        raise ChangeRefused("That account no longer exists.")
+        raise ChangeRefused(NO_SUCH_ACCOUNT)
     return acct
 
 
@@ -121,7 +156,7 @@ def begin(account_id):
     """
     acct = _account(account_id)
     if not telegram.bot_token():
-        raise ChangeRefused("Telegram is not configured on this server yet.")
+        raise ChangeRefused(NOT_CONFIGURED)
     action = action_for(acct)
     code = telegram.new_link_code()
     now = _now()
@@ -146,7 +181,7 @@ def _claim(account_id):
         _prune(_now())
         entry = _pending.get(account_id)
         if entry is None:
-            raise ChangeRefused("That code expired. Start again.")
+            raise ChangeRefused(CODE_EXPIRED)
         return dict(entry)
 
 
@@ -176,16 +211,23 @@ def finish(account_id):
     # Re-read rather than trusting what begin() saw: two tabs, or a change that
     # completed while this one waited, and the account is no longer in the state
     # the pending entry describes.
-    if action_for(acct) != entry["action"]:
+    #
+    # The target and not only the derived action. `action_for` distinguishes
+    # linked from unlinked and nothing else, so a target moved from chat A to
+    # chat B inside one window -- unlink A, link B, both completed -- leaves the
+    # action still CHAT_UNLINK while the pending entry still names A. A code
+    # posted from A would then unlink B, which is the one path where the chat
+    # asked is not the chat replaced. The whole content of the rule is that
+    # those are the same chat.
+    current_chat = acct.telegram.chat_id if acct.telegram else None
+    if action_for(acct) != entry["action"] or current_chat != entry["chat_id"]:
         _forget(account_id)
-        raise ChangeRefused("Your Telegram settings changed in the meantime. Start again.")
+        raise ChangeRefused(CHANGED_MEANWHILE)
 
     if entry["action"] == CHAT_LINK:
         chat_id = _posted_since(entry["code"], entry["since"])
         if chat_id is None:
-            raise ChangeRefused(
-                "We have not seen that code yet. Send it to the bot, then press "
-                "the button again.")
+            raise ChangeRefused(CODE_NOT_SEEN)
         _forget(account_id)
         acct = account_store.set_telegram(acct.id, chat_id=chat_id)
         telegram.send_telegram(
@@ -197,10 +239,7 @@ def finish(account_id):
 
     assert entry["chat_id"], "an unlink was pending for an account with no chat"
     if _posted_since(entry["code"], entry["since"], entry["chat_id"]) is None:
-        raise ChangeRefused(
-            "We have not seen that code arrive from the linked chat yet. Send it "
-            "from the chat that currently receives your summary, then press the "
-            "button again.")
+        raise ChangeRefused(CODE_NOT_SEEN_FROM_CHAT)
     _forget(account_id)
     return account_store.set_telegram(acct.id, clear=True)
 

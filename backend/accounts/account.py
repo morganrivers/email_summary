@@ -34,6 +34,12 @@ set_telegram (notification target), set_settings (user preferences), set_voice
 (voice profile pointer), delete_account (remove). Nothing outside this module
 edits the manifest, so the sealed-store swap has one seam.
 
+Every one of them runs inside `_manifest_transaction`, which holds an exclusive
+lock across the read and the write. The web tier is a threaded server that races
+itself and the mail daemon is a second process, and the file is read whole,
+edited in one field and written whole, so without the lock the later writer's
+stale copy silently reverts the earlier one.
+
 Each of those writers records what it did to backend.audit, after the write
 rather than before it, so the log never claims a change the manifest did not
 take. The call belongs here rather than in the route handlers for the same
@@ -48,10 +54,13 @@ a nested-wrapped record (backend.custody.tokens) that this box cannot open on
 its own.
 """
 
+import contextlib
+import fcntl
 import json
 import os
 import re
 import shutil
+import threading
 from pathlib import Path
 
 from backend import audit, paths, secrets
@@ -291,12 +300,97 @@ def _write_manifest(data):
     The web tier writes it too, which is the one thing about this file the uid
     split does not change and the reason a repointed telegram target is still
     reachable from a compromised web process. Closing that means the manifest
-    stops being a file the web tier can write at all."""
+    stops being a file the web tier can write at all.
+
+    Only reachable from inside `_manifest_transaction`, and the assert says so:
+    the rename is atomic, so a caller that read outside the lock still writes a
+    whole file -- it just writes one built from a copy that has since been
+    superseded."""
+    assert _in_transaction(), (
+        "_write_manifest outside _manifest_transaction: the read it is built "
+        "from was unlocked, so a concurrent writer's change is about to be lost"
+    )
     secure_dir(ACCOUNTS_DIR)
     tmp = MANIFEST.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2))
     tmp.chmod(paths.file_mode())
     tmp.replace(MANIFEST)
+
+
+# Serialises read-modify-write of the manifest. Two locks because there are two
+# kinds of concurrent writer and neither covers the other: the web tier is a
+# ThreadingHTTPServer and races itself across threads, and the mail daemon is a
+# different process entirely (register_account, set_plan_status from the billing
+# pass and the reconcile, set_telegram from chat_link.finish).
+#
+# The rename is atomic, so the file was never torn. What was lost was updates:
+# each mutator read the whole manifest, changed one field and wrote all of it
+# back, so the later writer's stale copy silently reverted the earlier one. A
+# plan flip discarded by a settings save, a Telegram unlink discarded by a
+# billing event, and the one that matters -- delete_account racing any other
+# writer, where the other writer's copy of the account list still holds the
+# deleted entry and puts it back. The files are crypto-shredded by then, so what
+# returns is a row nobody can open carrying the user's address, timezone and
+# chat id, after they asked to be deleted.
+#
+# Reads are deliberately unlocked: they see one whole version of the file or
+# another, which is all a read needs.
+_thread_lock = threading.RLock()
+_local = threading.local()
+
+
+def _in_transaction():
+    return getattr(_local, "depth", 0) > 0
+
+
+def manifest_lock_path():
+    """The lock file, beside the manifest it guards. Derived rather than a
+    constant so it follows `MANIFEST` when a test redirects the store."""
+    return MANIFEST.with_suffix(".lock")
+
+
+@contextlib.contextmanager
+def _manifest_transaction(what, missing_ok=False):
+    """Read the manifest, let the caller mutate it, write it back -- with no
+    other writer able to interleave.
+
+    `what` names the operation for the assert a missing store raises, so every
+    mutator states its own reason rather than sharing a vague one. `missing_ok`
+    is register_account alone: it is the one writer that legitimately creates
+    the store, and every other writer needs an account that already exists.
+
+    The write happens on a clean exit and only when something actually changed,
+    so a settings save that changed nothing does not rewrite the file and a
+    delete that matched nothing does not either. An exception out of the body
+    leaves the manifest exactly as it was.
+
+    Nesting is refused rather than left to hang. The thread lock is re-entrant
+    but `flock` is not: a second `open()` in this process is a second open file
+    description, so a mutator calling another mutator would block on itself
+    forever. None does today, and this is what says so if one starts to."""
+    assert not _in_transaction(), (
+        f"cannot {what}: a manifest transaction is already open on this thread, "
+        "and the file lock would deadlock against itself"
+    )
+    secure_dir(ACCOUNTS_DIR)
+    with _thread_lock, open(manifest_lock_path(), "a") as handle:
+        paths.group_file(manifest_lock_path(), paths.data_gid())
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        _local.depth = getattr(_local, "depth", 0) + 1
+        try:
+            data = _read_manifest()
+            assert data is not None or missing_ok, (
+                f"cannot {what} without an accounts manifest at {MANIFEST}"
+            )
+            if data is None:
+                data = {"accounts": []}
+            before = json.dumps(data, sort_keys=True)
+            yield data
+            if json.dumps(data, sort_keys=True) != before:
+                _write_manifest(data)
+        finally:
+            _local.depth -= 1
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def owner_identity():
@@ -451,6 +545,12 @@ def all_accounts():
         "two accounts share an opaque handle, so one can open the other's "
         "records and spend the other's co-signer budget"
     )
+    customers = [a.polar_customer_id for a in accounts if a.polar_customer_id]
+    assert len(customers) == len(set(customers)), (
+        "two accounts share a Polar customer id, so account_for_customer_id "
+        "returns whichever the manifest lists first and the reconcile decides "
+        "a third party's entitlement"
+    )
     return accounts
 
 
@@ -570,48 +670,52 @@ def register_account(email, first, last, *, token_file=None, first_aliases=(),
     # account's own directory, which is why _owned_paths does not delete it.
     if state_file:
         entry["state_file"] = str(state_file)
-    data = _read_manifest() or {"accounts": []}
-    accounts = data["accounts"]
-    for i, existing in enumerate(accounts):
-        if existing["id"].strip().lower() == email:
-            # A returning user re-consenting must not lose what they configured.
-            # The handle least of all: every record this account owns is
-            # encrypted with it as the salt and the AAD, so a new one on a
-            # re-consent would leave the user's own data unreadable.
-            if existing.get("handle"):
-                entry["handle"] = check_handle(existing["handle"])
-            entry["plan_status"] = existing.get("plan_status", plan_status)
-            entry["telegram"] = {**existing.get("telegram", {}), **telegram}
-            entry["timezone"] = existing.get("timezone", entry["timezone"])
-            entry["auto_schedule"] = existing.get("auto_schedule", entry["auto_schedule"])
-            # The rest of what set_settings owns, carried by presence rather than
-            # by truthiness: a stored False is a choice the user made, and a
-            # truthiness test would silently reset it to the default on the next
-            # consent. A re-consent is a Google round trip, not a preferences
-            # reset.
-            for setting in ("inference_provider", "pii_analyzer", "ban_dashes",
-                            "community_calendar"):
-                if setting in existing:
-                    entry[setting] = existing[setting]
-            # token_file is carried for the seed's sake: seeding the owner after
-            # they have already signed in must not drop the custody record the
-            # sign-in wrote, since nothing outside a consent can recreate it.
-            for carried in ("polar_customer_id", "voice_file", "token_file"):
-                if existing.get(carried) and carried not in entry:
-                    entry[carried] = existing[carried]
-            if existing.get("state_file") and "state_file" not in entry:
-                entry["state_file"] = existing["state_file"]
-            accounts[i] = entry
-            outcome = "updated"
-            break
-    else:
-        if len(accounts) >= MAX_ACCOUNTS:
-            raise AccountLimitReached(
-                f"account store is at its {MAX_ACCOUNTS}-account limit"
-            )
-        accounts.append(entry)
-        outcome = "created"
-    _write_manifest(data)
+    # The whole read-modify-write is inside the lock, MAX_ACCOUNTS included: a
+    # ceiling decided on a list read before another signup wrote is not a
+    # ceiling.
+    with _manifest_transaction("register an account", missing_ok=True) as data:
+        accounts = data["accounts"]
+        for i, existing in enumerate(accounts):
+            if existing["id"].strip().lower() == email:
+                # A returning user re-consenting must not lose what they
+                # configured. The handle least of all: every record this account
+                # owns is encrypted with it as the salt and the AAD, so a new one
+                # on a re-consent would leave the user's own data unreadable.
+                if existing.get("handle"):
+                    entry["handle"] = check_handle(existing["handle"])
+                entry["plan_status"] = existing.get("plan_status", plan_status)
+                entry["telegram"] = {**existing.get("telegram", {}), **telegram}
+                entry["timezone"] = existing.get("timezone", entry["timezone"])
+                entry["auto_schedule"] = existing.get("auto_schedule",
+                                                      entry["auto_schedule"])
+                # The rest of what set_settings owns, carried by presence rather
+                # than by truthiness: a stored False is a choice the user made,
+                # and a truthiness test would silently reset it to the default on
+                # the next consent. A re-consent is a Google round trip, not a
+                # preferences reset.
+                for setting in ("inference_provider", "pii_analyzer", "ban_dashes",
+                                "community_calendar"):
+                    if setting in existing:
+                        entry[setting] = existing[setting]
+                # token_file is carried for the seed's sake: seeding the owner
+                # after they have already signed in must not drop the custody
+                # record the sign-in wrote, since nothing outside a consent can
+                # recreate it.
+                for carried in ("polar_customer_id", "voice_file", "token_file"):
+                    if existing.get(carried) and carried not in entry:
+                        entry[carried] = existing[carried]
+                if existing.get("state_file") and "state_file" not in entry:
+                    entry["state_file"] = existing["state_file"]
+                accounts[i] = entry
+                outcome = "updated"
+                break
+        else:
+            if len(accounts) >= MAX_ACCOUNTS:
+                raise AccountLimitReached(
+                    f"account store is at its {MAX_ACCOUNTS}-account limit"
+                )
+            accounts.append(entry)
+            outcome = "created"
     audit.record(email, audit.ACCOUNT, outcome)
     return _account_from_entry(entry)
 
@@ -622,17 +726,13 @@ def set_plan_status(account_id, status):
     here, so the sealed-store swap stays contained to this module."""
     if status not in ("active", "inactive"):
         raise InvalidAccountData(f"invalid plan_status {status!r}")
-    data = _read_manifest()
-    assert data is not None, "cannot set plan_status without an accounts manifest"
-    aid = (account_id or "").strip().lower()
-    for entry in data["accounts"]:
-        if entry["id"].strip().lower() == aid:
-            prior = entry.get("plan_status", "active")
-            entry["plan_status"] = status
-            _write_manifest(data)
-            audit.record(entry["id"], audit.PLAN, status, (f"from:{prior}",))
-            return prior
-    raise KeyError(f"no account with id {account_id!r}")
+    with _manifest_transaction("set plan_status") as data:
+        entry = _entry_for(data, account_id)
+        prior = entry.get("plan_status", "active")
+        entry["plan_status"] = status
+        name = entry["id"]
+    audit.record(name, audit.PLAN, status, (f"from:{prior}",))
+    return prior
 
 
 def _entry_for(data, account_id):
@@ -650,21 +750,19 @@ def set_telegram(account_id, chat_id=None, token=None, clear=False):
     entirely, which is how a user turns notifications off (blanking the field
     used to be a silent no-op)."""
     assert clear or chat_id or token, "set_telegram needs a chat_id, a token, or clear"
-    data = _read_manifest()
-    assert data is not None, "cannot set a telegram target without an accounts manifest"
-    entry = _entry_for(data, account_id)
-    if clear:
-        entry["telegram"] = {}
-        changed = ()
-    else:
-        tg = entry.setdefault("telegram", {})
-        if chat_id:
-            tg["chat_id"] = str(chat_id)
-        if token:
-            tg["token"] = token
-        changed = tuple(name for name, given in (("chat_id", chat_id), ("token", token))
-                        if given)
-    _write_manifest(data)
+    with _manifest_transaction("set a telegram target") as data:
+        entry = _entry_for(data, account_id)
+        if clear:
+            entry["telegram"] = {}
+            changed = ()
+        else:
+            tg = entry.setdefault("telegram", {})
+            if chat_id:
+                tg["chat_id"] = str(chat_id)
+            if token:
+                tg["token"] = token
+            changed = tuple(field for field, given in (("chat_id", chat_id),
+                                                       ("token", token)) if given)
     audit.record(entry["id"], audit.TELEGRAM,
                  "unlinked" if clear else "linked", changed)
     return _account_from_entry(entry)
@@ -677,13 +775,29 @@ def set_polar_customer_id(account_id, customer_id):
     account_for_customer_id() and portal_url() have always read this field, but
     nothing wrote it, so every account carried None: the customer-portal link
     could never render and every billing event had to be resolved by matching the
-    pay-email against the Gmail address. The checkout return sets it."""
+    pay-email against the Gmail address. The checkout return sets it.
+
+    One customer belongs to one account, and taking a customer already linked
+    elsewhere is refused rather than allowed to overwrite. Two accounts holding
+    one customer id makes `account_for_customer_id` return whichever appears
+    first in the manifest, so the reconcile then decides a third party's
+    entitlement; and `portal_url()` mints a Polar customer-portal session for
+    whatever this field names -- payment methods, invoices, the cancel button.
+    Checked inside the transaction because the check and the write have to see
+    the same manifest."""
     assert customer_id, "set_polar_customer_id needs a customer id"
-    data = _read_manifest()
-    assert data is not None, "cannot link a Polar customer without an accounts manifest"
-    entry = _entry_for(data, account_id)
-    entry["polar_customer_id"] = str(customer_id)
-    _write_manifest(data)
+    customer_id = str(customer_id)
+    with _manifest_transaction("link a Polar customer") as data:
+        entry = _entry_for(data, account_id)
+        held_by = [e["id"] for e in data["accounts"]
+                   if e.get("polar_customer_id") == customer_id
+                   and e["id"] != entry["id"]]
+        if held_by:
+            raise InvalidAccountData(
+                f"Polar customer is already linked to {len(held_by)} other "
+                f"account(s); refusing to link it to {entry['id']} as well"
+            )
+        entry["polar_customer_id"] = customer_id
     audit.record(entry["id"], audit.BILLING_CUSTOMER, "linked")
     return _account_from_entry(entry)
 
@@ -699,14 +813,12 @@ def set_voice(account_id, voice_file=None, clear=False):
     voice_dna: save() and clear() each call this exactly once, so logging here
     is one row per edit, and logging in both places would be two."""
     assert clear or voice_file, "set_voice needs a voice_file or clear"
-    data = _read_manifest()
-    assert data is not None, "cannot set a voice profile without an accounts manifest"
-    entry = _entry_for(data, account_id)
-    if clear:
-        entry.pop("voice_file", None)
-    else:
-        entry["voice_file"] = str(voice_file)
-    _write_manifest(data)
+    with _manifest_transaction("set a voice profile") as data:
+        entry = _entry_for(data, account_id)
+        if clear:
+            entry.pop("voice_file", None)
+        else:
+            entry["voice_file"] = str(voice_file)
     audit.record(entry["id"], audit.VOICE, "cleared" if clear else "saved")
     return _account_from_entry(entry)
 
@@ -734,9 +846,6 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
             or pii_analyzer is not None
             or ban_dashes is not None
             or community_calendar is not None), "set_settings needs something to set"
-    data = _read_manifest()
-    assert data is not None, "cannot set settings without an accounts manifest"
-    entry = _entry_for(data, account_id)
     if inference_provider is not None:
         provider = llm_client.PROVIDERS.get(inference_provider)
         assert provider is not None, (
@@ -755,25 +864,26 @@ def set_settings(account_id, timezone=None, auto_schedule=None,
         ("pii_analyzer", None if pii_analyzer is None else bool(pii_analyzer), True),
         ("ban_dashes", None if ban_dashes is None else bool(ban_dashes), True),
     )
-    changed = tuple(field for field, value, default in asked
-                    if value is not None and entry.get(field, default) != value)
-    for field, value, _ in asked:
-        if value is not None:
-            entry[field] = value
-    if community_calendar is not None:
-        calendar = community_calendar.strip().lower()
-        if calendar and not CALENDAR_ID_RE.fullmatch(calendar):
-            raise InvalidAccountData(
-                f"{calendar!r} is not a calendar id; the caller validates this "
-                "before asking, so reaching here means an unchecked path"
-            )
-        if entry.get("community_calendar", "") != calendar:
-            changed += ("community_calendar",)
-        if calendar:
-            entry["community_calendar"] = calendar
-        else:
-            entry.pop("community_calendar", None)
-    _write_manifest(data)
+    with _manifest_transaction("set settings") as data:
+        entry = _entry_for(data, account_id)
+        changed = tuple(field for field, value, default in asked
+                        if value is not None and entry.get(field, default) != value)
+        for field, value, _ in asked:
+            if value is not None:
+                entry[field] = value
+        if community_calendar is not None:
+            calendar = community_calendar.strip().lower()
+            if calendar and not CALENDAR_ID_RE.fullmatch(calendar):
+                raise InvalidAccountData(
+                    f"{calendar!r} is not a calendar id; the caller validates this "
+                    "before asking, so reaching here means an unchecked path"
+                )
+            if entry.get("community_calendar", "") != calendar:
+                changed += ("community_calendar",)
+            if calendar:
+                entry["community_calendar"] = calendar
+            else:
+                entry.pop("community_calendar", None)
     audit.record(entry["id"], audit.SETTINGS,
                  "saved" if changed else "unchanged", changed)
     return _account_from_entry(entry)
@@ -808,22 +918,23 @@ def delete_account(account_id):
     would leave a wrapped token on disk with nothing referencing it. Returns
     True when an entry was removed.
 
-    Not revocation: the token stops being ours but stays valid at Google until
-    the user revokes access in their account settings.
+    Revocation is not this function's job and must already have happened:
+    `handoff.OP_ACCOUNT_FORGET` withdraws the Google grant and stops the mailbox
+    watch, and the caller runs it first because both need the refresh token and
+    the key that reads it is destroyed below. Called the other way round they
+    are not merely skipped, they become impossible.
 
     The account's audit rows are the one thing that does not go with it. The row
     saying an account was deleted is worth more than any other row in the table,
     and a log a user can empty by asking is not a log; backend.audit.RETENTION_DAYS
     is what bounds how long their address stays there."""
-    data = _read_manifest()
-    assert data is not None, "cannot delete an account without an accounts manifest"
     aid = (account_id or "").strip().lower()
-    remaining = [e for e in data["accounts"] if e["id"].strip().lower() != aid]
-    removed = [e for e in data["accounts"] if e["id"].strip().lower() == aid]
+    with _manifest_transaction("delete an account") as data:
+        removed = [e for e in data["accounts"] if e["id"].strip().lower() == aid]
+        data["accounts"] = [e for e in data["accounts"]
+                            if e["id"].strip().lower() != aid]
     if not removed:
         return False
-    data["accounts"] = remaining
-    _write_manifest(data)
     audit.record(removed[0]["id"], audit.ACCOUNT, "deleted")
     # The data key first, then the files it opened. That order is what makes
     # this a deletion rather than an unlinking: everything below becomes bytes

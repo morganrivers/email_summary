@@ -115,6 +115,33 @@ def test_dev_insecure_is_refused_on_a_pinned_box():
     assert "looks provisioned for production" in str(err.value)
 
 
+def test_the_enclave_cannot_spell_the_escape_hatches(tmp_path, monkeypatch):
+    """`Policy.mode()` refuses dev-insecure while the allowlist has entries --
+    but repointing the path at an empty file satisfies both halves at once, and
+    then every confidential provider passes unverified. Neither variable appears
+    in the compose file, so today the measurement is what prevents it, which
+    puts the whole check one line away in a file whose every other line is
+    deliberate. The escape hatches are for a laptop."""
+    empty = tmp_path / "allowlist.json"
+    empty.write_text(json.dumps({"mode": "dev-insecure", "measurements": []}))
+
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    att.reset_for_test(empty)
+    assert att.mode() == quote_policy.DEV_INSECURE, "a laptop can still turn it off"
+
+    monkeypatch.setenv("TEE_REQUIRED", "1")
+    with pytest.raises(quote_policy.AllowlistInvalid, match="TEE_REQUIRED"):
+        att.mode()
+    verdict = att.verify(provider("nearai-glm"))
+    assert not verdict.ok, "a refused allowlist must be a denial, not a traceback"
+
+    # And the mode override alone is ignored rather than honoured, so the
+    # measured pin list decides even when someone sets the variable.
+    att.reset_for_test()
+    monkeypatch.setenv("LETTERLOCK_INFERENCE_ATTESTATION", "dev-insecure")
+    assert att.mode() == quote_policy.REQUIRED
+
+
 def test_require_raises_rather_than_returning_an_unverified_client(monkeypatch):
     monkeypatch.setattr(att, "verify", lambda p: quote_policy.Verdict(
         False, p.name, reason="measurement is not on the allowlist", measurement="abc"))

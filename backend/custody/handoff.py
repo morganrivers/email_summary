@@ -86,8 +86,29 @@ OP_CHAT_FORGET = "chat-forget"
 # The names that come back are catalogue keys, never a key or any part of one.
 OP_PROVIDERS = "providers"
 
+# Everything the mail role has to let go of before an account is deleted, and
+# the two things only it can still do while the account's data key exists.
+#
+# It crosses for the original reason -- a Google token, and the credential that
+# obtains one -- but the pressing half is that deletion runs in the *web*
+# process. `keyring.destroy` clears that process's cache and unlinks the record;
+# the daemon is a different process and goes on holding this account's data key
+# for up to `DEK_TTL`, its access token for up to an hour, a Google service
+# object per thread, and a voice job that `clear_status` will not remove while
+# it runs. A deletion racing a running generation ends with `write_encrypted`
+# recreating `database/<id>/` and writing a file into it after the user asked to
+# be erased -- unreadable, since the record is gone, but the directory, its name
+# and its timestamps are back.
+#
+# The two outbound calls are here because ordering forces them: revoking the
+# Google grant and stopping the mailbox watch both need the refresh token, and
+# the refresh token is unreadable the moment the key is destroyed. Neither is
+# allowed to fail the deletion.
+OP_ACCOUNT_FORGET = "account-forget"
+
 OPS = (OP_AUTH_URL, OP_SIGN_IN, OP_VOICE_START, OP_VOICE_STATUS, OP_VOICE_CLEAR,
-       OP_CHAT_BEGIN, OP_CHAT_FINISH, OP_CHAT_FORGET, OP_PROVIDERS)
+       OP_CHAT_BEGIN, OP_CHAT_FINISH, OP_CHAT_FORGET, OP_PROVIDERS,
+       OP_ACCOUNT_FORGET)
 
 # Which Telegram change is pending. Named here rather than beside the rule that
 # decides it, because the deciding is `chat_link`'s and this is only what the
@@ -103,6 +124,22 @@ F_RESULT = "result"
 F_ERROR = "error"
 F_CODE = "code"
 F_MSG = "msg"
+
+# The one status whose `msg` the web tier may put on a page as it stands.
+#
+# Everything else the daemon refuses with is written for a log: a
+# `ProvisionError` carries whatever Google put in the callback's `error`
+# parameter, and a `RemoteRefusal` names the account. Those render as a generic
+# sentence and the detail stays in the daemon's journal. 409 is the exception,
+# and it is one on purpose -- it is the code `handoff_server` gives a
+# `chat_link.ChangeRefused`, whose whole content is an instruction the user has
+# to read to finish what they started, and whose text is a fixed string checked
+# against `chat_link.USER_MESSAGES`.
+#
+# Stated here rather than at the two call sites because the rule is about the
+# wire and the asking side must be able to read it without importing the module
+# that holds the bypass.
+RENDERABLE_CODE = 409
 
 
 def socket_path():
@@ -246,6 +283,23 @@ def chat_finish(account_id):
 
 def chat_forget(account_id):
     call(OP_CHAT_FORGET, account_id=account_id)
+
+
+def account_forget(account_id):
+    """Ask the daemon to release everything it holds for an account, and to
+    withdraw the Google grant while that is still possible. Returns the daemon's
+    report as a dict of what it managed.
+
+    Called *before* `account.delete_account`, never after: once the data key is
+    destroyed the refresh token is bytes nobody can read, so revocation and
+    `users.stop` stop being available at all. A user who deletes their account
+    would otherwise have Letterlock listed on their Google security page
+    indefinitely with a live grant we cannot withdraw.
+
+    The caller does not abort a deletion because this failed. Deleting is the
+    thing the user asked for; the rest is best effort and the daemon says which
+    parts it managed."""
+    return call(OP_ACCOUNT_FORGET, account_id=account_id)
 
 
 _providers_cache = None

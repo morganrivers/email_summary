@@ -2,10 +2,15 @@
 
 Two entrypoints, one module (single source of the attestation boot sequence):
 
-  python tee_boot.py            attest-before-run gate. Run by the container
+  python tee_boot.py <role>     attest-before-run gate. Run by the container
                                 entrypoint before daemon/webhook start. When
                                 TEE_REQUIRED=1 it fails closed unless the CVM is
                                 genuinely attested and secrets were released.
+                                The role is the compose `command:` -- what a
+                                container must be provisioned with is a function
+                                of which container it is, since the compose file
+                                hands each one a different subset and that
+                                partition is what RTMR3 measures.
 
   python tee_boot.py --selftest F1 hello-world: exercise KMS unseal + RA-TLS +
                                 quote against the live guest agent and print the
@@ -75,7 +80,65 @@ def _assert_expected_measurement(info: dict) -> None:
     )
 
 
-def run_gate() -> int:
+def _inference_attestable() -> str | None:
+    """Can every confidential provider be decided about? A capability and not a
+    secret, which is why it is here and not in ``backend/secrets.py``: it asks
+    whether the dcap-qvl wheel made it into the image and whether the provider's
+    enclave is pinned. Both are properties of the build.
+
+    The same call `deploy/preflight.py` makes, so the box and the image report
+    an unpinned image the same way. Without it a build that dropped the wheel
+    starts cleanly and refuses every confidential draft at the first email, with
+    the reason buried in a per-draft log line."""
+    from backend.integrations import inference_attestation, llm_client
+
+    return inference_attestation.configured(llm_client.PROVIDERS.values())
+
+
+def _host_overridden() -> str | None:
+    """Every externally visible URL this role mints must name this deployment.
+
+    ``backend/site.py`` compiles in the Hetzner hostnames as defaults. A CVM
+    that does not override them redirects Google's consent to the box's
+    ``/auth/callback``, which holds a different SESSION_SECRET and a different
+    state cookie -- so either sign-in is refused as "did not start in this
+    browser" or, if the two share a session secret, the box exchanges the
+    authorization code and takes custody of the refresh token. Same for the
+    checkout return URL and every link in a Telegram message."""
+    from backend import site
+
+    stale = [name for name, value, default in (
+        ("LETTERLOCK_HOST", site.APP_HOST, site.DEFAULT_APP_HOST),
+        ("LETTERLOCK_API_HOST", site.API_HOST, site.DEFAULT_API_HOST),
+    ) if value == default]
+    if stale:
+        return (f"{', '.join(stale)} still names the Hetzner deployment; every "
+                "URL this role mints would send the user to the other box")
+    return None
+
+
+# What each role needs beyond its secrets, asked at boot in the container that
+# needs it. Kept apart from ``secrets.REQUIRED_BY_ROLE`` because these are
+# properties of the image and of this deployment's configuration rather than
+# values the KMS releases, and because the compose file cannot satisfy them by
+# naming a variable.
+CAPABILITIES_BY_ROLE = {
+    "mail": (_inference_attestable, _host_overridden),
+    "web": (_host_overridden,),
+    "hook": (),
+}
+
+
+def _role_from(argv: list[str]) -> str:
+    """Which container this is. The compose `command:` is the statement of
+    record, so the entrypoint passes it straight through; LETTERLOCK_ROLE is the
+    fallback for a hand-run gate."""
+    positional = [a for a in argv if not a.startswith("-")]
+    role = (positional[0] if positional else os.environ.get("LETTERLOCK_ROLE", "")).strip()
+    return role
+
+
+def run_gate(role: str = "") -> int:
     client = DstackClient()
 
     if not secrets.tee_required():
@@ -84,6 +147,12 @@ def run_gate() -> int:
         else:
             print("[tee_boot] no dstack socket and TEE_REQUIRED unset (dev/non-TEE host).")
         return 0
+
+    if role not in secrets.REQUIRED_BY_ROLE:
+        print(f"[tee_boot] FAIL-CLOSED: TEE_REQUIRED but role {role!r} is not one of "
+              f"{sorted(secrets.REQUIRED_BY_ROLE)}; the gate cannot know what to "
+              "require of a container it cannot name.", file=sys.stderr)
+        return 1
 
     on_volume = secrets.volume_secrets()
     if on_volume:
@@ -120,8 +189,11 @@ def run_gate() -> int:
     # backend/secrets.py -- the same checks the deploy preflight runs. This was
     # a list of four variable names here, so the gate passed without
     # SESSION_SECRET, the Polar credentials or the Google OAuth client secret:
-    # a gate that names its own subset drifts from the services it gates.
-    gaps = secrets.missing()
+    # a gate that names its own subset drifts from the services it gates. It is
+    # asked per role because the compose file answers per role.
+    gaps = secrets.missing(role) + [
+        reason for reason in (check() for check in CAPABILITIES_BY_ROLE[role]) if reason
+    ]
     if gaps:
         for reason in gaps:
             print(f"[tee_boot] FAIL-CLOSED: attested but not provisioned: {reason}",
@@ -130,7 +202,7 @@ def run_gate() -> int:
 
     _write_attestation_record(info, tls, quote)
     print(
-        "[tee_boot] attested. "
+        f"[tee_boot] attested role={role}. "
         f"app_id={info.get('app_id')} compose_hash={info.get('compose_hash')} "
         f"mr_aggregated={info.get('mr_aggregated')}"
     )
@@ -169,7 +241,7 @@ def run_selftest() -> int:
 def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         return run_selftest()
-    return run_gate()
+    return run_gate(_role_from(argv))
 
 
 if __name__ == "__main__":

@@ -40,6 +40,15 @@ AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 # own judgement rather than something the enclave states on the wire.
 TOKEN_ENDPOINT = cosigner_protocol.TOKEN_ENDPOINT
 
+# Where a grant is given back. One caller, `tokens.revoke`, on the deletion
+# path: it is the only way to stop Letterlock appearing on a departed user's
+# Google security page with a live grant. Not the co-signer's business --
+# `/revoke` takes the refresh token itself and signs no proof -- so it is named
+# here beside the other two rather than in `cosigner/protocol.py`. The same host
+# as the token endpoint today, and `backend/egress.py` derives it from this name
+# rather than from that coincidence.
+REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
+
 # openid/email/profile grant the login identity (name + email) alongside the
 # Gmail/Calendar scopes, so one consent yields both the account and the token.
 # Ask for nothing beyond what the code calls: gmail.settings.basic was requested
