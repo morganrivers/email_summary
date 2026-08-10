@@ -52,12 +52,12 @@ _TRUTHY = ("1", "true", "yes")
 # now takes this pair first and refuses the file under TEE_REQUIRED, so inside
 # the enclave these names are the only way in.
 GOOGLE_CLIENT_ID_ENV = "GOOGLE_OAUTH_CLIENT_ID"
-GOOGLE_CLIENT_SECRET_ENV = "GOOGLE_OAUTH_CLIENT_SECRET"
+GOOGLE_CLIENT_SECRET_ENV = "GOOGLE_OAUTH_CLIENT_SECRET"  # nosec B105  # the variable name
 
 # The cookie signing key. frontend/session.py takes the name from here rather
 # than the other way round: deciding where a secret comes from is this module's
 # job, and HMAC-ing a cookie with one is that module's.
-SESSION_SECRET_ENV = "SESSION_SECRET"
+SESSION_SECRET_ENV = "SESSION_SECRET"  # nosec B105  # the variable name
 
 # The key that signed the cookies minted before the last rotation. Accepted at
 # verification, never used to sign. A single-valued signing key cannot be
@@ -67,7 +67,7 @@ SESSION_SECRET_ENV = "SESSION_SECRET"
 # by design, so ``session_configured()`` asks only for the current key: a box
 # that has never rotated has no previous one, and dropping the variable is what
 # finally retires the sessions that key signed.
-SESSION_SECRET_PREVIOUS_ENV = "SESSION_SECRET_PREVIOUS"
+SESSION_SECRET_PREVIOUS_ENV = "SESSION_SECRET_PREVIOUS"  # nosec B105  # the variable name
 
 _loaded = False
 _from_file = set()

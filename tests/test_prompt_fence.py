@@ -19,7 +19,7 @@ from collections import deque
 from types import SimpleNamespace
 
 import pytest
-from harness import FakeOpenAI, Recorder, python_sources, relative
+from harness import FakeOpenAI, Recorder, needs_asserts, python_sources, relative
 
 from backend.drafting import agentic_drafter, voice_generation
 from backend.masking import pseudonymizer
@@ -55,7 +55,10 @@ def test_a_nonce_never_starts_with_a_digit():
         assert not nonce[0].isdigit()
 
 
+@needs_asserts
 def test_a_value_that_is_not_a_nonce_is_refused():
+    """A nonce is minted by `new_nonce()` and never supplied from outside the
+    process, so this is a check on our own callers and stays an assert."""
     for bad in ("", "abcdefghijklmnop", "1BCDEFGHIJKLMNOP", "ABCDEFGHIJKLMNO",
                 "ABCDEFGHIJKLMNOPQ", "ABCDEFGH-JKLMNOP"):
         with pytest.raises(AssertionError):
@@ -175,10 +178,14 @@ def test_a_masking_failure_stops_the_request_rather_than_degrading_it(monkeypatc
     assert not rec.llm_calls, "a masking failure still reached the provider"
 
 
+@needs_asserts
 def test_drafting_refuses_a_call_with_no_fence():
     """draft() states the rule in the system message, so it has to be handed the
     fence the caller wrapped the email with. A default would silently be a
-    different fence, and the rule would name markers the prompt does not hold."""
+    different fence, and the rule would name markers the prompt does not hold.
+
+    The fence is passed by our own caller, so an assert is the right spelling.
+    What must survive `-O` is the masking refusal above it, which raises."""
     with pytest.raises(AssertionError):
         agentic_drafter.draft(None, "sys", "user", account=object())
 

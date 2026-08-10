@@ -52,7 +52,7 @@ TAG_LEN = 16
 
 _INFO_INNER = b"account-dek"
 
-DEV_SECRET_ENV = "LETTERLOCK_DEV_APP_SECRET"
+DEV_SECRET_ENV = "LETTERLOCK_DEV_APP_SECRET"  # nosec B105  # the variable name
 
 _app_secret_cache = None
 
@@ -66,7 +66,8 @@ def _decode_kms_key(raw):
     rather than guessing wrong on a future agent version."""
     if isinstance(raw, (bytes, bytearray)):
         return bytes(raw)
-    assert isinstance(raw, str) and raw, f"KMS returned no usable key: {raw!r}"
+    if not (isinstance(raw, str) and raw):
+        raise CustodyError(f"KMS returned no usable key: {raw!r}")
     try:
         return bytes.fromhex(raw)
     except ValueError:
@@ -154,12 +155,18 @@ def open_dek(handle, inner, key_version=KEY_VERSION):
     A tag failure means the ciphertext, the handle or the key does not match, and
     the message says exactly that and nothing else. Logging the ciphertext here
     would put the one thing the co-signer is not allowed to see into a log the
-    enclave writes."""
+    enclave writes.
+
+    `handle` is our own caller's and stays an assert. `inner` is not: it is what
+    the co-signer just answered with, or what `keyring.load_record` read off
+    disk, so its shape is refused rather than asserted."""
     assert handle, "open_dek needs an account handle"
-    assert isinstance(inner, (bytes, bytearray)), "inner must be bytes"
-    assert len(inner) > NONCE_LEN + TAG_LEN, (
-        f"inner ciphertext is {len(inner)} bytes, too short to be sealed output"
-    )
+    if not isinstance(inner, (bytes, bytearray)):
+        raise CustodyError(f"inner must be bytes, got {type(inner).__name__}")
+    if len(inner) <= NONCE_LEN + TAG_LEN:
+        raise CustodyError(
+            f"inner ciphertext is {len(inner)} bytes, too short to be sealed output"
+        )
     nonce, sealed = bytes(inner[:NONCE_LEN]), bytes(inner[NONCE_LEN:])
     try:
         plaintext = AESGCM(inner_key(handle, key_version)).decrypt(
@@ -170,9 +177,10 @@ def open_dek(handle, inner, key_version=KEY_VERSION):
             f"inner unwrap failed for {handle} at key_version {key_version}: "
             f"{type(err).__name__}"
         ) from None
-    assert len(plaintext) == KEY_LEN, (
-        f"inner layer opened to {len(plaintext)} bytes, which is not a data key"
-    )
+    if len(plaintext) != KEY_LEN:
+        raise CustodyError(
+            f"inner layer opened to {len(plaintext)} bytes, which is not a data key"
+        )
     return bytearray(plaintext)
 
 

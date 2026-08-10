@@ -1,10 +1,14 @@
 """Neither package starts with assertions compiled out.
 
-Several controls in this tree are spelled as asserts and are the control rather
-than a note about one: the path-traversal check on a token path, the "the JWK
-we publish carries no private key" check, the refusal to accept a quote bound to
-nothing. `python -O` deletes all of them and changes nothing else, which is the
-one way this codebase can be running and unprotected at the same time.
+`python -O` deletes every assert in the tree and changes nothing else, so a boot
+under it is one nobody chose and nobody would notice. This is that refusal, plus
+the two places the flag could arrive without a code review seeing it: a unit
+file and the flake.
+
+It is deliberately not the argument that the code behind it is safe. This guard
+covers only the boots that go through the two package `__init__` files, so what
+answers for the rest is `tests/test_optimized_controls.py`, which runs the
+refusal suites under `-O` and requires them to pass unchanged.
 """
 
 import re

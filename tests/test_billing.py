@@ -289,14 +289,18 @@ def test_a_polar_customer_belongs_to_one_account(tmp_path, monkeypatch):
 
 
 def test_a_manifest_that_already_drifted_is_caught_at_load(tmp_path, monkeypatch):
-    """Asserted on read as well as on write, the same way duplicate handles are:
+    """Refused on read as well as on write, the same way duplicate handles are:
     a store that got into this state before the writer refused it should fail
-    where it is loaded rather than silently at resolve time."""
+    where it is loaded rather than silently at resolve time.
+
+    `InvalidAccountData` rather than `AssertionError` because the subject is the
+    manifest file and not an argument our own caller passed, so `-O` must not
+    delete it."""
     monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
         _entry("a@x.com", polar_customer_id="cus_1"),
         _entry("b@x.com", polar_customer_id="cus_1"),
     ]))
-    with pytest.raises(AssertionError, match="share a Polar customer id"):
+    with pytest.raises(account.InvalidAccountData, match="share a Polar customer id"):
         account.all_accounts()
 
 

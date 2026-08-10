@@ -8,7 +8,9 @@ Boundaries mocked (single choke points):
   arguments) and return canned results. This is the same seam the Node
   subprocess fake used to stand at; the calls happen in process now, so the fake
   is applied to the functions rather than to subprocess.run.
-- Telegram: requests.post -> records the message text.
+- Telegram: http_client.post -> records the message text. That is the one
+  outbound choke point now (backend/http_client.py), so the fake stands where
+  every HTTP call in the tree passes rather than over one library function.
 
 Time is frozen so masked prompts carrying a timestamp stay stable.
 """
@@ -26,12 +28,24 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import identity_fixture
+import pytest
 
 from backend.drafting import agentic_drafter
 from backend.masking import pseudonymizer
 
 REPO_ROOT = Path(__file__).parent.parent
 SOURCE_PACKAGES = ("backend", "frontend", "cosigner", "tools")
+
+# A test whose subject is an assert rather than a refusal. Asserts here state
+# internal invariants, which `-O` is allowed to remove; every check that stands
+# between an input and something it must not reach raises a named type instead.
+# tests/test_optimized_controls.py runs the refusal suites under `-O` to prove
+# that split holds, so these skip there rather than fail. Marking a test with
+# this is a claim that what it pins is a programmer error and not a control.
+needs_asserts = pytest.mark.skipif(
+    not __debug__,
+    reason="pins an internal invariant spelled as an assert, which -O removes",
+)
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"

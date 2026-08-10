@@ -637,9 +637,14 @@ def test_prune_leaves_no_readable_row_behind(log):
     assert (b"d" * 32) not in audit.db_path().read_bytes()
 
 
+@harness.needs_asserts
 def test_prune_never_touches_a_row_a_limiter_still_counts(log, monkeypatch):
     """The floor is derived from the windows rather than restated, so a limiter
-    with a longer window than the retention period refuses to prune at all."""
+    with a longer window than the retention period refuses to prune at all.
+
+    Both sides of that comparison are constants in this repository, so it is an
+    invariant about our own configuration rather than a check on an input, and
+    it stays an assert."""
     since = time.time() - policy.longest_window()
     audit.record(UID, policy.ACTION_UNWRAP, audit.ALLOW)
     assert retention.prune() == (0, 0)

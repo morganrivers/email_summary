@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-import requests
+from backend import http_client
 
 # Where Google serves public calendar feeds. `backend.egress` reads the host off
 # this constant, so the allowlist cannot be left behind by an edit here.
@@ -81,11 +81,13 @@ def is_public(calendar_id):
 
     Redirects are not followed: a 302 to a sign-in page is a 200 to a client
     that follows it, and would read as public. Anything but 200 or 404 raises
-    rather than returning False."""
+    rather than returning False. Not following them is the default in
+    `backend/http_client`, so this reads as a plain request now and the
+    property is the client's rather than this line's."""
     url = public_ics_url(calendar_id)
     try:
-        response = requests.head(url, timeout=TIMEOUT, allow_redirects=False)
-    except requests.RequestException as err:
+        response = http_client.head(url, timeout=TIMEOUT)
+    except http_client.TransportError as err:
         raise PublicProbeFailed(f"cannot reach the public calendar feed ({err})") from err
     if response.status_code == 200:
         return True

@@ -7,7 +7,7 @@ ones (unpaid, no Telegram linked, no voice profile, billing portal
 unavailable), and manufacturing those in a live session means editing the
 account manifest by hand.
 
-    python -m tools.render_pages            # write to /tmp/letterlock-pages
+    python -m tools.render_pages            # write under $XDG_CACHE_HOME
     python -m tools.render_pages --open     # ...and open the index
     python -m tools.render_pages --out DIR
 
@@ -28,7 +28,7 @@ from pathlib import Path
 # bot's username, and a render must not make network calls with a real token.
 os.environ.setdefault("DEEPSEEK_API_KEY", "render-placeholder")
 os.environ.setdefault("SESSION_SECRET", "render-placeholder")
-os.environ["TELEGRAM_BOT_TOKEN"] = ""
+os.environ["TELEGRAM_BOT_TOKEN"] = ""  # nosec B105  # empties it on purpose
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -45,7 +45,21 @@ from backend.integrations.telegram import TelegramTarget  # noqa: E402
 from backend.masking import pseudonymizer  # noqa: E402
 from frontend import web_server as web  # noqa: E402
 
-OUT_DEFAULT = Path("/tmp/letterlock-pages")  # nosec B108  # dev tool output, named on purpose
+
+def cache_root():
+    """Where a rendered dump goes by default.
+
+    Not `/tmp`. That directory is shared and world-writable, the name here is
+    predictable, and `render()` calls `mkdir(exist_ok=True)` and then writes
+    through whatever it finds -- so anyone else on the box can pre-create the
+    directory or plant symlinks in it and choose where these files land. The
+    per-user cache directory is the same idea with none of that: still a stable
+    name a person can reopen, and 0700 to them."""
+    base = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
+    return Path(base) / "letterlock" / "pages"
+
+
+OUT_DEFAULT = cache_root()
 
 # route -> output filename, used both to name files and to rewrite nav links.
 ROUTES = {

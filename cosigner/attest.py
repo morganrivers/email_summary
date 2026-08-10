@@ -142,15 +142,23 @@ def report_data_for_cert(cert):
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )).digest()
-    raise AssertionError(f"unknown report_data binding {binding!r} in {config_path()}")
+    raise quote_policy.AllowlistInvalid(
+        f"unknown report_data binding {binding!r} in {config_path()}"
+    )
 
 
 def extract_quote(cert):
     """The TDX quote out of the RA-TLS certificate extension named in the
     config. None when the certificate carries no such extension, which for a
-    connection claiming to be the enclave is a denial, not a fallback."""
+    connection claiming to be the enclave is a denial, not a fallback.
+
+    An unset `quote_oid` is a refusal for the same reason the binding above is:
+    the value comes out of a file an operator edits, and asserting it would let
+    `-O` turn "this box cannot find a quote" into "this certificate carries
+    none", which reads as a denial only by accident."""
     oid = config().get("quote_oid")
-    assert oid, f"quote_oid is not set in {config_path()}"
+    if not oid:
+        raise quote_policy.AllowlistInvalid(f"quote_oid is not set in {config_path()}")
     try:
         ext = cert.extensions.get_extension_for_oid(x509.ObjectIdentifier(oid))
     except x509.ExtensionNotFound:

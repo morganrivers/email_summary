@@ -181,34 +181,66 @@ def record(uid, action, decision, reason=None, fingerprint=None, measurement=Non
             )
 
 
-def _action_clause(action):
-    """`(sql, args)` restricting a count to one action or to a set of them.
+# Every query the limiter counts with, each a whole literal. There is no SQL in
+# this module built by concatenation or formatting, and no reason for the next
+# one to be: the counters used to append an `IN (?,?)` clause assembled from the
+# action set, which was placeholders and safe, and which was also a string-
+# building step inside the two functions that decide how much of the user base
+# one compromised enclave may unwrap. A wrong answer there does not corrupt a
+# row, it quietly raises the ceiling.
+COUNT_ALL = "SELECT COUNT(*) FROM requests WHERE decision = ? AND ts >= ?"
+COUNT_ALL_FOR_UID = (
+    "SELECT COUNT(*) FROM requests WHERE decision = ? AND ts >= ? AND uid = ?"
+)
+COUNT_ACTION = (
+    "SELECT COUNT(*) FROM requests WHERE decision = ? AND ts >= ? AND action = ?"
+)
+COUNT_ACTION_FOR_UID = (
+    "SELECT COUNT(*) FROM requests "
+    "WHERE decision = ? AND ts >= ? AND action = ? AND uid = ?"
+)
+UIDS_FOR_ACTION = (
+    "SELECT DISTINCT uid FROM requests WHERE decision = ? AND ts >= ? AND action = ?"
+)
 
-    A set rather than one string because a limiter whose subject is "the ways to
-    get a key" has to count them together; written here rather than as a second
-    query in the caller so both counters ask the same question the same way."""
+
+def _actions(action):
+    """The actions a count covers: one, several, or None for every action.
+
+    Deduplicated, because the counts below are summed per action rather than
+    taken from one `IN` clause. `IN (?, ?)` with the same action twice matches
+    each row once and a sum would count it twice, so the two spellings would
+    disagree exactly when a caller repeated itself."""
     if action is None:
-        return "", []
+        return None
     if isinstance(action, str):
-        return " AND action = ?", [action]
-    actions = list(action)
+        return (action,)
+    actions = tuple(dict.fromkeys(action))
     assert actions, "an empty action set counts nothing and is never what a caller meant"
-    return f" AND action IN ({','.join('?' * len(actions))})", actions
+    return actions
 
 
 def granted_since(since, action=None, uid=None):
     """How many requests were allowed in a window. The rate limiter's only
     source of counts, so what it enforced and what this log shows cannot
-    disagree. `action` is one action, a set of them, or None for all."""
-    clause, action_args = _action_clause(action)
-    sql = ("SELECT COUNT(*) FROM requests "
-           "WHERE decision = ? AND ts >= ?" + clause)  # nosec B608  # clause is placeholders only
-    args = [ALLOW, float(since)] + action_args
-    if uid is not None:
-        sql += " AND uid = ?"
-        args.append(uid)
+    disagree. `action` is one action, a set of them, or None for all.
+
+    A set is counted one action at a time and summed. Every row carries exactly
+    one action, so the actions partition the rows and the sum is what a single
+    `IN` clause would have returned."""
+    actions = _actions(action)
     with _LOCK:
-        return connect().execute(sql, args).fetchone()[0]
+        conn = connect()
+        if actions is None:
+            args = [ALLOW, float(since)] + ([uid] if uid is not None else [])
+            sql = COUNT_ALL_FOR_UID if uid is not None else COUNT_ALL
+            return conn.execute(sql, args).fetchone()[0]
+        sql = COUNT_ACTION_FOR_UID if uid is not None else COUNT_ACTION
+        total = 0
+        for one in actions:
+            args = [ALLOW, float(since), one] + ([uid] if uid is not None else [])
+            total += conn.execute(sql, args).fetchone()[0]
+        return total
 
 
 def distinct_uids_since(since, action):
@@ -217,15 +249,20 @@ def distinct_uids_since(since, action):
     The shape the per-user and aggregate ceilings both miss: a sweep that
     touches every account once each is, per account, indistinguishable from
     normal use. Counting accounts rather than requests is what tells the two
-    apart, and `requests_ts` already indexes it."""
+    apart, and `requests_ts` already indexes it.
+
+    Distinct counts do not partition the way counts do, so this selects the uids
+    per action and unions them here rather than summing. What comes back is one
+    row per account that was allowed the action, which is the quantity the
+    threshold is already about."""
     assert action, "distinct_uids_since is only meaningful for a named action"
-    clause, action_args = _action_clause(action)
+    seen = set()
     with _LOCK:
-        return connect().execute(
-            "SELECT COUNT(DISTINCT uid) FROM requests "
-            "WHERE decision = ? AND ts >= ?" + clause,  # nosec B608  # clause is placeholders only
-            [ALLOW, float(since)] + action_args,
-        ).fetchone()[0]
+        conn = connect()
+        for one in _actions(action):
+            seen.update(row[0] for row in
+                        conn.execute(UIDS_FOR_ACTION, [ALLOW, float(since), one]))
+    return len(seen)
 
 
 def ever_granted(uid, action):

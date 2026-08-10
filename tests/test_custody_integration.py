@@ -120,7 +120,7 @@ def split_custody(tmp_path, monkeypatch):
         monkeypatch.setenv(oauth_app.KEYS_ENV, str(keys))
 
         google = FakeGoogle()
-        monkeypatch.setattr(tokens.requests, "post", google.post)
+        monkeypatch.setattr(tokens.http_client, "post", google.post)
         monkeypatch.setattr(tokens, "_dpop_nonce", None)
         tokens.forget()
         cosigner.reset_cache()

@@ -35,7 +35,7 @@ import threading
 import time
 import traceback
 
-import requests
+from backend import http_client
 
 API_ROOT = "https://api.telegram.org"
 TIMEOUT = 10
@@ -77,7 +77,7 @@ def call(method, payload, token=None):
         log(f"{method} skipped: no TELEGRAM_BOT_TOKEN configured")
         return None
     try:
-        resp = requests.post(
+        resp = http_client.post(
             f"{API_ROOT}/bot{token}/{method}", json=payload, timeout=TIMEOUT,
         )
         body = resp.json()

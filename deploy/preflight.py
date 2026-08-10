@@ -27,9 +27,9 @@ import sys
 from pathlib import Path
 
 from backend import paths, secrets, secrets_checks
+from tools import reachability
 
 UNIT_DIR = Path(__file__).resolve().parent / "hetzner"
-_EXEC_MODULE = re.compile(r"^ExecStart=.*?\s-m\s+(\S+)", re.MULTILINE)
 _LOAD_CREDENTIAL = re.compile(r"^LoadCredentialEncrypted=[^:]+:(\S+)", re.MULTILINE)
 
 secrets.load()
@@ -179,15 +179,30 @@ CONFIG_CHECKS = {
 def unit_module(unit):
     """The Python module a unit runs, read from its ExecStart. Timers resolve
     through the same-basename service. None when the unit runs something that is
-    not a Python module (or the unit file is missing)."""
+    not a Python module (or the unit file is missing).
+
+    The name is checked into the shape of a dotted module before it leaves here,
+    because `imports_cleanly()` puts it inside a string an interpreter then
+    executes. The argument list means there is no shell and the source is a file
+    in this repository rather than a request, so this is not a live hole; it is
+    the shape worth removing on sight, and the check is one regex. A unit file
+    naming something else is a broken repository and stops the run rather than
+    skipping one unit.
+
+    Both the expression that finds the name and the one that judges it come from
+    `tools.reachability`, which reads the same `ExecStart=` lines out of the same
+    files to decide what ships. Two copies would be two answers to one
+    question."""
     name = unit if unit.endswith((".service", ".timer")) else f"{unit}.service"
     if name.endswith(".timer"):
         name = f"{name[:-6]}.service"
     path = UNIT_DIR / name
     if not path.exists():
         return None
-    m = _EXEC_MODULE.search(path.read_text())
-    return m.group(1) if m else None
+    m = reachability.EXEC_MODULE_RE.search(path.read_text())
+    if not m:
+        return None
+    return reachability.check_module_name(m.group(1), path.name)
 
 
 def unit_for_module(module):

@@ -129,14 +129,28 @@ one commit and bury every diff under it.
 
 bandit runs from the same module and asks the third question: is this call one
 of the known-dangerous ones (`yaml.load`, `verify=False`, `shell=True`, an
-insecure hash, a request with no timeout). It reads no `setup.cfg`, so its one
-piece of configuration is `test_lint.SKIPS`, a check id to the reason it is
-wrong here every time — `B101` above all, since asserts in this tree are the
-control rather than a note about one and `runtime_guard` already refuses to
-start under `-O`. Anything not in that list is a `# nosec <id>  # reason` on the
-line, the way `# noqa` is already used; there are four. It scans the shipped
-packages and not `tests/`, where fake credentials and swallowed exceptions are
-the point.
+insecure hash, a request with no timeout). It reads no `setup.cfg`, so its
+configuration is in `test_lint.py`, and it runs **twice**, because two bodies of
+code here have different rules. `SHIPPED` is what a unit starts and what the
+image carries, scanned with nothing skipped but `B101`; `OPERATOR` is `deploy/`
+and `tools/`, run by hand and in neither a unit nor the image, and there
+`B404`/`B603`/`B607` are skipped. Skipping those tree-wide, which is what the
+first pass did, means the day something under `backend/` grows a
+`subprocess.run` there is no warning at all —
+`tests/test_image_manifest.py` holds up the other half by refusing an image that
+carries a `deploy/`, `tests/`, `tools/` or `docs/` file, or a shipped module
+that imports `subprocess` or calls `eval`.
+
+A check id belongs in `SKIPS` only when it is wrong **by construction** here, on
+every line it can fire on. `B101` is the one that qualifies, and its reason is
+now the true one: an assert here states an invariant about our own caller, every
+check whose subject crossed a trust boundary raises a named type, and
+`tests/test_optimized_controls.py` pins that by running the refusal suites under
+`-O`. Everything else is a `# nosec <id>  # reason` on the line, the way `# noqa`
+is already used; there are seven, all `B105` on a constant whose *name* contains
+`token` or `secret`. `B108`, `B310` and `B608` are absent because the code they
+described is gone. It scans the shipped packages and not `tests/`, where fake
+credentials and swallowed exceptions are the point.
 
 `python -m deploy.audit` says whether anything we ship has a known
 vulnerability. It audits `deploy/phala/uv.lock`, not `requirements.txt`: the lock
@@ -563,17 +577,28 @@ A converted check caught into a fallback is worse than the assert was, because
 it reads as handled: `MaskingFailed` in particular must never become "send it
 unmasked", and `tests/test_prompt_fence.py` pins that.
 
-`runtime_guard.py` is why an assert is still an acceptable way to spell a
-control here. Several of them are the control rather than a note about one — the
-path guard in `custody.tokens.token_path`, the `"d" not in jwk` check standing
-between a library change and the co-signer publishing its signing key, the
-length and version checks in `cosigner.keys.unwrap` — and under `-O` or
-`PYTHONOPTIMIZE=1` every one disappears while the process keeps running.
-`require_asserts()` refuses that boot, called from `backend/__init__.py` and
-`cosigner/__init__.py` so no entry point can miss it, and it protects the asserts
-written after today as well as the ones written before. It is not a substitute
-for the rule above: it is one file, and a check that raises on its own does not
-depend on an entry point still importing the package it lives in.
+No control is spelled as an assert, and `runtime_guard.py` is not the reason it
+would be safe to. Under `-O` or `PYTHONOPTIMIZE=1` every assert disappears while
+the process keeps running; `require_asserts()` refuses that boot from
+`backend/__init__.py` and `cosigner/__init__.py`, which is correct and which
+covers only the boots going through those two files. A tool importing a
+submodule, a REPL, or a future entry point gets the stripped build with no
+refusal, so leaning on the guard would make `PYTHONOPTIMIZE` a security setting.
+
+The property instead is that **running under `-O` costs some internal invariant
+checking and no control**. The checks that used to be asserts and are now named
+raises: the `"d" not in jwk` check standing between a library change and the
+co-signer publishing its signing key (`NotConfigured`), the length and version
+checks in `cosigner.keys.unwrap` (`RecordInvalid`), the duplicate-handle and
+missing-manifest refusals in `account.all_accounts` (`InvalidAccountData`), the
+shape of an `inner` in `wrapping.open_dek` and of a KMS response
+(`CustodyError`), the allowlist's `quote_oid` and report_data binding
+(`AllowlistInvalid`), a limit read out of the co-signer's environment.
+`tests/test_optimized_controls.py` is what proves it rather than restating it:
+the refusal suites run in a subprocess under `PYTHONOPTIMIZE=1` with the guard
+patched out, and they fail the moment somebody spells a new control as an
+assert. A test whose subject *is* an assert carries `harness.needs_asserts` and
+skips there, which is a claim that what it pins is a programmer error.
 
 ## Single sources of truth
 
@@ -674,6 +699,24 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   enforcement is docker's `internal: true` network rather than systemd's. It
   covers every role that holds anything, which it did not until `ingress` took
   the published ports off `web` and `hook` — see "How the enclave is split".
+- `backend/http_client.py` — the only place this tree makes an outbound HTTP
+  request, in the sense above: `egress.py` decides *which host*, this decides
+  *how*. Before it there were six call sites in four spellings, two CA policies,
+  and redirects followed everywhere — the weakest settings being on
+  `gmail_hook_server.download_certs()`, which fetches the keys deciding whether
+  an inbound Pub/Sub push is genuine. Four rules, each of them the kind that is
+  right in five call sites and forgotten in the sixth: https only (`urlopen`
+  opens `file://` and `data:` just as readily and returns a file-like object
+  either way — `InsecureRequest`, since a URL is an input), the certifi bundle
+  on every call, a required keyword-only `timeout`, and no redirects unless a
+  caller passes a `redirects=` budget, each hop re-checked (a 303 from an
+  allowlisted host to `http://169.254.169.254/` is the shape that is for).
+  `tests/test_http_boundary.py` reads the tree for the second call site.
+  Deliberately not here yet: checking the host against `egress.py` inside the
+  client (`bug_fixes_fourthbatch.md` §3), and `backend/custody/client.py`, which
+  stays on `requests` until it pins the co-signer's certificate
+  (`bug_fixes_secondbatch.md` §A3). `backend/tee/dstack_client.py` is exempt for
+  good: HTTP over a unix socket has no URL, no TLS and no CA bundle.
 - `cosigner/` — imports nothing from `backend/` except the Telegram call in
   `alerts.py`, so it can move to its own box under its own operator; the
   dependency points the other way (`backend/site.py` and the custody client
@@ -989,8 +1032,22 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   morning. Moving the write behind the handoff does not close it: this process
   cannot tell a forged request from a real one, because the web tier is what
   decides who is signed in. The rule that does close it asks the chat being
-  replaced — nothing linked, link freely; a chat linked, unlinking needs a code
-  posted from *that* chat. Changing a target is therefore unlink then link.
+  replaced — a chat linked, unlinking needs a code posted from *that* chat.
+  Nothing linked, there is no chat to ask, so the mailbox is asked instead:
+  `notices.insert_notice` puts the code in the account's own inbox through
+  `gmail_api.insert_message` and `begin()` returns None to the web tier. That
+  path used to just allow it, on the reasoning that nothing was being delivered
+  yet, which was present tense — linking is what starts delivery, so a web tier
+  that could link freely could subscribe itself to every account that had not
+  linked a chat. `insert` and never `send`: the scopes have permitted sending
+  all along and no code path calling it is the whole of "it drafts, it never
+  sends". `auth_recency` is the one exception, and it holds because the *daemon*
+  ran the OAuth callback and remembers doing so — an account that signed in
+  within `FRESH_SECONDS` has already proven mailbox control, so the code stays
+  on the page and a new user's first minutes need no inbox round trip. A failed
+  insert is `CODE_NOT_DELIVERED` and never a fall back to showing the code,
+  which the user could not tell from the ordinary case.
+  Changing a target is therefore unlink then link.
   Unlink needs the proof for the same reason link does not, or an attacker
   unlinks first and falls into the case that asks for nothing. The code is
   minted here and the message must be newer than the request, both against the

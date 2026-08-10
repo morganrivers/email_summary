@@ -57,9 +57,7 @@ import os
 import secrets
 from pathlib import Path
 
-import certifi
-import requests
-
+from backend import http_client
 from backend import secrets as secrets_module
 from backend.tee import quote_policy
 from backend.tee.quote_policy import DEV_INSECURE
@@ -311,9 +309,8 @@ def fetch(provider, nonce=None):
     """The provider's current report, bound to a nonce we just generated."""
     assert provider.attestation_url, f"provider {provider.name!r} names no attestation url"
     nonce = nonce or secrets.token_hex(NONCE_BYTES)
-    response = requests.get(
-        provider.attestation_url, params={"nonce": nonce},
-        timeout=TIMEOUT_SECONDS, verify=certifi.where(),
+    response = http_client.get(
+        provider.attestation_url, params={"nonce": nonce}, timeout=TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     return Report(response.json(), nonce)

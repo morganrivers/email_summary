@@ -319,6 +319,10 @@ def providers():
     global _providers_cache
     if _providers_cache is None:
         names = call(OP_PROVIDERS)
-        assert isinstance(names, list), f"providers returned {type(names).__name__}"
+        if not isinstance(names, list):
+            raise HandoffUnavailable(
+                f"the daemon answered {OP_PROVIDERS} with "
+                f"{type(names).__name__}, not a list of catalog names"
+            )
         _providers_cache = tuple(names)
     return _providers_cache

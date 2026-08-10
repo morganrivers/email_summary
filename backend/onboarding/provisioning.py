@@ -28,9 +28,7 @@ import json
 import sys
 from urllib.parse import urlencode
 
-import requests
-
-from backend import audit, paths
+from backend import audit, http_client, paths
 from backend.accounts import account
 from backend.custody import client as cosigner
 from backend.custody import tokens, wrapping
@@ -185,7 +183,7 @@ def exchange_code(code, redirect_uri, state):
         raise ProvisionError(502, "Google returned no access_token")
     try:
         email = gmail_api.profile_address(access_token)
-    except (requests.RequestException, ValueError) as err:
+    except (http_client.TransportError, ValueError) as err:
         raise ProvisionError(502, f"could not read the mailbox address: {err}") from err
     first, last = split_name(_id_token_claims(payload.get("id_token")), email)
     return {"email": email, "first": first, "last": last,

@@ -1,20 +1,29 @@
 """Refuse to run with assertions compiled out.
 
-This codebase states its security controls as asserts, and several of them are
-the control rather than a note about one: the path-traversal check in
-`custody.tokens.token_path`, the `"d" not in jwk` check that stands between a
-library change and the co-signer publishing its signing key, the empty-binding
-check in `tee.quote_policy._binds` that would otherwise accept a quote bound to
-nothing, the length and version checks in `cosigner.keys.unwrap`. Under `-O` or
-`PYTHONOPTIMIZE=1` every one of them disappears and the process keeps running,
-which is the failure mode this exists to make impossible.
+Under `-O` or `PYTHONOPTIMIZE=1` every `assert` in this tree disappears and the
+process keeps running. That is a boot nobody asked for and nobody would notice,
+so it is refused: both packages call this at import, `backend/__init__.py` for
+the application and `cosigner/__init__.py` for the co-signer, which imports
+nothing from `backend` and therefore cannot rely on its guard.
 
-Converting those four to explicit raises would protect those four. This
-protects all of them, including the ones written after today, and it is why an
-assert is an acceptable way to spell a control here. Both packages call it at
-import, so no entry point can miss it: `backend/__init__.py` for the
-application, `cosigner/__init__.py` for the co-signer, which imports nothing
-from `backend` and therefore cannot rely on its guard.
+What this is **not** is the reason a control may be spelled as an assert. It
+only covers boots that go through those two `__init__` files; a tool importing a
+submodule directly, a REPL, or an entry point added next year gets the
+optimized-out build with no refusal at all, and leaning on this would make
+`PYTHONOPTIMIZE` a security setting. So the controls that used to be asserts
+have been converted and the property is now stated the other way round:
+
+    running under `-O` costs some internal invariant checking, and no control.
+
+Every check whose subject crossed a trust boundary raises a named type -- the
+account-id path guard (`account.check_id`), the duplicate-handle refusal in
+`account.all_accounts`, the `"d" not in jwk` check standing between a library
+change and the co-signer publishing its signing key, the empty binding in
+`tee.quote_policy._binds`, the length and version checks in
+`cosigner.keys.unwrap`. `tests/test_optimized_controls.py` runs the refusal
+suites under `-O` and is what keeps that true for the ones written after today.
+An assert here now means an invariant about our own callers, which `-O` is
+welcome to remove.
 """
 
 import sys

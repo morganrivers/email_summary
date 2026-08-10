@@ -358,31 +358,34 @@ def test_the_probe_url_is_the_public_feed_and_the_id_is_checked():
 
 def test_the_probe_reads_a_status_code_and_never_a_body(monkeypatch):
     """A GET would pull the account's own event titles into this process to
-    learn nothing a status code does not already say. Redirects are not
-    followed, because a 302 to a sign-in page is a 200 to a client that
-    follows one."""
+    learn nothing a status code does not already say.
+
+    Redirects are not followed either, because a 302 to a sign-in page is a 200
+    to a client that follows one. That is now `backend/http_client`'s default
+    rather than a flag on this call, so what is checked here is that the probe
+    asks for no exception to it."""
     seen = {}
 
-    def fake_head(url, timeout=None, allow_redirects=None):
-        seen.update(url=url, timeout=timeout, allow_redirects=allow_redirects)
+    def fake_head(url, timeout=None, **kwargs):
+        seen.update(url=url, timeout=timeout, **kwargs)
         return SimpleNamespace(status_code=200)
 
-    monkeypatch.setattr(calendar_public.requests, "head", fake_head)
-    monkeypatch.setattr(calendar_public.requests, "get", lambda *a, **k: pytest.fail(
+    monkeypatch.setattr(calendar_public.http_client, "head", fake_head)
+    monkeypatch.setattr(calendar_public.http_client, "get", lambda *a, **k: pytest.fail(
         "the public probe fetched the feed's contents"))
     assert calendar_public.is_public("owner@example.com") is True
-    assert seen["allow_redirects"] is False
+    assert seen.get("redirects", 0) == 0
     assert seen["timeout"] == calendar_public.TIMEOUT
 
 
 @pytest.mark.parametrize("status", [301, 302, 401, 403, 429, 500, 503])
 def test_only_404_means_not_public(monkeypatch, status):
-    monkeypatch.setattr(calendar_public.requests, "head",
+    monkeypatch.setattr(calendar_public.http_client, "head",
                         lambda *a, **k: SimpleNamespace(status_code=status))
     with pytest.raises(calendar_public.PublicProbeFailed):
         calendar_public.is_public("owner@example.com")
 
-    monkeypatch.setattr(calendar_public.requests, "head",
+    monkeypatch.setattr(calendar_public.http_client, "head",
                         lambda *a, **k: SimpleNamespace(status_code=404))
     assert calendar_public.is_public("owner@example.com") is False
 

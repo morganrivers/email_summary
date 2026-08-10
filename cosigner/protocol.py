@@ -54,7 +54,7 @@ CLIENT_CERT_HEADER = "X-Client-Cert-Der"
 # service is a signing oracle for any URL an enclave-side attacker names, which
 # would make "the co-signer signs no secrets" a claim about intent rather than
 # about what the code can do.
-TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"  # nosec B105  # a URL
 
 # A wrapped token is a couple of hundred bytes; a request carrying one is under
 # a kilobyte. Reading an attacker-declared Content-Length unbounded is a free
