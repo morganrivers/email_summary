@@ -22,7 +22,7 @@ from backend.drafting.agentic_drafter import new_fence
 from backend.drafting.draft_replies import gmail_thread_link
 from backend.integrations import llm_client
 from backend.integrations.gmail_gcal import mailbox
-from backend.integrations.telegram import notify_error, send_telegram
+from backend.integrations.telegram import notify_error, sanitize_model_html, send_telegram
 
 PROMPT_FILE = paths.config_file("prompt_for_email")
 
@@ -32,7 +32,8 @@ DEFAULT_PROMPT = (
     "You write a short daily briefing from the account owner's unread email and "
     "calendar. Lead with anything time-critical. Group the rest by theme, one "
     "line each, and drop anything not worth their attention. Keep it under 200 "
-    "words. Plain text with simple HTML tags only (<b>, <i>, <a>)."
+    "words. Plain text with simple HTML tags only (<b>, <i>). Write any link "
+    "as a bare URL: anchor tags are removed before the message is sent."
 )
 
 
@@ -160,10 +161,20 @@ def summarise_account(account):
         summary = f"{email_line}\n{event_line}"
         log(f"{account.id}: empty model output; using fallback summary")
 
+    # The summary is written from mail an outside sender composed, and it is
+    # delivered with parse_mode=HTML, so the model's own output is markup: an
+    # anchor here is a phishing link inside the user's daily briefing and one
+    # unclosed tag is a 400 that call() swallows. Neither is the fence's job --
+    # it decides what the model is told, not what it may write back.
     today_str = datetime.date.today().strftime("%a %d %b")
-    send_telegram(f"📬 <b>Daily summary for {today_str}</b>\n\n{summary}",
-                  account.telegram)
-    return True
+    delivered = send_telegram(
+        f"📬 <b>Daily summary for {today_str}</b>\n\n"
+        + sanitize_model_html(summary),
+        account.telegram,
+    )
+    if not delivered:
+        log(f"{account.id}: summary was built but not delivered")
+    return delivered
 
 
 def main():

@@ -336,6 +336,33 @@ def test_the_enclave_mints_no_unstamped_checkout(monkeypatch):
     assert billing.checkout_url("dan@x.com", fallback="/billing") == ("/billing", None)
 
 
+def test_checkout_url_falls_back_when_polar_is_unconfigured(monkeypatch):
+    """No product to mint a session against and no dashboard link to fall back
+    to. The caller's own landing spot is the answer, and there is no id."""
+    monkeypatch.delenv("POLAR_SANDBOX", raising=False)
+    monkeypatch.delenv("POLAR_PRODUCT_ID", raising=False)
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    monkeypatch.setenv("POLAR_CHECKOUT_URL", "")
+
+    assert billing.checkout_url("z@x.com", fallback="/dashboard") == ("/dashboard", None)
+
+
+def test_the_static_link_follows_the_sandbox_toggle(monkeypatch):
+    """The suffix switch applies to the dashboard link too, not only to the API
+    token: a sandbox box sending buyers to the production checkout charges
+    them."""
+    monkeypatch.setenv("POLAR_SANDBOX", "1")
+    monkeypatch.delenv("POLAR_PRODUCT_ID_SANDBOX", raising=False)
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    monkeypatch.setenv("POLAR_CHECKOUT_URL", "https://buy.polar.sh/prod")
+    monkeypatch.setenv("POLAR_CHECKOUT_URL_SANDBOX", "https://sandbox.polar.sh/dev")
+
+    loc, checkout_id = billing.checkout_url("z@x.com")
+    assert loc == "https://sandbox.polar.sh/dev?customer_email=z%40x.com"
+    # The static link mints no session, so there is no id to bind to a browser.
+    assert checkout_id is None
+
+
 def test_stamped_metadata_resolves_a_webhook_event(tmp_path, monkeypatch):
     """Polar copies checkout metadata onto the order, so the exact binding is
     available to the webhook too, ahead of the pay-email guess."""

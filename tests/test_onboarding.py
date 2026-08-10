@@ -264,22 +264,6 @@ def test_callback_proceeds_on_a_full_grant(monkeypatch):
     assert acct.id == "f@x.com"
 
 
-def test_checkout_redirect_falls_back_without_polar(monkeypatch):
-    monkeypatch.delenv("POLAR_SANDBOX", raising=False)
-    monkeypatch.setenv("POLAR_CHECKOUT_URL", "")
-    assert ob.checkout_redirect("z@x.com", fallback="/dashboard") == ("/dashboard", None)
-
-
-def test_checkout_redirect_uses_sandbox_url_when_toggled(monkeypatch):
-    monkeypatch.setenv("POLAR_SANDBOX", "1")
-    monkeypatch.setenv("POLAR_CHECKOUT_URL", "https://buy.polar.sh/prod")
-    monkeypatch.setenv("POLAR_CHECKOUT_URL_SANDBOX", "https://sandbox.polar.sh/dev")
-    loc, checkout_id = ob.checkout_redirect("z@x.com")
-    assert loc == "https://sandbox.polar.sh/dev?customer_email=z%40x.com"
-    # The static link mints no session, so there is no id to bind to a browser.
-    assert checkout_id is None
-
-
 # --- the Python OAuth path (Track I5) -------------------------------------
 #
 # The exchange moved out of Node because Google binds the refresh token to the

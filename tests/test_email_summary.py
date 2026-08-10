@@ -18,6 +18,7 @@ import pytest
 
 from backend.accounts import account as account_mod
 from backend.drafting import agentic_drafter, email_summary
+from backend.integrations.telegram import sanitize_model_html
 
 OTHER = "other@example.com"
 
@@ -193,6 +194,73 @@ def test_an_inactive_account_is_not_summarised(wire):
     email_summary.main()
     assert rec.gmail_calls == []
     assert rec.telegram == []
+
+
+# ── The model's output is markup ─────────────────────────────────────────────
+#
+# Everything above is about what reaches the model. These are about what it
+# writes back: the summary is delivered with parse_mode=HTML, so the model
+# chooses markup in a message the user reads as their own bot's, and the model
+# is summarising mail a stranger composed.
+
+def test_an_anchor_the_model_wrote_does_not_reach_the_chat_as_a_link(wire):
+    """The one attack this closes. A sender talks the summariser into ending
+    with an anchor, and a link whose text disagrees with its destination
+    appears inside the daily briefing under the user's own bot's name."""
+    forged = ('Two invoices. <a href="https://attacker.example/x">'
+              'Reset your Google password</a>')
+    rec = wire.install(
+        responses=[{"content": forged}],
+        gmail_outputs={"fetch_daily": _daily([_email()])},
+    )
+    accounts = _accounts(wire, [harness.account_entry(OTHER)])
+
+    assert email_summary.summarise_account(accounts[0]) is True
+    sent = rec.telegram[0]
+    assert "<a href" not in sent, "an anchor reached the chat as markup"
+    assert "attacker.example" in sent, "the destination must stay visible as text"
+    assert "Two invoices." in sent
+
+
+def test_an_unclosed_tag_is_balanced_rather_than_silently_dropping_the_summary(wire):
+    """Telegram answers unbalanced entities with a 400 and telegram.call()
+    swallows it, so an unclosed tag is a summary nobody receives and nobody is
+    told about. Cheaper for a sender to ask for than the link, and harder to
+    notice."""
+    rec = wire.install(
+        responses=[{"content": "<b>Urgent: the standup moved"}],
+        gmail_outputs={"fetch_daily": _daily([_email()])},
+    )
+    accounts = _accounts(wire, [harness.account_entry(OTHER)])
+
+    assert email_summary.summarise_account(accounts[0]) is True
+    assert rec.telegram[0].endswith("<b>Urgent: the standup moved</b>")
+
+
+@pytest.mark.parametrize("written,expected", [
+    ("<b>bold</b> and <i>italic</i>", "<b>bold</b> and <i>italic</i>"),
+    ("<a href='http://x/'>text</a>", "&lt;a href='http://x/'&gt;text&lt;/a&gt;"),
+    ("<script>alert(1)</script>", "&lt;script&gt;alert(1)&lt;/script&gt;"),
+    ("<b>a<i>b</i>c</b>", "<b>a<i>b</i>c</b>"),
+    ("</b>stray", "&lt;/b&gt;stray"),
+    ("<b>x", "<b>x</b>"),
+    ("plain & simple", "plain &amp; simple"),
+    ("it's fine", "it's fine"),
+])
+def test_the_permitted_tag_set_is_what_survives(written, expected):
+    """A fixed list permitted back after escaping everything, so a tag nobody
+    thought of is inert by default rather than by having been listed."""
+    assert sanitize_model_html(written) == expected
+
+
+def test_a_long_summary_is_cut_where_telegram_still_accepts_it():
+    """The other way a message silently fails to arrive. The cut must not land
+    inside an entity: a bare `&` is refused the same as an unbalanced tag."""
+    written = "<b>" + "a & b " * 900
+    result = sanitize_model_html(written)
+    assert len(result) < 4096
+    assert result.endswith("[truncated]</b>")
+    assert not re.search(r"&(?![a-z]+;)", result), "the cut split an entity"
 
 
 def test_a_missing_operator_prompt_falls_back_instead_of_crashing_the_timer(monkeypatch, tmp_path):

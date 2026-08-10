@@ -32,7 +32,6 @@ import requests
 
 from backend import audit, paths
 from backend.accounts import account
-from backend.billing import billing
 from backend.custody import client as cosigner
 from backend.custody import tokens, wrapping
 from backend.integrations.gmail_gcal import gmail_api, google_client, oauth_app
@@ -253,20 +252,6 @@ def provision(code, redirect_uri, state):
     watch_renew.renew_account(acct, log=log)
     log(f"provisioned account {acct.id}")
     return acct
-
-
-def checkout_redirect(email, fallback="/dashboard"):
-    """Where to send a user who has asked to pay, and the id of the checkout
-    minted for them: Polar hosted checkout when configured (carrying
-    customer_email so the order.paid webhook resolves to this account), else the
-    caller's own landing spot. Reached from the billing page, never from
-    sign-in: signing in and subscribing are separate decisions, and a subscriber
-    sent back to checkout is refused by Polar.
-
-    Returns `(location, checkout_id)`; the id is None when nothing was minted.
-    The caller records it in the buyer's browser, which is what lets the return
-    trip say this browser started this checkout."""
-    return billing.checkout_url(email, fallback=fallback)
 
 
 def handle_callback(query, state_is_ours, redirect_uri, fallback="/dashboard"):

@@ -19,6 +19,11 @@ at a stranger's chat by typing its number.
 Who is allowed to make that change is not decided here -- it is
 backend.accounts.chat_link, which owns the codes and the rule. This module only
 answers which chats posted a code and when.
+
+Every send here is `parse_mode=HTML`, so what a caller interpolates is markup.
+A caller holding a value from outside the account escapes it (`html.escape`);
+a caller holding text a model wrote passes it through sanitize_model_html,
+which is the one place the permitted tag set is written down.
 """
 
 import html
@@ -36,6 +41,14 @@ API_ROOT = "https://api.telegram.org"
 TIMEOUT = 10
 
 LINK_CODE_RE = re.compile(r"\bLL-[A-Z0-9]{8}\b")
+
+MODEL_TAGS = ("b", "strong", "i", "em", "u", "s", "code", "pre")
+MODEL_TAG_RE = re.compile(r"&lt;(/?)(" + "|".join(MODEL_TAGS) + r")&gt;")
+FORBIDDEN_TAG_RE = re.compile(r"<(?!/?(?:" + "|".join(MODEL_TAGS) + r")>)")
+MAX_NESTING = 8
+TELEGRAM_MAX_CHARS = 4096
+MAX_MODEL_CHARS = 3800
+TRUNCATED = "\n[truncated]"
 
 
 class TelegramTarget:
@@ -88,6 +101,60 @@ def operator_target():
     if not token or not chat_id:
         return None
     return TelegramTarget(token, chat_id)
+
+
+def _truncate_escaped(escaped, limit):
+    """Cut escaped text to `limit` without splitting an entity in half. A cut
+    inside `&amp;` leaves a bare `&`, which Telegram refuses the same way it
+    refuses an unbalanced tag."""
+    if len(escaped) <= limit:
+        return escaped
+    cut = escaped[:limit]
+    last = cut.rfind("&")
+    if last != -1 and ";" not in cut[last:]:
+        cut = cut[:last]
+    return cut + TRUNCATED
+
+
+def sanitize_model_html(text):
+    """Make model-written text safe to send under `parse_mode=HTML`.
+
+    Model output is a function of the mail it read, so a sender who gets a
+    sentence of their own into a summary is choosing markup in a message the
+    user reads as their own bot's. Escaping everything and permitting a fixed
+    list back is the only direction that is safe by default: a stripper has to
+    recognise every tag in order to remove it, this has to recognise one in
+    order to keep it.
+
+    `<a>` is deliberately not permitted. An anchor is the one Telegram tag
+    whose visible text can disagree with where it goes, which is a phishing
+    link inside the daily briefing. A bare URL left as text costs nothing:
+    Telegram links it anyway, with the destination in view.
+
+    Balancing on the way out is the other half. Telegram answers unbalanced
+    entities with a 400 and `call()` swallows it, so one unclosed tag is a
+    summary that silently never arrives -- which a sender can ask for as
+    easily as they can ask for the link."""
+    escaped = html.escape(text or "", quote=False)
+    escaped = _truncate_escaped(escaped, MAX_MODEL_CHARS)
+    out, open_tags, pos = [], [], 0
+    for match in MODEL_TAG_RE.finditer(escaped):
+        out.append(escaped[pos:match.start()])
+        pos = match.end()
+        closing, tag = match.group(1), match.group(2)
+        if closing and open_tags and open_tags[-1] == tag:
+            open_tags.pop()
+            out.append(f"</{tag}>")
+        elif not closing and len(open_tags) < MAX_NESTING:
+            open_tags.append(tag)
+            out.append(f"<{tag}>")
+        else:
+            out.append(match.group(0))
+    out.append(escaped[pos:])
+    out.extend(f"</{tag}>" for tag in reversed(open_tags))
+    result = "".join(out)
+    assert not FORBIDDEN_TAG_RE.search(result), "sanitizing left a tag we do not permit"
+    return result
 
 
 def send_telegram(message, target):
