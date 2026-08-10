@@ -2,10 +2,14 @@
 
 Two entrypoints, one module (single source of the attestation boot sequence):
 
-  python tee_boot.py            attest-before-run gate. Run by the container
-                                entrypoint before daemon/webhook start. When
-                                TEE_REQUIRED=1 it fails closed unless the CVM is
-                                genuinely attested and secrets were released.
+  python tee_boot.py --role R   attest-before-run gate for role R. Run by the
+                                container entrypoint before daemon/web start.
+                                When TEE_REQUIRED=1 it fails closed unless the
+                                CVM is genuinely attested and the secrets *that
+                                role* is handed were released. The role is
+                                required: the three containers do not share an
+                                environment, so "which secrets must be here"
+                                has no answer without it.
 
   python tee_boot.py --selftest F1 hello-world: exercise KMS unseal + RA-TLS +
                                 quote against the live guest agent and print the
@@ -75,7 +79,19 @@ def _assert_expected_measurement(info: dict) -> None:
     )
 
 
-def run_gate() -> int:
+def run_gate(role) -> int:
+    """The attest-before-run gate for one enclave role.
+
+    `role` is the container's own role name, so the provisioning check below
+    asks what *this* container is handed rather than what a single-uid box
+    holds. Validated before anything else and on every host, TEE or not: an
+    entrypoint that passed a role nobody named would otherwise fail closed only
+    inside a CVM, which is the one place it is expensive to find out."""
+    if role not in secrets.REQUIRED_BY_ROLE:
+        print(f"[tee_boot] FAIL-CLOSED: {role!r} is not an enclave role; "
+              f"expected one of {sorted(secrets.REQUIRED_BY_ROLE)}", file=sys.stderr)
+        return 1
+
     client = DstackClient()
 
     if not secrets.tee_required():
@@ -121,11 +137,17 @@ def run_gate() -> int:
     # a list of four variable names here, so the gate passed without
     # SESSION_SECRET, the Polar credentials or the Google OAuth client secret:
     # a gate that names its own subset drifts from the services it gates.
-    gaps = secrets.missing()
+    #
+    # Asked per role, because the enclave's roles do not share an environment.
+    # Asking for the union made every container fail closed on a secret it is
+    # correctly not handed, and the obvious way to make that pass is to widen
+    # each `environment:` block -- which is the attested partition, dismantled
+    # so a boot check would succeed.
+    gaps = secrets.missing(role)
     if gaps:
         for reason in gaps:
-            print(f"[tee_boot] FAIL-CLOSED: attested but not provisioned: {reason}",
-                  file=sys.stderr)
+            print(f"[tee_boot] FAIL-CLOSED: {role} attested but not provisioned: "
+                  f"{reason}", file=sys.stderr)
         return 1
 
     _write_attestation_record(info, tls, quote)
@@ -166,10 +188,19 @@ def run_selftest() -> int:
     return 0
 
 
+def _role_arg(argv: list[str]):
+    """The `--role <name>` the entrypoint passes, or None. No argparse: this
+    runs before the daemon does and its whole command line is two tokens."""
+    if "--role" not in argv:
+        return None
+    at = argv.index("--role")
+    return argv[at + 1] if at + 1 < len(argv) else None
+
+
 def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         return run_selftest()
-    return run_gate()
+    return run_gate(_role_arg(argv))
 
 
 if __name__ == "__main__":

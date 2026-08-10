@@ -62,7 +62,13 @@ the two operations needing a Google token happen in the daemon over
 into it: `database/accounts.json` is writable there, so a compromised web tier
 can still edit its own settings and its plan. It can no longer move the telegram
 target, which was the one field that reached mail content — see
-`backend/accounts/chat_link.py`.
+`backend/accounts/chat_link.py`. On this box it can also still *read*
+`POLAR_API_TOKEN`, which is organization-wide: no code there uses it since the
+three Polar calls moved to the daemon, but it shares `.env` with the
+`SESSION_SECRET` the web tier does need and one file is one grant. In the
+enclave the web container is simply not handed it. Closing it here means
+splitting `SESSION_SECRET` into a file of its own the way `.env.billing` was
+split, a server-only file and a manual step.
 
 The two webhooks are the fourth and fifth, and they are the cheap ones: both
 parse HTTP from the open internet and neither needs an account's data.
@@ -204,9 +210,14 @@ because a numeric `user:` skips the `/etc/group` lookup a username triggers.
 role that starts everything.
 
 No role is a Polar receiver, so entitlement inside the enclave is exactly two
-things: `confirm_checkout()` in `web`, which settles the buyer on the return
-page synchronously, and the 3-hourly `billing_poller` reconcile in `mail`'s
-crontab. The reconcile is in the mail role because it writes `plan_status` and
+things: `confirm_checkout()`, which settles the buyer on the return page
+synchronously, and the 3-hourly `billing_poller` reconcile in `mail`'s
+crontab. Both run in `mail` — the return page is served by `web`, but the call
+crosses on `handoff.OP_CHECKOUT_CONFIRM`, because `POLAR_API_TOKEN` is
+organization-wide and a token that reads every customer in the billing org has
+no business in the process parsing HTTP. `OP_CHECKOUT_URL` and `OP_PORTAL_URL`
+are the other two calls that needed it. The reconcile is in the mail role
+because it writes `plan_status` and
 that is the role that writes the manifest; on the box the same sweep is a
 `.timer` and merely a safety net, here it is the only thing a renewal or a
 cancellation travels through. Adding a receiver container would need a fourth
@@ -223,6 +234,17 @@ and `providers_named()` are the two halves. The cost is that `/settings` returns
 503 while the mail role is down, in both directions: the POST validates the
 submitted provider against the same answer, so an outage refuses the save rather
 than accepting a value nothing checked.
+
+The boot gate is per role, and has to be. `tee_boot.run_gate(role)` asks
+`secrets.missing(role)`, which reads `REQUIRED_BY_ROLE`; asking for the union
+meant every container failed closed on a secret it is deliberately not handed —
+`mail` on `SESSION_SECRET`, `web` on four, and `POLAR_WEBHOOK_SECRET` on nothing
+at all, since no receiver runs here. Not a vulnerability, but the repair it
+invites is widening each `environment:` block, which is the partition RTMR3
+attests. The role comes from the entrypoint's own `$role`, and an unrecognized
+one is refused on every host rather than defaulting to anything.
+`tests/test_enclave_boundary.py` reads each role's compose block and asserts
+that role's gate passes on it and no other's.
 
 ## What the enclave image carries
 
@@ -353,7 +375,8 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
 - `frontend/web_server.py` — product web UI, `letterlock-web` service behind
   Caddy (`127.0.0.1:8790` on `APP_HOST`): sign-in, dashboard, voice DNA, personal
   info, settings, billing. Runs as its own uid; `/voice` generation, the consent
-  URL and the OAuth callback are handed to the daemon over
+  URL, the OAuth callback and all three Polar calls behind `/billing/checkout`,
+  `/billing/return` and `/billing/portal` are handed to the daemon over
   `backend/custody/handoff.py` (page still polls by meta refresh, the job now
   lives in the daemon's memory); `/personal` is the second
   box (`personal_context`), kept apart because generating a profile overwrites
@@ -432,7 +455,13 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   lookup — `frontend/session.py` reads `SESSION_SECRET_ENV` and
   `SESSION_SECRET_PREVIOUS_ENV` from here, not the reverse. `tee_boot.run_gate()`
   and `deploy/preflight.py` both build on them, so the enclave's fail-closed set
-  and the deploy's skip set cannot drift. `fingerprint()` names a secret in a log
+  and the deploy's skip set cannot drift. `REQUIRED` is the union — one box
+  running every unit — and `REQUIRED_BY_ROLE` slices it per enclave role, which
+  is what `missing(role)` answers; `polar_webhook_configured` is in the first and
+  no role in the second, because the enclave runs no receiver. The mail role's
+  slice is deliberately stricter than `preflight._mail_configured`: in there the
+  reconcile is the only path a renewal travels, so an absent Polar token is
+  fail-closed, while on the box it is a separate unit with its own entry. `fingerprint()` names a secret in a log
   without printing it. Under `TEE_REQUIRED` no file is read at all;
   `volume_secrets()` is the one list of files whose mere presence fails the boot
   gate (`.env`, `oauth_app.keys_path()`), so the gate refuses exactly what the
@@ -548,9 +577,20 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   because the *decision* is not the web tier's to make (`chat_link`). The two
   action names live here because they are what the answer is called on the wire,
   and because the asking side must be able to read them without importing the
-  module holding the bypass. `providers` is a third reason again: the answer is
-  a function of the inference API keys, and holding two live keys to answer a
-  yes/no question was the only thing keeping them in the web tier. Everything
+  module holding the bypass. `providers` and the three `checkout-*`/`portal-*`
+  operations are a third reason again: the answer is a function of a credential
+  the web tier would otherwise hold. Two live inference keys answered a yes/no
+  question about which providers exist; `POLAR_API_TOKEN` is worse, since it is
+  organization-wide — it reads every customer in the org and mints a portal
+  session for any customer id, which is wider than the residual that role is
+  documented to keep. `checkout_url`, `confirm_checkout` and `portal_url` are
+  the three calls that needed it, and they land in the role that already writes
+  `plan_status`. What the web tier can still cause from there is stated rather
+  than hidden: it names the account, so it can ask for a checkout for a named
+  account and a portal link for one that already has a linked Polar customer.
+  What it can no longer do is read a customer it did not name.
+  `_billing_account()` is the lookup they use, including inactive accounts,
+  because everyone at checkout is inactive by definition. Everything
   else the web UI does with an account needs the data key and not a token, and
   it gets that from the co-signer directly.
   A unix socket rather than the wake spool because the spool is one way: a
@@ -724,8 +764,11 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   caller of a manifest writer cannot forget to log. Request origin is ambient:
   `frontend/web_server.py` wraps each request in `audit.request_context()`, so
   nine mutators do not grow a parameter, and anything outside a request
-  (background voice generation, billing webhook, seed) writes a row with no
-  origin. Nothing in a row can carry content: `detail` takes short name tokens
+  (background voice generation, billing webhook, seed, and anything reached over
+  the handoff socket) writes a row with no origin. The checkout return's `PLAN`
+  and `BILLING_CUSTOMER` rows joined that set when the Polar calls moved to the
+  daemon: the alternative is the web tier declaring an origin the daemon cannot
+  check, which is a worse row than none. Nothing in a row can carry content: `detail` takes short name tokens
   checked against `TOKEN` (`timezone`, `chars:2048`, `provider:deepseek`).
   `RETENTION_DAYS` is the only bound on how long a departed user's address stays
   — deleting an account does not delete its rows, since the row saying it was
@@ -844,6 +887,14 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   id took the subscription. `checkout_url()` stamps
   `billing.CHECKOUT_ACCOUNT_KEY` into the session metadata to make the binding
   exact; `customer_email` is buyer-editable, so it is the fallback, not the test.
+  Before any of that, the id has to be an id: it arrives on `?checkout_id=` and
+  used to be interpolated straight into the path of a request carrying the
+  organization token, so `confirm_checkout()` refuses one that is not
+  `polar_api.valid_id` and never spends the call. `polar_api._segment()` is the
+  floor under every caller — assert the shape, then percent-encode — and
+  `list_subscriptions` builds its query with `urlencode` for the same reason.
+  `valid_id` is deliberately wider than a UUID: the point is that an id is one
+  path segment, not that Polar's format never changes.
 - `draft_replies.build_draft_payload()` — canonical draft payload shape.
 - `draft_replies.submit_draft(account, payload, draft_id=None)` — sole boundary to
   `gmail_gcal.drafts`. Pass `draft_id` to update in place.

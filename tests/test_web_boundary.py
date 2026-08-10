@@ -25,9 +25,10 @@ import threading
 import time
 
 import pytest
-from harness import python_sources, relative
+from harness import account_entry, python_sources, relative, write_manifest
 
 from backend import paths
+from backend.accounts import account as account_mod
 from backend.custody import handoff, handoff_server
 from backend.onboarding import provisioning
 
@@ -46,11 +47,27 @@ FORBIDDEN_MODULES = ("keyring", "tokens", "wrapping", "chat_link")
 # `exchange_code` and `handle_callback` are the code exchange; `build_auth_url`
 # reads the OAuth client secret's file; `generate` and `start` read sent mail;
 # `set_telegram` and `force_unlink` write the delivery target that carries mail.
+#
+# The last four are the billing surface. `PolarBilling` holds an
+# organization-wide API token that reads every customer in the org and mints a
+# portal session for any customer id, so it is a wider credential than anything
+# else the web tier ever touched -- wider than the residual this split leaves it
+# (its own settings, its own plan). The three calls that needed it cross over
+# the handoff socket to the role that already writes `plan_status`.
 FORBIDDEN_CALLS = (
     "take_custody", "release_for_refresh", "open_key", "dek_for",
     "handle_callback", "exchange_code", "provision", "build_auth_url",
     "set_telegram", "force_unlink",
+    "PolarBilling", "checkout_redirect", "confirm_checkout", "portal_url",
 )
+
+# The handoff client deliberately names its functions after the operations they
+# stand in for, so `handoff.confirm_checkout(...)` reads as the same operation
+# the daemon performs. That is the point of the module and not a violation of
+# the rule above, so a call reached through it is exempt -- and only through it,
+# by the attribute's own name, so an alias binding `handoff = billing` would not
+# pass.
+HANDOFF = "handoff"
 
 WEB_SOURCES = [p for p in python_sources() if p.parts[-2] == "frontend"]
 
@@ -90,7 +107,12 @@ def test_the_web_tier_calls_nothing_that_needs_a_mailbox_token():
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if isinstance(func, ast.Attribute):
+                name = func.attr
+                if isinstance(func.value, ast.Name) and func.value.id == HANDOFF:
+                    continue
+            else:
+                name = getattr(func, "id", None)
             if name in FORBIDDEN_CALLS:
                 offenders.append(f"{relative(path)}:{node.lineno} calls {name}()")
     assert not offenders, (
@@ -198,6 +220,76 @@ def test_an_unexpected_failure_does_not_leak_its_detail(listening, monkeypatch):
         handoff.voice_status("a@example.com")
     assert err.value.code == 500
     assert "abc123" not in err.value.msg
+
+
+class _FakePolar:
+    """Stands in for the client holding the organization-wide Polar token,
+    which the web tier no longer has and this process now does."""
+
+    def __init__(self):
+        self.seen = []
+
+    def confirm_checkout(self, checkout_id, acct):
+        self.seen.append((checkout_id, acct.id))
+        return True, f"account={acct.id} inactive->active"
+
+    def portal_url(self, acct):
+        self.seen.append(acct.id)
+        return f"https://polar.example/portal/{acct.id}"
+
+
+@pytest.fixture
+def one_lapsed_account(tmp_path, monkeypatch):
+    monkeypatch.setattr(account_mod, "MANIFEST", write_manifest(
+        tmp_path, [account_entry("dan@x.com", status="inactive")]))
+
+
+def test_the_billing_operations_serve_an_account_that_is_not_active(
+        listening, one_lapsed_account, monkeypatch):
+    """Everyone reaching checkout is inactive by definition, and a lapsed
+    subscriber returning to the portal is the other half of the same case, so
+    these three do not go through the active-only lookup the rest use."""
+    polar = _FakePolar()
+    monkeypatch.setattr(handoff_server, "_polar", lambda: polar)
+    monkeypatch.setattr(handoff_server.provisioning, "checkout_redirect",
+                        lambda email, fallback: f"https://polar.example/buy/{email}")
+
+    assert handoff.checkout_url("dan@x.com", fallback="") == \
+        "https://polar.example/buy/dan@x.com"
+    assert handoff.confirm_checkout("dan@x.com", "co_1") == \
+        (True, "account=dan@x.com inactive->active")
+    assert handoff.portal_url("dan@x.com") == "https://polar.example/portal/dan@x.com"
+    assert polar.seen == [("co_1", "dan@x.com"), "dan@x.com"]
+
+
+@pytest.mark.parametrize("ask", [
+    lambda: handoff.checkout_url("nobody@x.com", fallback=""),
+    lambda: handoff.confirm_checkout("nobody@x.com", "co_1"),
+    lambda: handoff.portal_url("nobody@x.com"),
+])
+def test_a_billing_operation_names_an_account_or_is_refused(
+        listening, one_lapsed_account, monkeypatch, ask):
+    """This socket does not authenticate the end user -- the web tier is what
+    decides who is signed in -- so the account id is taken as an argument. What
+    it does not do is act on a name that is not an account, which is what would
+    otherwise mint a checkout against an arbitrary string."""
+    monkeypatch.setattr(handoff_server, "_polar", lambda: _FakePolar())
+    with pytest.raises(handoff.RemoteRefusal) as err:
+        ask()
+    assert err.value.code == 404
+
+
+def test_an_unconfigured_polar_is_an_outage_and_not_a_crash(
+        listening, one_lapsed_account, monkeypatch):
+    """A box with no Polar token renders "billing is unavailable right now",
+    the same page a daemon that is down produces."""
+    monkeypatch.setattr(handoff_server, "_polar_client", None)
+    monkeypatch.delenv("POLAR_API_TOKEN", raising=False)
+    monkeypatch.delenv("POLAR_ORGANIZATION_ID", raising=False)
+
+    with pytest.raises(handoff.RemoteRefusal) as err:
+        handoff.portal_url("dan@x.com")
+    assert err.value.code == 503
 
 
 def test_no_listener_is_unavailable_and_not_a_refusal(tmp_path, monkeypatch):

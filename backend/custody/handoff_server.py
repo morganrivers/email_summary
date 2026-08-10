@@ -25,12 +25,15 @@ import traceback
 from backend import paths
 from backend.accounts import account as account_mod
 from backend.accounts import chat_link
+from backend.billing import billing
 from backend.custody import handoff
 from backend.drafting import voice_dna
 from backend.integrations import llm_client
 from backend.onboarding import provisioning
 
 BACKLOG = 16
+
+_polar_client = None
 
 
 def _peer(conn):
@@ -122,6 +125,60 @@ def _chat_forget(account_id):
     return None
 
 
+def _billing_account(account_id):
+    """The account a billing operation names, active or not.
+
+    Deliberately not `_account`, which drops inactive accounts: everyone
+    reaching checkout is inactive by definition, and a lapsed subscriber
+    returning to the portal is the other half of the same case. Unknown is
+    still a refusal -- the caller decides who is signed in, but it does not get
+    to name an account that does not exist and have a checkout minted for it."""
+    acct = account_mod.account_for_email(account_id, include_inactive=True)
+    if acct is None:
+        raise handoff.RemoteRefusal(404, f"{account_id} is not an account")
+    return acct
+
+
+def _polar():
+    """The Polar client, built once.
+
+    Cached for the process lifetime for the same reason `handoff.providers()`
+    is: the token arrives as injected environment or in `.env`, and neither
+    changes under a running process. A missing one is a 503 and not a 500: an
+    unconfigured Polar is an operator's gap, and the web tier renders "billing
+    is unavailable right now" for it."""
+    global _polar_client
+    if _polar_client is None:
+        try:
+            _polar_client = billing.PolarBilling()
+        except AssertionError as err:
+            raise handoff.RemoteRefusal(503, f"polar not configured: {err}") from err
+    return _polar_client
+
+
+def _checkout_url(account_id, fallback="/dashboard"):
+    """Where to send this account to pay. Goes through
+    `provisioning.checkout_redirect` rather than `billing.checkout_url` so the
+    billing page and the onboarding path still mint checkouts one way."""
+    acct = _billing_account(account_id)
+    return provisioning.checkout_redirect(acct.id, fallback=fallback)
+
+
+def _checkout_confirm(account_id, checkout_id):
+    """Settle the buyer standing on the return page.
+
+    `confirm_checkout` is what refuses a checkout that does not resolve back to
+    this account, and it never raises over a payment that succeeded, so the
+    only failure that reaches the wire from here is an unconfigured Polar."""
+    acct = _billing_account(account_id)
+    paid, detail = _polar().confirm_checkout(checkout_id, acct)
+    return {"paid": bool(paid), "detail": str(detail)}
+
+
+def _portal_url(account_id):
+    return _polar().portal_url(_billing_account(account_id))
+
+
 def _providers():
     """Which inference providers this deployment holds a key for.
 
@@ -142,6 +199,9 @@ HANDLERS = {
     handoff.OP_CHAT_FINISH: _chat_finish,
     handoff.OP_CHAT_FORGET: _chat_forget,
     handoff.OP_PROVIDERS: _providers,
+    handoff.OP_CHECKOUT_URL: _checkout_url,
+    handoff.OP_CHECKOUT_CONFIRM: _checkout_confirm,
+    handoff.OP_PORTAL_URL: _portal_url,
 }
 
 assert set(HANDLERS) == set(handoff.OPS), (

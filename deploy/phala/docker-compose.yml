@@ -50,7 +50,10 @@ services:
   # The only role that opens a mailbox. Holds the Google client credentials, the
   # inference keys and the Telegram token, and is the only account that can read
   # database/<id>/token.bin (0600 to this uid, set by backend/paths.py).
-  # Applies spooled Polar events, which is why it carries the Polar API token.
+  # The only role holding the Polar API token: it applies spooled Polar events,
+  # runs the reconcile, and answers the web role's three billing operations over
+  # handoff. That token is organization-wide, which is why it lives with the
+  # role that writes plan_status rather than with the one parsing HTTP.
   mail:
     <<: *common
     # This line is rewritten to a pinned registry digest by
@@ -79,6 +82,7 @@ services:
       POLAR_API_TOKEN: "${POLAR_API_TOKEN:-}"
       POLAR_ORGANIZATION_ID: "${POLAR_ORGANIZATION_ID:-}"
       POLAR_PRODUCT_ID: "${POLAR_PRODUCT_ID:-}"
+      POLAR_CHECKOUT_URL: "${POLAR_CHECKOUT_URL:-}"
       POLAR_SANDBOX: "${POLAR_SANDBOX:-0}"
       # The co-signer holding the outer half of every token's custody. Empty
       # falls back to the default host in backend/site.py. This enclave
@@ -113,6 +117,17 @@ services:
   # handoff.OP_PROVIDERS, which sends names and never a key. The cost is that
   # /settings returns 503 while the mail role is down rather than rendering as
   # though one provider were configured.
+  #
+  # It carries no Polar token either, for the same reason and a larger one.
+  # POLAR_API_TOKEN is organization-wide: it reads every customer in the org
+  # and mints a portal session for any customer id, so a parsing bug in the
+  # process facing the open internet reached the whole billing org rather than
+  # this deployment's own accounts. The three calls it needed -- mint a
+  # checkout, read one back on the return page, mint a portal session -- cross
+  # to the mail role over handoff, which is also the role that writes
+  # plan_status. What remains reachable from here is what the handoff will do
+  # when asked: mint a checkout for a named account, and mint a portal link for
+  # an account that already has a linked Polar customer.
   web:
     <<: *common
     command: ["web"]
@@ -126,11 +141,6 @@ services:
       <<: *common-env
       SESSION_SECRET: "${SESSION_SECRET:-}"
       SESSION_SECRET_PREVIOUS: "${SESSION_SECRET_PREVIOUS:-}"
-      POLAR_API_TOKEN: "${POLAR_API_TOKEN:-}"
-      POLAR_ORGANIZATION_ID: "${POLAR_ORGANIZATION_ID:-}"
-      POLAR_PRODUCT_ID: "${POLAR_PRODUCT_ID:-}"
-      POLAR_CHECKOUT_URL: "${POLAR_CHECKOUT_URL:-}"
-      POLAR_SANDBOX: "${POLAR_SANDBOX:-0}"
       LETTERLOCK_COSIGNER_URL: "${LETTERLOCK_COSIGNER_URL:-}"
     volumes:
       - database:/app/database

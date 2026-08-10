@@ -205,24 +205,66 @@ def attested(tmp_path, monkeypatch):
     monkeypatch.delenv("EXPECTED_COMPOSE_HASH", raising=False)
 
 
-def test_gate_passes_when_attested_and_provisioned(attested, env_file, monkeypatch):
+@pytest.mark.parametrize("role", sorted(secrets.REQUIRED_BY_ROLE))
+def test_gate_passes_when_attested_and_provisioned(attested, env_file, monkeypatch, role):
     _provision(monkeypatch)
-    assert tee_boot.run_gate() == 0
+    assert tee_boot.run_gate(role) == 0
 
 
 def test_gate_fails_closed_on_a_missing_secret(attested, env_file, monkeypatch, capsys):
     _provision(monkeypatch)
     monkeypatch.delenv("SESSION_SECRET", raising=False)
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate(secrets.ROLE_WEB) == 1
     assert "SESSION_SECRET" in capsys.readouterr().err
+
+
+def test_the_gate_asks_only_for_what_this_role_is_handed(attested, env_file, monkeypatch):
+    """The bug this replaced: the gate asked for the union whichever role was
+    booting, so no container in the enclave could start. Every one of them
+    failed on a secret it is deliberately not handed -- mail on SESSION_SECRET,
+    web on four -- and the repair that suggests itself is to widen each
+    container's environment block, which is the partition RTMR3 attests."""
+    _provision(monkeypatch)
+    for name in ("SESSION_SECRET", "SESSION_SECRET_PREVIOUS"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert tee_boot.run_gate(secrets.ROLE_MAIL) == 0
+
+    for name in ("DEEPSEEK_API_KEY", "NEARAI_API_KEY", "TELEGRAM_BOT_TOKEN",
+                 "TELEGRAM_CHAT_ID", "POLAR_API_TOKEN", "POLAR_WEBHOOK_SECRET",
+                 secrets.GOOGLE_CLIENT_ID_ENV, secrets.GOOGLE_CLIENT_SECRET_ENV):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SESSION_SECRET", "s")
+
+    assert tee_boot.run_gate(secrets.ROLE_WEB) == 0
+
+
+def test_no_role_requires_the_webhook_secret(env_file):
+    """No container in the enclave receives Polar webhooks, so
+    POLAR_WEBHOOK_SECRET is in no environment block and must be in no role. It
+    stays in REQUIRED because the Hetzner box does run a receiver."""
+    assert secrets.polar_webhook_configured in secrets.REQUIRED
+    for checks in secrets.REQUIRED_BY_ROLE.values():
+        assert secrets.polar_webhook_configured not in checks
+
+
+def test_the_gate_refuses_a_role_nobody_named(attested, env_file, monkeypatch, capsys):
+    """A typo in the entrypoint must not read as "check nothing" or as "check
+    the union". Refused on every host, TEE or not, so it surfaces before a CVM."""
+    _provision(monkeypatch)
+    assert tee_boot.run_gate("mial") == 1
+    assert "not an enclave role" in capsys.readouterr().err
+
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    assert tee_boot.run_gate(None) == 1
 
 
 def test_gate_fails_closed_when_a_dotenv_file_exists(attested, env_file, monkeypatch, capsys):
     _provision(monkeypatch)
     env_file.write_text("DEEPSEEK_API_KEY=from-the-volume\n")
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate(secrets.ROLE_MAIL) == 1
     assert "FAIL-CLOSED" in capsys.readouterr().err
 
 
@@ -234,7 +276,7 @@ def test_gate_fails_closed_when_the_oauth_key_file_exists(attested, env_file,
     _provision(monkeypatch)
     keys = write_keys_file(tmp_path)
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate(secrets.ROLE_MAIL) == 1
     assert str(keys) in capsys.readouterr().err
 
 
@@ -244,7 +286,7 @@ def test_gate_fails_closed_without_the_oauth_client(attested, env_file, monkeypa
     _provision(monkeypatch)
     monkeypatch.delenv(secrets.GOOGLE_CLIENT_SECRET_ENV, raising=False)
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate(secrets.ROLE_MAIL) == 1
     assert secrets.GOOGLE_CLIENT_SECRET_ENV in capsys.readouterr().err
 
 
@@ -253,7 +295,7 @@ def test_gate_no_ops_outside_a_tee(env_file, monkeypatch):
     monkeypatch.delenv("TEE_REQUIRED", raising=False)
     env_file.write_text("DEEPSEEK_API_KEY=from-the-volume\n")
 
-    assert tee_boot.run_gate() == 0
+    assert tee_boot.run_gate(secrets.ROLE_MAIL) == 0
 
 
 def test_fingerprint_identifies_without_revealing():

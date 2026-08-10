@@ -18,6 +18,10 @@ dependency to a list whose whole point is being the only list.
 import re
 from pathlib import Path
 
+import pytest
+
+from backend import secrets
+
 REPO = Path(__file__).resolve().parent.parent
 COMPOSE = REPO / "deploy" / "phala" / "docker-compose.yml"
 FLAKE = REPO / "flake.nix"
@@ -90,11 +94,17 @@ def test_no_role_holds_a_secret_it_has_no_use_for():
     The inference keys are on the web list because that role no longer decides
     which providers exist. It asks the mail role over `handoff.OP_PROVIDERS` and
     gets catalog names back, so a key reappearing here is that round trip having
-    been quietly replaced by a local read."""
+    been quietly replaced by a local read.
+
+    `POLAR_` is on it for the same shape of reason and a wider blast radius:
+    POLAR_API_TOKEN is organization-wide, so the web role holding one made a
+    parsing bug there reach every customer in the billing org rather than this
+    deployment's own accounts. Its three billing calls cross over
+    `handoff.OP_CHECKOUT_URL`, `OP_CHECKOUT_CONFIRM` and `OP_PORTAL_URL`."""
     blocks = _service_blocks()
     forbidden = {
         "mail": ["SESSION_SECRET"],
-        "web": ["GOOGLE_OAUTH_CLIENT", "TELEGRAM_",
+        "web": ["GOOGLE_OAUTH_CLIENT", "TELEGRAM_", "POLAR_",
                 "DEEPSEEK_API_KEY", "NEARAI_API_KEY"],
         "hook": ["SESSION_SECRET", "GOOGLE_OAUTH_CLIENT", "TELEGRAM_",
                  "POLAR_", "DEEPSEEK_API_KEY", "NEARAI_API_KEY"],
@@ -128,6 +138,72 @@ def test_supplementary_groups_are_spelled_out_and_match_the_image():
         assert line, f"{role} states no group_add and would have no membership"
         assert set(re.findall(r"\d+", line.group(1))) == want, (
             f"{role} group_add does not match flake.nix")
+
+
+_ENV_NAME = re.compile(r"^\s+([A-Z][A-Z0-9_]*):", re.M)
+
+
+def _common_env():
+    """The `x-common` anchor every service merges in."""
+    text = COMPOSE.read_text()
+    anchor = text.split("environment: &common-env", 1)
+    assert len(anchor) == 2, "compose file has no common-env anchor"
+    return set(_ENV_NAME.findall(anchor[1].split("\nservices:", 1)[0]))
+
+
+def _role_env(role):
+    """Every variable name a role's container is handed."""
+    block = _service_blocks()[role]
+    own = block.split("environment:", 1)
+    assert len(own) == 2, f"{role} names no environment block"
+    return set(_ENV_NAME.findall(own[1])) | _common_env()
+
+
+@pytest.fixture
+def only(monkeypatch):
+    """Run with exactly one role's environment and nothing else.
+
+    TEE_REQUIRED is set because that is the condition being modelled: inside the
+    CVM `secrets.load()` reads no file and `oauth_app.load_keys()` refuses the
+    one on the volume, so a developer's own .env cannot make a role look
+    provisioned when its compose block does not provision it."""
+    every = set().union(*(_role_env(r) for r in ROLES))
+
+    def apply(role):
+        for name in every:
+            monkeypatch.delenv(name, raising=False)
+        for name in _role_env(role):
+            monkeypatch.setenv(name, "0" if name == "POLAR_SANDBOX" else "x")
+        monkeypatch.setenv("TEE_REQUIRED", "1")
+
+    return apply
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_each_role_is_handed_what_its_boot_gate_asks_for(only, role):
+    """The compose file and `secrets.REQUIRED_BY_ROLE` are one statement read
+    from two sides, and they were not: the gate asked every role for the union
+    of the box's secrets, so mail failed on SESSION_SECRET, web on four, and no
+    container in the enclave could boot at all. Failing closed is not a
+    vulnerability, but the repair it invites is widening these blocks, which is
+    the partition RTMR3 measures.
+
+    Read forwards here -- everything the role's gate asks for is in its own
+    block -- so adding a check to a role without handing that role the value is
+    caught in the suite rather than in a CVM."""
+    only(role)
+    assert secrets.missing(role) == []
+
+
+def test_no_role_is_provisioned_for_another_role_s_work():
+    """The partition read backwards. Without it the test above passes on a
+    compose file that hands every container everything, which is the shape this
+    split replaced."""
+    assert set(secrets.REQUIRED_BY_ROLE) == set(ROLES), "roles have drifted"
+    for role in ROLES:
+        others = set().union(*(set(_role_env(r)) for r in ROLES if r != role))
+        assert not others <= _role_env(role), (
+            f"{role} is handed every other role's environment")
 
 
 def test_the_image_offers_no_role_that_starts_everything():

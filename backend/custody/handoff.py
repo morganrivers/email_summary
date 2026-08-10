@@ -21,6 +21,14 @@ to is the one setting a compromised web tier could turn into somebody else's
 mail. `backend.accounts.chat_link` states the rule and holds the codes. This
 side asks; it does not get to say yes.
 
+Two more cross for a fourth reason, which is neither a token nor a withheld
+decision: the answer is a function of a *credential* the web tier would
+otherwise have to hold. `providers` is decided by which inference keys are
+present, and the three Polar operations by an organization-wide API token that
+reads every customer in the org and mints a portal session for any of them.
+Both were live keys held in the process parsing HTTP from the internet for no
+purpose the socket cannot serve.
+
 Everything else the web UI does with an account -- rendering the two documents,
 saving them, changing settings -- needs the account's data key and not a token,
 and the data key it gets from the co-signer directly.
@@ -86,8 +94,25 @@ OP_CHAT_FORGET = "chat-forget"
 # The names that come back are catalogue keys, never a key or any part of one.
 OP_PROVIDERS = "providers"
 
+# The three Polar calls, here for the same reason as `providers` and with a
+# bigger number attached. POLAR_API_TOKEN is organization-wide: it reads every
+# customer in the org and mints a portal session for any of them, which is more
+# than the web tier's own residual ("it can edit its own settings and its own
+# plan"). Holding it was what made a parsing bug in the process facing the open
+# internet reach the whole billing org, and the checkout id it interpolated
+# into a request path came straight off `?checkout_id=`.
+#
+# What crosses is an account id and a checkout id; what comes back is a URL to
+# redirect to and a yes/no. The token stays in the mail role, which is also the
+# role that writes `plan_status` into the manifest -- so the write these two
+# perform is now in the same process as every other write of that field.
+OP_CHECKOUT_URL = "checkout-url"
+OP_CHECKOUT_CONFIRM = "checkout-confirm"
+OP_PORTAL_URL = "portal-url"
+
 OPS = (OP_AUTH_URL, OP_SIGN_IN, OP_VOICE_START, OP_VOICE_STATUS, OP_VOICE_CLEAR,
-       OP_CHAT_BEGIN, OP_CHAT_FINISH, OP_CHAT_FORGET, OP_PROVIDERS)
+       OP_CHAT_BEGIN, OP_CHAT_FINISH, OP_CHAT_FORGET, OP_PROVIDERS,
+       OP_CHECKOUT_URL, OP_CHECKOUT_CONFIRM, OP_PORTAL_URL)
 
 # Which Telegram change is pending. Named here rather than beside the rule that
 # decides it, because the deciding is `chat_link`'s and this is only what the
@@ -246,6 +271,32 @@ def chat_finish(account_id):
 
 def chat_forget(account_id):
     call(OP_CHAT_FORGET, account_id=account_id)
+
+
+def checkout_url(account_id, fallback="/dashboard"):
+    """Where to send this account to pay, or `fallback` when no checkout could
+    be minted. Minting one is a POST carrying the organization token, so it
+    happens in the mail role."""
+    return call(OP_CHECKOUT_URL, account_id=account_id, fallback=fallback)
+
+
+def confirm_checkout(account_id, checkout_id):
+    """Settle entitlement for a buyer returning from Polar. Returns
+    (paid, detail).
+
+    `checkout_id` is whatever arrived in the return page's query string and is
+    passed on unexamined: the check that matters is the ownership test in
+    `billing.confirm_checkout`, which resolves Polar's copy of the checkout
+    back to an account, and that test can only run where the token is."""
+    result = call(OP_CHECKOUT_CONFIRM, account_id=account_id,
+                  checkout_id=checkout_id)
+    return bool(result["paid"]), result["detail"]
+
+
+def portal_url(account_id):
+    """A Polar-hosted customer-portal link for this account, or None when it has
+    no linked customer or the session call failed."""
+    return call(OP_PORTAL_URL, account_id=account_id)
 
 
 _providers_cache = None

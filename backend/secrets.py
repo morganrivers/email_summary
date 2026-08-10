@@ -294,9 +294,66 @@ REQUIRED = (
     google_oauth_configured,
 )
 
+# The enclave's three roles, named as `deploy/phala/docker-compose.yml` names
+# them in `command:` and `flake.nix` in its entrypoint case.
+ROLE_MAIL = "mail"
+ROLE_WEB = "web"
+ROLE_HOOK = "hook"
 
-def missing():
-    """Why this box is not fully provisioned, one reason per gap. Empty when it
-    is. Reasons name variables, never values."""
+# What each role needs, which is not what the box needs.
+#
+# The gate used to ask for REQUIRED whichever role was booting, and REQUIRED is
+# the union: a box running every unit under one uid. Inside the enclave the
+# partition is the point, so every role failed the gate on a secret it is
+# deliberately not handed -- mail on SESSION_SECRET, web on four -- and the
+# repair that suggests itself is to widen each container's `environment:`
+# block, which is the partition RTMR3 attests, undone to make a boot check
+# pass. So the gate asks per role instead.
+#
+# Why each entry, since a fail-closed list is only as good as its reasons:
+#   * mail draws mail, so it needs an inference key and the Google OAuth app,
+#     and it is the role that alerts, so it needs Telegram. It also needs the
+#     Polar API token: no role in the enclave receives Polar webhooks, so the
+#     3-hourly reconcile here is the only thing a renewal or a cancellation
+#     travels through, and an unconfigured one leaves every account entitled
+#     forever.
+#   * web signs cookies and nothing else. It holds no inference key, no Google
+#     client secret and, since the three billing operations moved to
+#     `custody.handoff`, no Polar token.
+#   * hook verifies a Pub/Sub JWT and appends to a spool. It is handed no
+#     secret and runs no gate at all (it is not given the guest-agent socket
+#     the gate needs). Stated as an empty tuple rather than left out, so
+#     "needs nothing" is written down.
+#
+# `polar_webhook_configured` is in no role on purpose: the receiver is a unit on
+# the box and no container in the enclave runs one, which is why
+# POLAR_WEBHOOK_SECRET appears in no `environment:` block.
+REQUIRED_BY_ROLE = {
+    ROLE_MAIL: (inference_configured, telegram_configured,
+                google_oauth_configured, polar_api_configured),
+    ROLE_WEB: (session_configured,),
+    ROLE_HOOK: (),
+}
+
+assert all(check in REQUIRED for checks in REQUIRED_BY_ROLE.values()
+           for check in checks), (
+    "a role may only require what a fully provisioned box requires; add the "
+    "check to REQUIRED first"
+)
+
+
+def missing(role=None):
+    """Why this process is not provisioned, one reason per gap. Empty when it
+    is. Reasons name variables, never values.
+
+    `role` names an enclave role and narrows the question to what that role is
+    handed; None asks the box-wide question. An unknown role raises rather than
+    falling back to REQUIRED: a typo in the entrypoint would otherwise read as
+    a stricter check that happens to pass on the box and fails closed in every
+    CVM."""
+    if role is not None and role not in REQUIRED_BY_ROLE:
+        raise ValueError(f"{role!r} is not an enclave role; "
+                         f"expected one of {sorted(REQUIRED_BY_ROLE)}")
+    checks = REQUIRED if role is None else REQUIRED_BY_ROLE[role]
     load()
-    return [reason for reason in (check() for check in REQUIRED) if reason]
+    return [reason for reason in (check() for check in checks) if reason]

@@ -137,8 +137,13 @@
           # are separate containers now, so one container's gate says nothing
           # about another's, and a shared one-shot would be a gate that passes
           # for a process that never asked.
+          #
+          # The role is passed through because the provisioning half of the gate
+          # is per role: these containers are each handed one slice of the
+          # secret set, and a gate asking for all of it fails closed on every
+          # one of them. See secrets.REQUIRED_BY_ROLE.
           gate() {
-            if ! python -m backend.tee.tee_boot; then
+            if ! python -m backend.tee.tee_boot --role "$role"; then
               echo "tee_boot gate failed; refusing to start $role" >&2
               exit 1
             fi
