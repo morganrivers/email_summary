@@ -25,7 +25,7 @@ import traceback
 
 from backend import paths
 from backend.accounts import account as account_mod
-from backend.accounts import chat_link
+from backend.accounts import auth_recency, chat_link
 from backend.custody import handoff, tokens
 from backend.drafting import voice_generation
 from backend.integrations import llm_client
@@ -144,6 +144,10 @@ def _chat_finish(account_id):
 
 def _chat_forget(account_id):
     chat_link.forget(account_id)
+    # The sign-in note goes with the pending change. It is not a secret, but it
+    # is a fact about a person this process has no further use for, and an id
+    # re-registered later must not inherit a freshness it did not earn.
+    auth_recency.forget(account_id)
     return None
 
 

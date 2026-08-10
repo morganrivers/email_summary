@@ -321,6 +321,32 @@ def current_history_id(account):
     return gmail(account).users().getProfile(userId="me").execute().get("historyId")
 
 
+def insert_message(account, raw, label_ids=("INBOX", "UNREAD")):
+    """Sole users.messages.insert call: put a message in the account's own
+    mailbox without sending anything.
+
+    `insert` writes straight into the mailbox. Nothing traverses SMTP and no
+    message leaves the box, which is what lets us reach a user in their inbox
+    while "Letterlock drafts, it never sends" stays true -- the scopes have
+    permitted `messages.send` all along, and no code path calling it is the
+    whole of that guarantee.
+
+    What it does buy an attacker who reaches this process is the ability to
+    write a message into the user's inbox under any From they like. That is a
+    phishing primitive and it is worth naming, but this process already reads
+    every message and drafts replies in the user's voice, so it is not a new
+    tier of access."""
+    assert raw, "an inserted message needs a body"
+    res = gmail(account).users().messages().insert(
+        userId="me",
+        internalDateSource="dateHeader",
+        body={"raw": raw, "labelIds": list(label_ids)},
+    ).execute()
+    message_id = res.get("id")
+    assert message_id, "Gmail accepted an inserted message with no id"
+    return message_id
+
+
 def register_watch(account, topic_name):
     """Sole users.watch call. Both the renewal driver and onboarding route
     through here, so the topic/label registration shape is defined once."""

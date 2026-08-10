@@ -118,6 +118,13 @@ OPS = (OP_AUTH_URL, OP_SIGN_IN, OP_VOICE_START, OP_VOICE_STATUS, OP_VOICE_CLEAR,
 CHAT_LINK = "link"
 CHAT_UNLINK = "unlink"
 
+# The subject of the message the daemon puts in the account's inbox when it
+# withholds a link code. Here for the same reason as the two names above: the
+# page has to tell the user what to look for, and it must be able to say so
+# without importing the module holding `force_unlink`. `chat_link` sends what
+# this names, so the page and the mail cannot drift apart.
+CHAT_CODE_SUBJECT = "Your Letterlock Telegram code"
+
 F_OP = "op"
 F_ARGS = "args"
 F_RESULT = "result"
@@ -262,11 +269,18 @@ def voice_clear_status(account_id):
 
 
 def chat_begin(account_id):
-    """Start a Telegram change. Returns (action, code, bot username).
+    """Start a Telegram change. Returns (action, code, bot username), where
+    `code` is None when the daemon put it in the account's inbox rather than
+    answering with it.
 
     The code is minted over there and never here. It is the proof the daemon
     will check, and a proof the checker accepts from the caller is not one --
     see `backend.accounts.chat_link` for the replay that permits.
+
+    None is not an error and not something to work around: it is the daemon
+    declining to tell this process something, because this process is the one
+    the rule is aimed at. Render the instructions and let the user read their
+    own mail.
 
     The bot's @name comes back with it so this side can render the instructions
     without holding the bot token."""

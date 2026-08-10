@@ -1262,6 +1262,10 @@ def _telegram_section(acct, pending=None, error=None, notice=None):
     nobody else can move your summary somewhere you cannot see it.
   </p>"""
         else:
+            step_two = (
+                "2. Send it this code:" if pending.get("code") else
+                "2. Send it the code from the email we just put in your inbox, "
+                f"subject <i>{_h(handoff.CHAT_CODE_SUBJECT)}</i>.")
             instructions = f"""
   <p>
     1. Open {open_link} in Telegram and press Start, or send it <code>/start</code>
@@ -1269,16 +1273,29 @@ def _telegram_section(acct, pending=None, error=None, notice=None):
     &nbsp;&nbsp;&nbsp;Or, without the app, sign in at
     <a href="https://web.telegram.org" target="_blank" rel="noopener">web.telegram.org</a>
     and search for {search_name}.<br>
-    2. Send it this code:
+    {step_two}
   </p>"""
+        # No code on the page is the daemon declining to tell this process one,
+        # not a value that went missing. Rendering a blank box where the code
+        # goes would read as a bug and send the user to support; saying where it
+        # went is the whole instruction.
+        code_html = (
+            f"""
+  <p style="text-align:center;font-size:18px;font-weight:bold;letter-spacing:2px;">
+    {_h(pending["code"])}
+  </p>"""
+            if pending.get("code") else
+            """
+  <p style="text-align:center;">
+    <b>Check your inbox.</b> We put the code there rather than showing it here,
+    so that only someone who can read your mail can move your summary.
+  </p>"""
+        )
         return f"""
 <h3>Telegram</h3>
 {error_html}{notice_html}
 <div class="info-box">
-{instructions}
-  <p style="text-align:center;font-size:18px;font-weight:bold;letter-spacing:2px;">
-    {_h(pending["code"])}
-  </p>
+{instructions}{code_html}
   <p>Then come back here and press the button.</p>
   <form method="post" action="/settings/telegram/confirm" style="display:inline">
     {_csrf_field(acct.id)}

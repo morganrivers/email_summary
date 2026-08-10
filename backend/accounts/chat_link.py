@@ -16,9 +16,22 @@ is supposed to have.
 
 What closes it is asking the chat that is being replaced:
 
-  * no chat linked -- allow it. Nothing is being delivered, so there is nothing
-    to take, and requiring a proof nobody can give would mean nobody can link.
+  * no chat linked -- there is no chat to ask, so the mailbox is asked instead:
+    the code is inserted into the account's own inbox and never returned to the
+    web tier. "Nothing is being delivered so there is nothing to take" was the
+    old reasoning here and it was present tense: linking is what *starts*
+    delivery, so a web tier that can link freely can subscribe itself to every
+    summary an account has not yet linked a chat for.
   * a chat linked -- unlinking requires a code posted from *that* chat.
+
+The first case has one exception and it is not a weakening. A sign-in *is* a
+proof of mailbox control, so an account that completed one in the last few
+minutes has already answered the question the email would ask, and the code is
+shown on the page as it always was. The exception is safe only because the
+daemon is what remembers the sign-in: it ran the callback itself
+(`auth_recency`), so this is not the web tier vouching for its own caller. It is
+also what keeps a new user's first minutes from involving an inbox round trip
+for a fact Google established one page earlier.
 
 Changing a target is therefore unlink then link, two steps for the user and one
 rule here. Offering a direct change would need proof of the old chat and proof
@@ -31,8 +44,14 @@ unlinks first and the account falls into the case that asks for nothing.
 The proof cannot be faked by a process holding the bot token. The token sends as
 the bot and reads the bot's inbox; it does not put a message into the inbox from
 somebody else's chat, and Telegram is the one deciding which chat a message came
-from. What such a process can do is read updates, so codes are treated as public
-and the binding is the chat id, not knowledge of the code.
+from. What such a process can do is read updates, so against *that* holder a
+code is public and the binding is the chat id, not knowledge of the code.
+
+An emailed code is secret with respect to a different holder, and the two claims
+do not conflict: what the mail delivery adds is that the web tier cannot read
+the code, so it cannot post one and claim the chat it posted from. A bot-token
+holder still sees the code, but only once the user has posted it, by which time
+the code has done its work.
 
 Two things follow from that and both are here rather than in the caller:
 
@@ -52,12 +71,15 @@ mid-change.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 
 from backend.accounts import account as account_store
-from backend.custody.handoff import CHAT_LINK, CHAT_UNLINK
+from backend.accounts import auth_recency
+from backend.custody.handoff import CHAT_CODE_SUBJECT, CHAT_LINK, CHAT_UNLINK
 from backend.integrations import telegram
+from backend.integrations.gmail_gcal import notices
 
 # How long a pending change stays answerable. The user has to open Telegram,
 # find the bot and send a code, which is a couple of minutes at an unhurried
@@ -88,11 +110,27 @@ CODE_NOT_SEEN_FROM_CHAT = (
     "We have not seen that code arrive from the linked chat yet. Send it "
     "from the chat that currently receives your summary, then press the "
     "button again.")
+CODE_NOT_DELIVERED = ("We could not put the code in your inbox just now. Try "
+                      "again in a minute.")
 
 USER_MESSAGES = frozenset({
     NO_SUCH_ACCOUNT, NOT_CONFIGURED, CODE_EXPIRED, CHANGED_MEANWHILE,
-    CODE_NOT_SEEN, CODE_NOT_SEEN_FROM_CHAT,
+    CODE_NOT_SEEN, CODE_NOT_SEEN_FROM_CHAT, CODE_NOT_DELIVERED,
 })
+
+NOTICE_BODY = """\
+Someone asked to link a Telegram chat to your Letterlock account.
+
+Your code is: {code}
+
+Send it to the Letterlock bot from the Telegram chat you want your drafts and
+your daily summary to arrive in, then press the button on the settings page.
+
+If you did not ask for this, do not send the code anywhere. Nothing changes
+until the code is sent from a chat, and whoever asked cannot read this message.
+
+This mailbox is not monitored; please do not reply.
+"""
 
 
 class ChangeRefused(Exception):
@@ -110,6 +148,11 @@ class ChangeRefused(Exception):
             "refusal nothing checked"
         )
         super().__init__(msg)
+
+
+def log(msg):
+    sys.stderr.write(f"chat_link {msg}\n")
+    sys.stderr.flush()
 
 
 def _now():
@@ -147,9 +190,30 @@ def _forget(account_id):
         _pending.pop(account_id, None)
 
 
+def _deliver_code(acct, code):
+    """Put the code in the account's own inbox.
+
+    A refusal and never a fallback. Showing the code on the page because the
+    insert failed hands it straight back to the process the delivery exists to
+    keep it away from, and the user cannot tell the difference -- which is the
+    shape of every control that is off and still looks on. An inbox we cannot
+    write to is a link that waits."""
+    try:
+        notices.insert_notice(acct, CHAT_CODE_SUBJECT, NOTICE_BODY.format(code=code))
+    except Exception as err:
+        log(f"{acct.id}: could not deliver a link code: {err}")
+        raise ChangeRefused(CODE_NOT_DELIVERED) from err
+
+
 def begin(account_id):
     """Mint the code for this account's pending change. Returns
-    (action, code, bot username).
+    (action, code, bot username), where `code` is None when it was delivered to
+    the account's inbox instead of to the caller.
+
+    Withholding it is the point rather than a detail of the return type: a code
+    this function hands back is a code the web tier holds, and the whole of what
+    the mail delivery buys is that a compromised web tier cannot post the code
+    itself and have us bind the chat it posted from.
 
     Restarting an unfinished change replaces it, so a user who leaves the page
     and comes back gets a code that works rather than one that expired quietly.
@@ -159,6 +223,12 @@ def begin(account_id):
         raise ChangeRefused(NOT_CONFIGURED)
     action = action_for(acct)
     code = telegram.new_link_code()
+    # An unlink is already answered by the chat being detached, which is a
+    # channel the web tier is not on, so it keeps the code on the page. Only the
+    # link path has no chat to ask.
+    to_caller = action == CHAT_UNLINK or auth_recency.proven_recently(acct.id)
+    if not to_caller:
+        _deliver_code(acct, code)
     now = _now()
     with _lock:
         _prune(now)
@@ -173,7 +243,7 @@ def begin(account_id):
             # time they press the button.
             "chat_id": acct.telegram.chat_id if acct.telegram else None,
         }
-    return action, code, telegram.bot_username()
+    return action, (code if to_caller else None), telegram.bot_username()
 
 
 def _claim(account_id):

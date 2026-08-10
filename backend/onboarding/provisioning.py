@@ -29,7 +29,7 @@ import sys
 from urllib.parse import urlencode
 
 from backend import audit, http_client, paths
-from backend.accounts import account
+from backend.accounts import account, auth_recency
 from backend.custody import client as cosigner
 from backend.custody import tokens, wrapping
 from backend.integrations.gmail_gcal import gmail_api, google_client, oauth_app
@@ -280,4 +280,10 @@ def handle_callback(query, state_is_ours, redirect_uri, fallback="/dashboard"):
     if query.get("scope"):
         _require_full_grant(query["scope"])
     acct = provision(code, redirect_uri, state)
+    # Google just established that this person holds this mailbox, and this is
+    # the process that watched it happen. `chat_link` reads the note to decide
+    # whether linking a Telegram chat has to go the long way round through the
+    # inbox; it is recorded here rather than at the caller so that any future
+    # sign-in surface inherits it along with the rest of the decision path.
+    auth_recency.record(acct.id)
     return acct, fallback
