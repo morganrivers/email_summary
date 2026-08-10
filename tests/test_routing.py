@@ -55,11 +55,14 @@ def test_get_account_resolves_and_filters(tmp_path, monkeypatch):
 def test_missing_manifest_refuses_rather_than_inventing_an_account(tmp_path, monkeypatch):
     """No implicit owner: an unseeded box must fail loudly. The old fallback
     silently stopped applying the moment anyone else signed up, which removed
-    the owner from routing without a word."""
+    the owner from routing without a word.
+
+    `InvalidAccountData` rather than `AssertionError`: the subject is a file
+    that is missing, and `-O` must not be able to delete the refusal."""
     monkeypatch.setattr(account, "MANIFEST", tmp_path / "does_not_exist.json")
     try:
         account.get_account(OWNER_EMAIL)
-    except AssertionError as err:
+    except account.InvalidAccountData as err:
         assert "seed_owner" in str(err)
     else:
         raise AssertionError("expected a missing manifest to raise")

@@ -121,9 +121,13 @@ def test_a_re_consent_keeps_the_handle_it_already_had(tmp_path, monkeypatch):
 
 
 def test_two_accounts_never_share_a_handle(tmp_path, monkeypatch):
-    """Asserted when the manifest is read, not only when it is written: a
+    """Checked when the manifest is read, not only when it is written: a
     hand-edited entry that duplicated one would let one account open another's
-    records and spend its co-signer budget."""
+    records and spend its co-signer budget.
+
+    `InvalidAccountData` rather than `AssertionError` because the subject is a
+    file on disk, and because a control `-O` deletes is a control with an off
+    switch. tests/test_optimized_controls.py runs this file under `-O`."""
     monkeypatch.setattr(account, "ACCOUNTS_DIR", tmp_path)
     monkeypatch.setattr(account, "MANIFEST", tmp_path / "accounts.json")
     account.register_account("dana@x.com", "Dana", "R")
@@ -132,5 +136,5 @@ def test_two_accounts_never_share_a_handle(tmp_path, monkeypatch):
     data = account._read_manifest()
     data["accounts"][1]["handle"] = data["accounts"][0]["handle"]
     account._write_manifest(data)
-    with pytest.raises(AssertionError, match="share an opaque handle"):
+    with pytest.raises(account.InvalidAccountData, match="share an opaque handle"):
         account.all_accounts()

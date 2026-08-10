@@ -56,8 +56,28 @@ SKIP_DIRS = {"__pycache__", "venv", ".git", "tests", "docs", "database",
 UNIT_DIR = REPO_ROOT / "deploy" / "hetzner"
 FLAKE = REPO_ROOT / "flake.nix"
 
-_EXEC_MODULE = re.compile(r"^ExecStart=.*?\s-m\s+(\S+)", re.MULTILINE)
+# The `python -m <module>` argument out of a unit file, and what one is allowed
+# to look like. Both are public because `deploy/preflight.py` reads the same
+# lines out of the same files: it interpolates the name it finds into a string
+# an interpreter then executes, so the shape has to be checked there, and two
+# modules with two ideas of what a module name is would be two answers to one
+# question.
+EXEC_MODULE_RE = re.compile(r"^ExecStart=.*?\s-m\s+(\S+)", re.MULTILINE)
+MODULE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _NIX_MODULE = re.compile(r"python\s+-m\s+([A-Za-z_][\w.]*)")
+
+
+def check_module_name(module, source):
+    """`module`, or `ValueError` naming where the bad one came from.
+
+    A unit file that runs something other than a dotted module is a broken
+    repository rather than one unit to skip, so this stops the caller."""
+    if not MODULE_NAME_RE.fullmatch(module):
+        raise ValueError(
+            f"{source} runs `-m {module}`, which is not a dotted module name"
+        )
+    return module
+
 
 FRAMEWORK_METHODS = {
     "do_GET", "do_POST", "do_PUT", "do_DELETE", "do_HEAD", "do_OPTIONS",
@@ -416,9 +436,9 @@ def box_roots():
     assert UNIT_DIR.is_dir(), f"no unit directory at {UNIT_DIR}"
     roots = set()
     for unit in UNIT_DIR.glob("*.service"):
-        m = _EXEC_MODULE.search(unit.read_text())
+        m = EXEC_MODULE_RE.search(unit.read_text())
         if m:
-            roots.add(m.group(1))
+            roots.add(check_module_name(m.group(1), unit.name))
     assert roots, f"no ExecStart -m module found in {UNIT_DIR}"
     return roots
 

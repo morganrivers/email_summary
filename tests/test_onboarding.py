@@ -356,7 +356,7 @@ def _google_says(monkeypatch, payload, status=200, seen=None):
             seen.update(k.get("data") or {})
         return R()
 
-    monkeypatch.setattr(tokens.requests, "post", post)
+    monkeypatch.setattr(tokens.http_client, "post", post)
 
 
 def test_the_consent_runs_on_an_injected_oauth_app_with_no_file_present(

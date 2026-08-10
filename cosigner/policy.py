@@ -135,11 +135,17 @@ def disabled_reason():
 
 
 def _limit(name, default):
+    """One ceiling, from the unit's environment or from the default beside it.
+
+    A raise and not an assert: the value is what an operator typed into a unit
+    file, so it is the same class of input as `int(raw)` failing on the line
+    above, and a limit that vanishes under `-O` is a limit."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
     value = int(raw)
-    assert value > 0, f"{name} must be positive, got {value}"
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value}")
     return value
 
 

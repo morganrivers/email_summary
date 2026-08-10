@@ -34,15 +34,13 @@ import html
 import sys
 import threading
 
-import requests
-
-from backend import site
+from backend import http_client, site
 from backend.custody import client as cosigner
 from backend.custody import keyring, wrapping
 from backend.integrations import telegram
 from backend.integrations.gmail_gcal import oauth_app
 
-TOKEN_FILE = "token.bin"
+TOKEN_FILE = "token.bin"  # nosec B105  # a filename, not a token
 
 HTTP_TIMEOUT = 30
 # Refresh a little before Google would stop accepting it, so a long request
@@ -147,7 +145,7 @@ def discard(acct):
 # --- the refresh itself ---------------------------------------------------
 
 def _post_token(form, proof):
-    return requests.post(
+    return http_client.post(
         oauth_app.TOKEN_ENDPOINT, data=form,
         headers={"DPoP": proof}, timeout=HTTP_TIMEOUT,
     )

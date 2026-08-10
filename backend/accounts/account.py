@@ -437,20 +437,28 @@ def all_accounts():
     The manifest is required. There used to be a fallback to owner_account()
     when it was missing, which meant the first signup by anyone made the owner
     disappear from routing: the manifest existed, so the fallback stopped, and
-    the owner had no entry in it. Refusing to run is the safe failure."""
+    the owner had no entry in it. Refusing to run is the safe failure.
+
+    All three checks read the manifest file rather than an argument, which is
+    why all three raise. The duplicate-handle one is the control stopping one
+    account from opening another's records, and a control spelled as an assert
+    is a control with `-O` for an off switch."""
     data = _read_manifest()
-    assert data is not None, (
-        f"no account manifest at {MANIFEST}. Seed the owner once with "
-        "`python -m backend.accounts.seed_owner`."
-    )
+    if data is None:
+        raise InvalidAccountData(
+            f"no account manifest at {MANIFEST}. Seed the owner once with "
+            "`python -m backend.accounts.seed_owner`."
+        )
     accounts = [_account_from_entry(e) for e in data["accounts"]]
     ids = [a.id for a in accounts]
-    assert len(ids) == len(set(ids)), f"duplicate account ids in manifest: {ids}"
+    if len(ids) != len(set(ids)):
+        raise InvalidAccountData(f"duplicate account ids in manifest: {ids}")
     handles = [a.handle for a in accounts if a.handle]
-    assert len(handles) == len(set(handles)), (
-        "two accounts share an opaque handle, so one can open the other's "
-        "records and spend the other's co-signer budget"
-    )
+    if len(handles) != len(set(handles)):
+        raise InvalidAccountData(
+            "two accounts share an opaque handle, so one can open the other's "
+            "records and spend the other's co-signer budget"
+        )
     return accounts
 
 

@@ -100,6 +100,16 @@ class NotConfigured(RuntimeError):
     """Credentials are absent or malformed. Fail closed; never improvise a key."""
 
 
+class RecordInvalid(ValueError):
+    """An `outer` that cannot be a record of ours: the wrong type, too short to
+    hold a header and a tag, or naming a key version this box cannot load.
+
+    A refusal and not an assert because every one of those values arrived in a
+    request body. `cosigner/server.py` answers it with a status the same way it
+    answers a tag failure, and deliberately with the same words -- which of the
+    three it was is the caller's business only when the caller is us."""
+
+
 def reset_for_test(directory=None):
     """Forget the loaded keys so a test can point at a fresh directory."""
     with _LOCK:
@@ -150,7 +160,10 @@ def current_version(version=None):
     the key it was derived from, and the record would open until the day the two
     disagreed."""
     version = KEY_VERSION if version is None else version
-    assert FIRST_VERSION <= version <= MAX_VERSION, f"key version {version} out of range"
+    if not FIRST_VERSION <= version <= MAX_VERSION:
+        raise RecordInvalid(
+            f"key version {version} is outside {FIRST_VERSION}..{MAX_VERSION}"
+        )
     return version
 
 
@@ -243,15 +256,18 @@ def unwrap(handle, outer):
     replayed under another's to get their rate-limit budget or their audit
     line."""
     assert handle, "unwrap requires a handle"
-    assert isinstance(outer, (bytes, bytearray)), "unwrap requires bytes"
+    if not isinstance(outer, (bytes, bytearray)):
+        raise RecordInvalid(f"unwrap requires bytes, got {type(outer).__name__}")
     header = 1 + NONCE_BYTES
-    assert len(outer) > header + 16, f"outer too short to be a sealed record ({len(outer)} bytes)"
+    if len(outer) <= header + 16:
+        raise RecordInvalid(f"outer too short to be a sealed record ({len(outer)} bytes)")
     version = outer[0]
     versions = known_versions()
-    assert version in versions, (
-        f"record was wrapped under outer key version {version}; this box can "
-        f"load {list(versions) or 'no versions'}"
-    )
+    if version not in versions:
+        raise RecordInvalid(
+            f"record was wrapped under outer key version {version}; this box can "
+            f"load {list(versions) or 'no versions'}"
+        )
     nonce = bytes(outer[1:header])
     return AESGCM(outer_key(handle, version)).decrypt(
         nonce, bytes(outer[header:]), handle.encode())
@@ -309,11 +325,18 @@ def dpop_proof(htm, htu, nonce=None):
 def dpop_public_jwk():
     """The public half, for the enclave's `dpop_jkt` at the code exchange.
 
-    `d` is the private scalar. Asserting its absence here rather than trusting
+    `d` is the private scalar. Checking its absence here rather than trusting
     `public_jwk` to have dropped it is the one check standing between a library
-    change and this service publishing its signing key over HTTP."""
+    change and this service publishing its signing key over HTTP.
+
+    Its subject is what a dependency returned, so it raises rather than
+    asserting: an assert is compiled out under `-O` and this one disappearing
+    publishes the key. `NotConfigured` because that is what it is -- key
+    material this box cannot use in the shape it has -- and because the JWK
+    endpoint already answers it with a 503 rather than a key."""
     jwk = dict(dpop_key().public_jwk)
-    assert "d" not in jwk, "refusing to publish a JWK carrying the private key"
+    if "d" in jwk:
+        raise NotConfigured("refusing to publish a JWK carrying the private key")
     return jwk
 
 
@@ -345,10 +368,11 @@ def write_dev_credentials(directory, version=None):
     directory.mkdir(parents=True, exist_ok=True)
     master = directory / master_name(version)
     dpop = directory / DPOP_NAME
-    assert not master.exists(), (
-        f"refusing to overwrite {master}; every record wrapped under this "
-        "version becomes unreadable when the key behind it changes"
-    )
+    if master.exists():
+        raise FileExistsError(
+            f"refusing to overwrite {master}; every record wrapped under this "
+            "version becomes unreadable when the key behind it changes"
+        )
     master.write_text(base64.b64encode(os.urandom(MASTER_BYTES)).decode() + "\n")
     master.chmod(0o600)
     if not dpop.exists():

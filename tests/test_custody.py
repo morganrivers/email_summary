@@ -26,6 +26,7 @@ import json
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from harness import needs_asserts
 
 from backend.accounts import account as account_store
 from backend.custody import client as cosigner
@@ -215,10 +216,15 @@ def test_inner_key_changes_with_the_key_version(enclave):
         wrapping.open_dek(HANDLE, inner, key_version=2)
 
 
+@needs_asserts
 def test_the_inner_layer_refuses_to_seal_anything_but_a_key(enclave):
     """`seal_dek` wraps a key and nothing else. Sealing a token directly here
     again would put user data under a key the co-signer's unwrap gets one layer
-    from, which is the layer order this design exists to keep."""
+    from, which is the layer order this design exists to keep.
+
+    An assert and not a refusal because `dek` is our own caller's: nothing
+    outside this process ever picks it. `open_dek`, whose `inner` comes off disk
+    or off the co-signer's wire, raises instead."""
     with pytest.raises(AssertionError, match="data key"):
         wrapping.seal_dek(HANDLE, REFRESH_TOKEN.encode())
 
@@ -420,7 +426,7 @@ def _install_token_endpoint(monkeypatch, responses):
         calls.append({"url": url, "data": data, "dpop": (headers or {}).get("DPoP")})
         return responses.pop(0)
 
-    monkeypatch.setattr(tokens.requests, "post", post)
+    monkeypatch.setattr(tokens.http_client, "post", post)
     return calls
 
 

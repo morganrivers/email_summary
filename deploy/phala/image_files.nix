@@ -43,6 +43,7 @@
   "backend/drafting/schedule_from_sent.py"
   "backend/drafting/tool_executors.py"
   "backend/drafting/voice_dna.py"
+  "backend/http_client.py"
   "backend/integrations/__init__.py"
   "backend/integrations/gmail_gcal/__init__.py"
   "backend/integrations/gmail_gcal/calendar_api.py"

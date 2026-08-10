@@ -56,8 +56,7 @@ def audit_log(tmp_path):
 
 @pytest.fixture
 def wire(monkeypatch, tmp_path):
-    import requests
-
+    from backend import http_client
     from backend.accounts import account
     from backend.drafting import agentic_drafter, schedule_from_sent, voice_dna
     from backend.integrations import llm_client
@@ -120,7 +119,7 @@ def wire(monkeypatch, tmp_path):
         dq = deque(responses)
         monkeypatch.setattr(llm_client, "OpenAI", lambda *a, **k: harness.FakeOpenAI(rec, dq))
         harness.install_gmail_fakes(monkeypatch, rec, gmail_outputs or {})
-        monkeypatch.setattr(requests, "post", harness.make_fake_post(rec))
+        monkeypatch.setattr(http_client, "post", harness.make_fake_post(rec))
         return rec
 
     # The drafting path reads two per-account documents, and since Track G both

@@ -16,9 +16,9 @@ import base64
 import re
 import sys
 
-import requests
 from googleapiclient.errors import HttpError
 
+from backend import http_client
 from backend.integrations.gmail_gcal.google_client import GMAIL, service
 
 PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
@@ -63,7 +63,7 @@ def profile_address(access_token):
     token rather than an account. It stays here because this module is where
     Gmail's HTTP surface is allowed to be named."""
     assert access_token, "profile_address needs an access token"
-    resp = requests.get(
+    resp = http_client.get(
         PROFILE_URL,
         headers={"Authorization": f"Bearer {access_token}"},
         timeout=HTTP_TIMEOUT,

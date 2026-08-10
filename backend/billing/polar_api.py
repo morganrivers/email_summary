@@ -1,4 +1,4 @@
-"""Thin Polar API client (stdlib only).
+"""Thin Polar API client.
 
 Backend endpoints require an organization API token. Billing needs two reads --
 resolve a customer's email (map a Polar customer to a local account) and list
@@ -6,17 +6,16 @@ subscriptions (poller reconcile) -- plus one write: mint a customer session so
 the web UI can link a signed-in user into the Polar-hosted portal. Ported from
 hetzner_signing_server/polar_api.py and trimmed to the subscription-billing
 surface (no license-key endpoints).
+
+The transport is `backend/http_client.py` rather than `urlopen`, which is also
+where the certifi bundle now comes from: this module used to build its own SSL
+context, which was the better of the two CA policies on the box and still one of
+two.
 """
 
-import json
 import os
-import ssl
-import urllib.error
-import urllib.request
 
-import certifi
-
-_ctx = ssl.create_default_context(cafile=certifi.where())
+from backend import http_client
 
 PROD_BASE = "https://api.polar.sh"
 SANDBOX_BASE = "https://sandbox-api.polar.sh"
@@ -42,27 +41,28 @@ def api_base():
 
 
 def _request(method, endpoint, payload=None, token=None):
-    url = f"{api_base()}{endpoint}"
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    """`(status, body)`, with a status of None when the request never happened.
+
+    A refused call is a status and a body here rather than an exception, because
+    every caller in `billing.py` decides on the status: a 404 for a customer is
+    an answer, and only an outage is not."""
     headers = {"Accept": "application/json", "User-Agent": "tee-email-billing"}
-    if data is not None:
-        headers["Content-Type"] = "application/json"
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(  # nosec B310  # https from api_base, no caller URL
-                req, timeout=_TIMEOUT, context=_ctx) as resp:
-            raw = resp.read().decode("utf-8") or "{}"
-            return resp.status, json.loads(raw)
-    except urllib.error.HTTPError as e:
-        try:
-            body = json.loads(e.read().decode("utf-8"))
-        except Exception:
-            body = None
-        return e.code, body
-    except Exception as e:
+        resp = http_client.request(
+            method, f"{api_base()}{endpoint}", timeout=_TIMEOUT,
+            headers=headers, json=payload,
+        )
+    except (http_client.TransportError, http_client.InsecureRequest) as e:
         return None, {"_transport_error": str(e)}
+    try:
+        return resp.status_code, resp.json()
+    except ValueError:
+        # An endpoint that answers with no body at all (a 204, a session that
+        # returns headers only) is a success with nothing in it; a body that
+        # does not parse is not, and stays None the way a refusal's does.
+        return resp.status_code, ({} if not resp.content else None)
 
 
 def get_customer(customer_id, token):

@@ -49,13 +49,12 @@ import os
 import sys
 import threading
 import time
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from google.auth import exceptions as google_auth_exceptions
 from google.auth import jwt as google_jwt
 
-from backend import paths, secrets, site
+from backend import http_client, paths, secrets, site
 from backend.daemons import wake_queue
 
 secrets.load()
@@ -75,6 +74,7 @@ CLOCK_SKEW_SECONDS = 30
 CERTS_TTL_MIN = 300
 CERTS_TTL_MAX = 6 * 3600
 CERTS_REFETCH_FLOOR = 60
+CERTS_FETCH_TIMEOUT = 5
 
 assert EXPECTED_AUD.startswith("https://"), f"aud is not a URL: {EXPECTED_AUD!r}"
 assert PUBSUB_SERVICE_ACCOUNT.endswith(
@@ -178,12 +178,23 @@ class SigningCerts:
 
 
 def download_certs():
-    """The certificate set and how long Google says it is good for."""
-    with urllib.request.urlopen(CERTS_URL, timeout=5) as resp:  # nosec B310  # constant https URL
-        body = resp.read()
-        ttl = cache_lifetime(resp.headers.get("Cache-Control", ""))
-    certs = json.loads(body.decode())
-    assert isinstance(certs, dict) and certs, f"certs endpoint returned {certs!r}"
+    """The certificate set and how long Google says it is good for.
+
+    The most security-relevant fetch on this box: these keys are what decide
+    whether an inbound push is Google's. It goes through `backend/http_client`
+    like every other outbound call, which is what gives it the certifi bundle
+    and a redirect that is not followed -- before that it was the one site with
+    the system trust store and redirects on.
+
+    What comes back crossed a trust boundary, so its shape is refused rather
+    than asserted: a certs endpoint answering something that is not an object
+    of keys must not become an empty `_certs` that verifies nothing."""
+    resp = http_client.get(CERTS_URL, timeout=CERTS_FETCH_TIMEOUT)
+    resp.raise_for_status()
+    ttl = cache_lifetime(resp.headers.get("Cache-Control", ""))
+    certs = resp.json()
+    if not (isinstance(certs, dict) and certs):
+        raise HookError(503, f"certs endpoint returned {type(certs).__name__}, not keys")
     return certs, ttl
 
 

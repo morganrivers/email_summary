@@ -232,16 +232,51 @@ adds noise that makes the converted ones harder to see:
 
 - Caller preconditions: `assert handle and inner`, `assert htm and htu`,
   `assert account is not None`, `assert name`, `assert etype`.
-- Manifest-present checks: `assert data is not None, "cannot set ... without an
-  accounts manifest"` (7 of these in `account.py`).
+- Manifest-present checks in the *mutators*: `assert data is not None, "cannot
+  set ... without an accounts manifest"` (7 of these in `account.py`). Each one
+  runs with an account object in hand, so the file it came from existing is an
+  invariant. `all_accounts()` is the reader and is not one of these: it was
+  converted in the second pass below, because there the missing file is the
+  answer rather than a contradiction.
 - Internal key-length checks on values this process just generated:
   `keyring.py` ~295 and ~303, `assert len(dek) == wrapping.KEY_LEN`.
 - `agentic_drafter.py` ~103 and ~198 — the nonce shape and
   `isinstance(fence, Fence)`. The fence is built by `new_fence()` in this
   module and passed by our own callers. The check that matters for the fence
   surviving contact with an email body is `pseudonymizer` ~518 above.
-- `cosigner/policy.py` config checks (`assert value > 0`) and the four package
-  invariants in `cosigner/__init__.py`, which the runtime guard now protects.
+- The four package invariants in `cosigner/__init__.py`, which the runtime guard
+  protects. (`cosigner/policy.py`'s `assert value > 0` was on this list and came
+  off it in the second pass: the value is typed into a unit file by an operator,
+  which is the same input `int(raw)` on the line above already refuses.)
+
+## The second pass, 2026-08-09
+
+`docs/plan_bandit_findings.md` Track A finished this off, for a reason this
+document had half-stated: the runtime guard covers only the boots that go
+through `backend/__init__.py` or `cosigner/__init__.py`, so it is a refusal
+worth having and not an argument that an assert is a safe way to spell a
+control. The survivors were converted:
+
+- `cosigner/keys.py` — `unwrap()`'s type, length and version checks and
+  `current_version()`'s range check now raise `RecordInvalid`; all four judge a
+  request body. `dpop_public_jwk()`'s `"d" not in jwk` raises `NotConfigured`,
+  which `/dpop-jwk` already answers with a 503 rather than a key.
+- `cosigner/attest.py` — the allowlist's `quote_oid` and its report_data binding
+  raise `quote_policy.AllowlistInvalid`; both are read out of a file an operator
+  edits, and `configured()` already catches that type.
+- `backend/accounts/account.py` — `all_accounts()`'s missing manifest, duplicate
+  ids and duplicate handles raise `InvalidAccountData`. The handle one is the
+  control stopping one account from opening another's records.
+- `backend/custody/wrapping.py` — the KMS response's shape, `open_dek`'s `inner`
+  and the length of what the inner layer opened to raise `CustodyError`.
+- `backend/custody/handoff.py` — a `providers` answer that is not a list raises
+  `HandoffUnavailable`.
+
+`tests/test_optimized_controls.py` is what keeps it true from here: the refusal
+suites run under `PYTHONOPTIMIZE=1` with the guard patched out, so a control
+written as an assert tomorrow fails there and nowhere else. A test whose subject
+is an assert carries `harness.needs_asserts`, and applying that marker is a
+claim that what it pins is a programmer error rather than a control.
 
 ## Verifying a conversion
 
