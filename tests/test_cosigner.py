@@ -23,6 +23,7 @@ client-certificate header are exercised as deployed, with Caddy's role played
 by setting the header directly.
 """
 
+import datetime
 import json
 import time
 
@@ -375,11 +376,59 @@ def test_dev_mode_refuses_to_run_on_a_provisioned_box(tmp_path, monkeypatch):
     with pytest.raises(quote_policy.AllowlistInvalid, match="provisioned for production"):
         attest.mode()
 
-    config.write_text(json.dumps({"mode": attest.DEV_INSECURE, "measurements": []}))
+    config.write_text(json.dumps({
+        "mode": attest.DEV_INSECURE, "measurements": [],
+        "dev_insecure_expires": _far_future(),
+    }))
     attest.reset_for_test(config)
     monkeypatch.setenv("TEE_REQUIRED", "1")
     with pytest.raises(attest.AttestationRefused, match="TEE_REQUIRED"):
         attest.mode()
+
+
+def _far_future():
+    return (datetime.date.today() + datetime.timedelta(days=365)).isoformat()
+
+
+def test_dev_mode_expires(tmp_path, monkeypatch):
+    """The other half of the rule above, for the box nobody has provisioned
+    yet: an allowlist with no measurements in it and TEE_REQUIRED unset is the
+    one case where dev-insecure is accepted, and it is also the case that never
+    notices it has gone on too long."""
+    config = tmp_path / "allowlist.json"
+    monkeypatch.delenv("COSIGNER_ATTESTATION", raising=False)
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+
+    def write(**extra):
+        config.write_text(json.dumps(
+            {"mode": attest.DEV_INSECURE, "measurements": [], **extra}))
+        attest.reset_for_test(config)
+
+    write(dev_insecure_expires=_far_future())
+    assert attest.mode() == attest.DEV_INSECURE
+
+    write()
+    with pytest.raises(quote_policy.AllowlistInvalid, match="without a"):
+        attest.mode()
+
+    write(dev_insecure_expires="soon")
+    with pytest.raises(quote_policy.AllowlistInvalid, match="not a YYYY-MM-DD"):
+        attest.mode()
+
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    write(dev_insecure_expires=yesterday)
+    with pytest.raises(quote_policy.AllowlistInvalid, match="expired on"):
+        attest.mode()
+    # And it is reported at deploy time rather than by every unwrap failing.
+    assert "expired on" in (attest.configured() or "")
+
+
+def test_the_shipped_allowlist_names_a_date_it_stops_being_accepted():
+    """The packaged file is the one that actually runs, and it says
+    dev-insecure. Reading it through `mode()` is what proves the date is both
+    present and still in the future."""
+    attest.reset_for_test()
+    assert attest.mode() in (attest.REQUIRED, attest.DEV_INSECURE)
 
 
 def test_allowlist_entry_must_pin_a_measurement(tmp_path, monkeypatch):

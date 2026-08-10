@@ -100,8 +100,8 @@ MAX_USER_AGENT = 200
 RETENTION_DAYS = 180
 
 # How often a running process bothers to check. Pruning is cheap and the table
-# is small; doing it from record() rather than a timer means there is no unit to
-# forget to deploy.
+# is small; riding on the daemon's pass and on record() rather than a timer
+# means there is no unit to forget to deploy.
 PRUNE_INTERVAL = 3600
 
 _LOCK = threading.Lock()
@@ -112,10 +112,19 @@ _ORIGIN = threading.local()
 
 
 def state_dir():
-    """Where the log lives. Overridable so a test can point at a fresh
-    directory without inheriting the checkout's own state/."""
+    """Where the log lives, created if it is not there. Overridable so a test
+    can point at a fresh directory without inheriting the checkout's own
+    state/.
+
+    Both branches go through `paths`, at the mode `state/` is supposed to
+    carry. This module used to create the directory itself with
+    `shared_dir(parent)` and take that function's default, which was 2770 and
+    not the 2771 `ensure_run_dir` sets -- so the first row written after a boot
+    re-set `state/` and locked the Gmail push receiver out of its own spool."""
     override = os.environ.get("LETTERLOCK_AUDIT_DIR")
-    return Path(override) if override else paths.ensure_run_dir()
+    if override:
+        return paths.shared_dir(Path(override), paths.DIR_MODE_TRAVERSABLE)
+    return paths.ensure_run_dir()
 
 
 def db_path():
@@ -132,7 +141,6 @@ def connect():
     global _CONN
     if _CONN is None:
         path = db_path()
-        paths.shared_dir(path.parent)
         conn = sqlite3.connect(str(path), check_same_thread=False)
         conn.execute("PRAGMA secure_delete=ON")
         conn.executescript(SCHEMA)
@@ -223,17 +231,27 @@ def record(account_id, action, outcome, detail=(), ts=None):
             (now, account_id, action, outcome, detail, source_ip, user_agent),
         )
         conn.commit()
-    _maybe_prune(now)
+    maybe_prune(now)
 
 
-def _maybe_prune(now):
-    """Prune at most once per PRUNE_INTERVAL per process."""
+def maybe_prune(now=None):
+    """Prune at most once per PRUNE_INTERVAL per process.
+
+    Called after each write, and once per pass by the daemon
+    (`daemons/daemon_loop.py`). Only the second one bounds anything: rows age
+    out on a clock, and a write is what this table records rather than what it
+    schedules, so a box nobody signs in to for a month kept every row past
+    RETENTION_DAYS while the retention period claimed otherwise. The daemon is
+    the process that runs whether or not a person does anything, which is the
+    property wanted here, and it is already running -- still no unit to forget
+    to deploy."""
     global _LAST_PRUNE
+    now = float(now if now is not None else time.time())
     with _LOCK:
         if now - _LAST_PRUNE < PRUNE_INTERVAL:
-            return
+            return 0
         _LAST_PRUNE = now
-    prune(before=now - RETENTION_DAYS * 86400)
+    return prune(before=now - RETENTION_DAYS * 86400)
 
 
 def prune(before=None):

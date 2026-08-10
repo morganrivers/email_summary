@@ -76,6 +76,20 @@ F_PROOF = "proof"
 F_JWK = "jwk"
 F_JKT = "jkt"
 F_ERROR = "error"
+# The health check's answer to "are you verifying who you talk to".
+#
+# It is on the wire because the enclave has to be able to ask. The co-signer's
+# dev-insecure switch is a line in a file on the co-signer's own box, and until
+# now nothing on the enclave side could see it: an enclave that believes it is
+# attested would keep handing records to a service accepting connections with no
+# client certificate at all. `backend/custody/client.py` reads this field once
+# per process and refuses under TEE_REQUIRED unless it says `required`, which is
+# what makes the two boxes agree about whether they are attesting.
+#
+# Deliberately not a promise. A compromised co-signer answers whatever it likes
+# here; what this closes is the misconfiguration, which is the case that has
+# actually happened.
+F_ATTESTATION = "attestation"
 
 
 def b64(raw):

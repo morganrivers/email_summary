@@ -28,7 +28,7 @@ from backend.custody import client as cosigner
 from backend.custody import keyring, tokens, wrapping
 from backend.integrations.gmail_gcal import gmail_api, oauth_app
 from backend.onboarding import provisioning
-from cosigner import audit
+from cosigner import attest, audit
 from cosigner import keys as cosigner_keys
 from cosigner import policy, protocol
 
@@ -342,3 +342,57 @@ def test_a_dead_cosigner_stops_mail(split_custody, monkeypatch):
     tokens.forget()
     with pytest.raises(cosigner.CoSignerUnavailable):
         tokens.access_token_for(acct())
+
+
+def test_the_enclave_refuses_a_cosigner_that_is_not_attesting(split_custody, monkeypatch):
+    """The other direction of the split, which nothing checked.
+
+    `cosigner/allowlist.json` can say `dev-insecure`, under which
+    `attest.verify_client` passes a request carrying no client certificate at
+    all -- and the only guard on that switch reads TEE_REQUIRED out of the
+    co-signer's own environment, which the enclave cannot set. So an enclave
+    that believes it is attested could hand every record it owns to a service
+    authenticating nobody, and the first sign would have been an audit log full
+    of `attested=0` that nobody was reading.
+
+    `secrets.tee_required` is patched rather than the variable set, because both
+    halves run in this process and the point is the case where only one of them
+    thinks it is production."""
+    alerts = []
+    monkeypatch.setattr(cosigner, "_alert_operator", alerts.append)
+    monkeypatch.setattr(cosigner.secrets, "tee_required", lambda: True)
+    # There is no guest agent here to issue RA-TLS material, and refusing to
+    # connect without one is that function's own rule with its own test. What
+    # is under test is which co-signer this enclave will talk to at all.
+    monkeypatch.setattr(cosigner, "_client_identity", lambda: None)
+    cosigner.reset_cache()
+
+    with pytest.raises(cosigner.CoSignerNotAttesting, match="dev-insecure"):
+        cosigner.dpop_jwk()
+    assert alerts, "an enclave that stopped processing mail said nothing"
+
+
+def test_an_attesting_cosigner_is_asked_once_and_then_used(split_custody, monkeypatch):
+    """The same enclave against a co-signer that verifies its clients: the
+    check passes, and it costs one round trip for the life of the process
+    rather than one per request. The answer is a file that service read at its
+    own startup, so asking again would be asking the same question."""
+    monkeypatch.setenv("COSIGNER_ATTESTATION", attest.REQUIRED)
+    attest.reset_for_test()
+    monkeypatch.setattr(cosigner.secrets, "tee_required", lambda: True)
+    # There is no guest agent here to issue RA-TLS material, and refusing to
+    # connect without one is that function's own rule with its own test. What
+    # is under test is which co-signer this enclave will talk to at all.
+    monkeypatch.setattr(cosigner, "_client_identity", lambda: None)
+    cosigner.reset_cache()
+
+    health = []
+    real_request = cosigner._request
+    monkeypatch.setattr(cosigner, "_request",
+                        lambda m, p, b=None: (health.append(p) if p == protocol.HEALTH_PATH
+                                              else None) or real_request(m, p, b))
+
+    assert cosigner.dpop_jwk()["kty"] == "EC"
+    cosigner._jwk_cache = None
+    assert cosigner.dpop_jwk()["kty"] == "EC"
+    assert health == [protocol.HEALTH_PATH]

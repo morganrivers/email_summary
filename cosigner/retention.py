@@ -23,6 +23,19 @@ mail was processed, so the log is a per-account activity timeline for as long
 as it is kept -- working hours, timezone, the week someone stopped using the
 product. Keeping it forever is a choice to hold that forever.
 
+**What is kept forever, and what that costs.** `grants` is never pruned and no
+endpoint deletes a row from it, so a handle wrapped once stays after the enclave
+destroys that account: this box holds one opaque identifier and the time of its
+first wrap, indefinitely, for every account that has ever existed. That is the
+price of `/wrap` refusing a second time, and a deletion path would be a larger
+problem rather than a smaller one -- it is the call an attacker holding the
+enclave makes before re-wrapping a live handle around an inner ciphertext they
+chose, and the only party who could authorize it is the enclave whose compromise
+it defends against. So the row stays and what it carries is bounded instead: a
+handle this box cannot turn back into a person (`account.new_handle`), an action
+name, and one timestamp. The mapping to a person lives only in the enclave's
+manifest, and deleting the account there deletes it.
+
 DENY rows are the exception and are kept far longer. Nothing enforcement-side
 reads them at all -- both counters filter on ALLOW -- and they are the highest
 value evidence in the table: a refusal is either a bug or a breach. If they are

@@ -243,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == protocol.HEALTH_PATH:
             return self._send(200, {
                 "status": "ok",
-                "attestation": attest.mode(),
+                protocol.F_ATTESTATION: attest.mode(),
                 "keys": keys.configured() or "ok",
                 "disabled": policy.disabled_reason(),
             })

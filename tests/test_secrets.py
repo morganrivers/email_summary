@@ -202,12 +202,36 @@ def attested(tmp_path, monkeypatch):
     monkeypatch.setattr(tee_boot, "DstackClient", lambda *a, **k: FakeDstack())
     monkeypatch.setattr(tee_boot, "ATTEST_DIR", tmp_path / "attestation")
     monkeypatch.setenv("TEE_REQUIRED", "1")
-    monkeypatch.delenv("EXPECTED_COMPOSE_HASH", raising=False)
+    # The gate refuses a boot that cannot say which compose it is, so an
+    # attested fixture has to name one. It is the guest agent's answer here,
+    # which is the case the two tests below take apart.
+    monkeypatch.setenv("EXPECTED_COMPOSE_HASH", FakeDstack.INFO["compose_hash"])
 
 
 def test_gate_passes_when_attested_and_provisioned(attested, env_file, monkeypatch):
     _provision(monkeypatch)
     assert tee_boot.run_gate() == 0
+
+
+def test_gate_fails_closed_without_an_expected_compose_hash(
+        attested, env_file, monkeypatch, capsys):
+    """An unset EXPECTED_COMPOSE_HASH used to return from the check silently, so
+    the comparison was on only for whoever remembered the variable -- and the
+    compose file ships it as `${EXPECTED_COMPOSE_HASH:-}`, which is unset."""
+    _provision(monkeypatch)
+    monkeypatch.delenv("EXPECTED_COMPOSE_HASH", raising=False)
+
+    assert tee_boot.run_gate() == 1
+    assert "EXPECTED_COMPOSE_HASH" in capsys.readouterr().err
+
+
+def test_gate_fails_closed_on_the_wrong_compose(attested, env_file, monkeypatch, capsys):
+    """The deploy that published one compose and booted another."""
+    _provision(monkeypatch)
+    monkeypatch.setenv("EXPECTED_COMPOSE_HASH", "some-other-hash")
+
+    assert tee_boot.run_gate() == 1
+    assert "compose_hash mismatch" in capsys.readouterr().err
 
 
 def test_gate_fails_closed_on_a_missing_secret(attested, env_file, monkeypatch, capsys):
@@ -246,6 +270,20 @@ def test_gate_fails_closed_without_the_oauth_client(attested, env_file, monkeypa
 
     assert tee_boot.run_gate() == 1
     assert secrets.GOOGLE_CLIENT_SECRET_ENV in capsys.readouterr().err
+
+
+def test_the_ra_tls_key_is_never_readable_by_anyone_else(attested, env_file, monkeypatch):
+    """The compose mounts /app/attestation as a tmpfs at mode 0777, because the
+    runtime creates it as root and the container's process is not. Writing the
+    key and then chmodding it leaves a world-readable private key for the width
+    of two syscalls, so it is created at 0600 instead."""
+    _provision(monkeypatch)
+    tee_boot.ATTEST_DIR.mkdir(parents=True, exist_ok=True)
+    tee_boot.ATTEST_DIR.chmod(0o777)
+
+    assert tee_boot.run_gate() == 0
+    key = tee_boot.ATTEST_DIR / "ra_tls.key"
+    assert key.stat().st_mode & 0o777 == 0o600, oct(key.stat().st_mode)
 
 
 def test_gate_no_ops_outside_a_tee(env_file, monkeypatch):

@@ -76,7 +76,20 @@ EGRESS_PROXY_PORT = 8792
 # reading the header. Kept together because they are the two halves of one
 # claim -- Caddy is in front of us, over loopback, and nothing else is.
 LOOPBACK = "127.0.0.1"
-TRUSTED_PROXIES = frozenset({LOOPBACK, "::1"})
+
+# Anything else in front of the app, named by address, because on the box there
+# is nothing else and in the enclave there is: dstack's ingress reaches the web
+# container over a docker network rather than over loopback, so the peer is that
+# proxy's address and every audit row would record it instead of the browser's.
+# Empty by default, and loopback is always in the set below, so this can only
+# add a peer somebody named -- which is the point. An unnamed proxy costs a
+# useless log entry; naming one that is not really in front of us costs a
+# forgeable one, and that is a decision an operator makes deliberately.
+EXTRA_TRUSTED_PROXIES = tuple(
+    a.strip() for a in os.environ.get("LETTERLOCK_TRUSTED_PROXIES", "").split(",")
+    if a.strip()
+)
+TRUSTED_PROXIES = frozenset({LOOPBACK, "::1"} | set(EXTRA_TRUSTED_PROXIES))
 
 
 def upstream(port):

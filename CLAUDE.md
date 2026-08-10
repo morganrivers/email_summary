@@ -174,13 +174,27 @@ image inherits the default, since a commented-out pin is not rendered.
 
 ## How the enclave is split
 
-Three containers from one image, not four processes under one uid.
+Four containers from one image, not four processes under one uid.
 `deploy/phala/docker-compose.yml` names a role per service (`mail`, `web`,
-`hook`), `flake.nix` bakes the three accounts and the two shared groups
+`hook`, `egress`), `flake.nix` bakes the four accounts and the two shared groups
 (`letterlock-data`, `letterlock-wake`) into `/etc/passwd` and `/etc/group` under
 the same names `backend/paths.py` resolves, so one piece of code sets modes on
 the box and in the image. TDX answers the host operator; it does nothing about a
 bug in our own code, which is what this answers.
+
+`egress` is the newest and is the box's `egress-proxy.service` in here: same
+module, same allowlist, its own uid and no group at all, no volume, no
+guest-agent socket and so no gate. What makes it enforcement rather than
+configuration is the pair of compose networks. `inner` is `internal: true`, so
+docker installs no route off the host for it; `mail` is on it alone and reaches
+the internet through the proxy or not at all. `web` and `hook` are on `edge`
+too, because a published port on an internal-only network never receives
+forwarded ingress and both of them have to be reached from outside the CVM — so
+for those two the allowlist is configuration, and saying otherwise in product
+copy is the thing to refuse. Closing it for them means an ingress container in
+front of them holding no data, which is what Caddy is on the box and is not in
+this repository. `web` publishes 8790 and binds `0.0.0.0`; the cost of that is
+in `backend/site.py` below.
 
 The compose file is the partition and not merely its description. dstack
 decrypts `.encrypted-env` to the guest filesystem, `app-compose.service` reads
@@ -192,6 +206,12 @@ partition is attested: move `SESSION_SECRET` to the mail container and
 `cosigner/attest.py` stops accepting the client certificate. Two rules follow —
 never bind-mount `/dstack/.host-shared` (it holds the whole decrypted set), and
 every interpolated name must also be in `allowed_envs` in `app-compose.json`.
+Both are now tested rather than only stated: `tests/test_enclave_boundary.py`
+refuses that mount, refuses any host path but the guest-agent socket, refuses
+`privileged`/`cap_add`/`network_mode`, and holds the list of interpolated names
+so adding one fails a test whose message is what gets pasted into
+`allowed_envs`. `EXPECTED_COMPOSE_HASH` is interpolated and must be set:
+`tee_boot` refuses a boot that cannot say which compose it is supposed to be.
 
 `hook` gets no `database/` and no guest-agent socket, and so runs no attestation
 gate: that socket is unauthenticated and `GetKey` takes a caller-supplied
@@ -241,11 +261,16 @@ Derived from what actually starts: `tools/reachability.py` walks imports from
 the `python -m` entry points in `flake.nix` itself, so a module ships because
 something that runs imports it. It replaced a filter over file extensions that
 was wrong both ways — it shipped `cosigner/` whole (the outer key derivation,
-the request policy, the audit store) plus the egress proxy, the billing webhook
-and poller and `tools/` into an image that starts none of them, and it shipped
-no data file at all, because `.py`-or-`.css` matches neither `default_voice.md`
-nor `inference_allowlist.json` nor a favicon. Only the co-signer's wire contract
+the request policy, the audit store) plus the billing webhook and poller and
+`tools/` into an image that starts none of them, and it shipped no data file at
+all, because `.py`-or-`.css` matches neither `default_voice.md` nor
+`inference_allowlist.json` nor a favicon. Only the co-signer's wire contract
 (`cosigner/protocol.py`) belongs in the enclave; a test asserts that.
+
+That test is also why `backend/egress.py` asks `find_spec` before reading the
+co-signer's allowlist for its PCCS host: a plain `from cosigner import attest`
+is an import edge, and the edge would drag the co-signer's allowlist reader into
+the image the moment the enclave started running the proxy.
 
 Two lists in that module cannot be derived and carry a reason each.
 `EXTRA_MODULES` is commands nothing starts that must still be there because
@@ -455,12 +480,22 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   for the peer: the only address whose `X-Forwarded-For` `web_server._source_ip()`
   reads, so `upstream()` asserts the address it renders is one the app trusts —
   drift means every audit row records the proxy instead of a browser.
-  `COSIGNER_PORT` is re-exported from `cosigner/protocol.py`, not defined here.
+  `LETTERLOCK_TRUSTED_PROXIES` adds to that set and never replaces it, which is
+  what keeps that assert true; it exists for the enclave, where the web role is
+  published on a port and reached over a docker network, so the peer is dstack's
+  ingress. It ships empty, because an unnamed proxy costs a useless audit row
+  and a wrongly named one costs a forgeable one — the web server says which it
+  is doing at startup. `COSIGNER_PORT` is re-exported from
+  `cosigner/protocol.py`, not defined here.
 - `backend/egress.py` — every hostname anything on this box may connect to, and
   the check that decides one connection. Derived, not typed: each entry comes
   from the module that already names the host (`llm_client.PROVIDERS`,
-  `oauth_app`, `telegram.API_ROOT`, `polar_api`'s two bases, both TDX
-  allowlists' `pccs_url`, `site.COSIGNER_HOST`). Exact matches only — a suffix
+  `oauth_app`, `telegram.API_ROOT`, `polar_api`'s two bases, the TDX
+  allowlists' `pccs_url` of every verifier that runs here,
+  `site.COSIGNER_HOST`). "Runs here" is why the co-signer's allowlist is read
+  behind a `find_spec`: that service is a separate box and the enclave image
+  carries only its wire contract, so where its code is absent the process that
+  would fetch that collateral is absent too. Exact matches only — a suffix
   rule for `near.ai` is what permits `evil.near.ai`. `GOOGLE_API_HOSTS` holds the
   one pair no constant of ours produces (googleapiclient reads them from bundled
   discovery documents); `tests/test_egress.py` reads those documents and fails if
@@ -469,6 +504,10 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   URLs. It is for the post-compromise case and for a dependency that phones home.
   `deploy/check_egress.py` proves it is on — `IPAddressDeny=` needs cgroup v2
   with BPF, and without it systemd logs a line and starts the unit anyway.
+  In the enclave the same module runs as the `egress` container and the
+  enforcement is docker's `internal: true` network rather than systemd's, which
+  covers the `mail` role alone: see "How the enclave is split" for which roles
+  it is enforced for and which it is merely configured for.
 - `cosigner/` — imports nothing from `backend/` except the Telegram call in
   `alerts.py`, so it can move to its own box under its own operator; the
   dependency points the other way (`backend/site.py` and the custody client
@@ -489,8 +528,16 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   a thread inside the co-signer (a second process would VACUUM under the one
   answering requests), and derives its floor from `policy.longest_window()`.
   `attest.py` holds this box's measurement allowlist — the point of the second
-  machine, since the enclave cannot edit it. `cosigner/__init__.py` states the
-  four invariants; read them before refactoring anything in that package.
+  machine, since the enclave cannot edit it. Its `dev-insecure` mode passes a
+  request carrying no client certificate at all, so it now costs two things: a
+  `dev_insecure_expires` date in the allowlist, without which
+  `quote_policy.Policy.mode()` refuses to answer and the service refuses to
+  start, and an enclave that can see it — `/health` answers `attestation` and
+  `backend/custody/client.py` refuses to use a co-signer that is not verifying
+  its clients. Before both, the only guard read `TEE_REQUIRED` out of this box's
+  own environment, which is a variable the other box cannot set.
+  `cosigner/__init__.py` states the four invariants; read them before
+  refactoring anything in that package.
   An account is named by an opaque handle the enclave minted, never an address
   (`account.new_handle`); nothing here parses it, which is why
   `tests/test_handle_boundary.py` reads the tree for a call passing the wrong one
@@ -518,9 +565,14 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   record, the TTL cache, and `read_encrypted`/`write_encrypted`, the one path
   every per-account file goes through (token, voice profile, personal context).
   `wrapping.py` is the inner AES-GCM layer from the dstack KMS `app_secret`;
-  `client.py` the sole network boundary to the co-signer; `tokens.py` the only
-  path from a stored record to a usable access token; `rotate.py` moves every
-  record onto a new co-signer key without opening one.
+  `client.py` the sole network boundary to the co-signer, and the one place that
+  decides whether the co-signer is one to use at all: under `TEE_REQUIRED` it
+  reads `/health`'s `attestation` once per process and raises
+  `CoSignerNotAttesting` unless it says `required`, since a co-signer in
+  `dev-insecure` accepts a connection with no client certificate and only its
+  own box could otherwise tell. `tokens.py` is the only path from a stored
+  record to a usable access token; `rotate.py` moves every record onto a new
+  co-signer key without opening one.
   Layer order is the guarantee: ours inside, theirs outside. Reversed, the
   co-signer's unwrap would yield a usable key and it would become the one box
   that can read every mailbox. No bypass, ever: a co-signer that is down means no
@@ -585,6 +637,12 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   deploy that creates the group) falls back to owner-only, so this code landing
   ahead of its deploy is never a widening. `_chmod_if_owned` is why the second
   uid to reach a shared directory does not raise EPERM on its first write.
+  `shared_dir` takes its mode as a required argument, because `audit.py` took
+  the old default and re-set `state/` from 2771 to 2770 on the first row of
+  every boot, which locked the push receiver out of its own spool silently.
+  `write_private` is the other half of "the mode is the grant": it creates a
+  file at 0600 rather than writing it and narrowing it afterwards, which is what
+  the enclave's RA-TLS keys need on a tmpfs mounted 0777.
 - `backend/integrations/gmail_gcal/` — the only code talking to Google's mail and
   calendar APIs: `oauth_app.py` (keys, scopes, endpoints), `google_client.py`
   (credentials + per-thread service cache), `gmail_api.py`, `calendar_api.py`,
@@ -729,8 +787,11 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   checked against `TOKEN` (`timezone`, `chars:2048`, `provider:deepseek`).
   `RETENTION_DAYS` is the only bound on how long a departed user's address stays
   — deleting an account does not delete its rows, since the row saying it was
-  deleted is the one most worth keeping — and the prune rides on `record()`
-  behind `PRUNE_INTERVAL` with `secure_delete` on.
+  deleted is the one most worth keeping — and the prune rides on `record()` and
+  on the daemon's pass (`audit.maybe_prune`) behind `PRUNE_INTERVAL` with
+  `secure_delete` on. The daemon is what makes the period a period: rows age out
+  on a clock, and while a write was the only thing that pruned, a box nobody
+  signed in to kept them past `RETENTION_DAYS`.
 - `backend/integrations/telegram.py` — `TelegramTarget`, sends, and the bot's
   inbox. `send_telegram(msg, target)` always takes an explicit target;
   `operator_target()` (env) is only for box-level failures, never a user's mail.
