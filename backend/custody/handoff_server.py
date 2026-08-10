@@ -26,7 +26,7 @@ from backend import paths
 from backend.accounts import account as account_mod
 from backend.accounts import chat_link
 from backend.custody import handoff
-from backend.drafting import voice_dna
+from backend.drafting import voice_generation
 from backend.integrations import llm_client
 from backend.onboarding import provisioning
 
@@ -95,15 +95,15 @@ def _sign_in(query, state_ok, redirect_uri, fallback="/dashboard"):
 
 
 def _voice_start(account_id):
-    return voice_dna.start(_account(account_id))
+    return voice_generation.start(_account(account_id))
 
 
 def _voice_status(account_id):
-    return voice_dna.status(account_id)
+    return voice_generation.status(account_id)
 
 
 def _voice_clear(account_id):
-    voice_dna.clear_status(account_id)
+    voice_generation.clear_status(account_id)
     return None
 
 

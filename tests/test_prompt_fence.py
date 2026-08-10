@@ -18,7 +18,7 @@ alone.
 import pytest
 from harness import python_sources, relative
 
-from backend.drafting import agentic_drafter, voice_dna
+from backend.drafting import agentic_drafter, voice_generation
 from backend.masking import pseudonymizer
 
 FIXED_NONCE = "ABCDEFGHIJKLMNOP"
@@ -94,11 +94,11 @@ def test_a_forged_opening_marker_goes_the_same_way():
 
 
 def test_the_replacement_cannot_look_like_a_masking_tag():
-    """`voice_dna.synthesize` asserts on a surviving `[TAG]`, so a bracketed
+    """`voice_generation.synthesize` asserts on a surviving `[TAG]`, so a bracketed
     replacement would let a sender turn their own failed forgery into a failed
     profile generation for the account owner."""
     assert not agentic_drafter.FORGED_MARKER.startswith("[")
-    assert not voice_dna._RESIDUAL_TAG.search(agentic_drafter.FORGED_MARKER)
+    assert not voice_generation._RESIDUAL_TAG.search(agentic_drafter.FORGED_MARKER)
 
 
 @pytest.mark.parametrize("analyzer", [False, True])

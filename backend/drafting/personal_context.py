@@ -8,7 +8,7 @@ drafting prompt beneath their profile.
 
 It is deliberately a second document rather than another section of the voice
 profile. Generating a profile from sent mail overwrites the whole voice document
-(voice_dna.generate), and personal facts are the one thing that must survive
+(voice_generation.generate), and personal facts are the one thing that must survive
 that. Keeping them apart also keeps "how you write" separate from "what is true
 of you" in the box the user edits.
 

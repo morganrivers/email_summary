@@ -756,9 +756,16 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   an account before it sees an email: voice profile, then personal information.
   One assembly, so the auto-reply and forwarded-email paths cannot hand the model
   different briefs.
-- `backend/drafting/voice_dna.py` — every voice profile question: where a profile
-  lives, which one applies (`resolve()`), and how one is generated from the
-  account's own sent mail. The operator's profile is reachable only through their
+- `backend/drafting/voice_dna.py` — where a profile lives and which one applies
+  (`resolve()`), plus the load and save behind it. *How* one is generated from
+  the account's own sent mail lives in `backend/drafting/voice_generation.py`,
+  split off because generating reads mail (`tool_executors`→`gmail_api` and the
+  token path) and runs inference (`llm_client`), which the web tier neither does
+  nor should carry the code for: web shows and saves through `voice_dna` and
+  hands generation to the mail role over the handoff, and `voice_dna` imports
+  nothing from `voice_generation` so the web image carries neither the
+  mail-reading nor the token stack. The dependency points one way, mail-ward.
+  The operator's profile is reachable only through their
   manifest entry; everyone else gets `backend/drafting/default_voice.md` until
   they generate or write their own, which lands encrypted in
   `database/<id>/voice-dna.enc` (never `config/`, which the deploy overwrites).
@@ -775,7 +782,7 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   `account.set_voice()` is the sole writer of the manifest pointer.
 - `backend/drafting/personal_context.py` — the second document: facts the owner
   writes about themselves, read into every draft prompt beneath the voice
-  profile. Separate because `voice_dna.generate()` overwrites that one wholesale.
+  profile. Separate because `voice_generation.generate()` overwrites that one wholesale.
   The path is derived (`database/<id>/personal-context.enc`) with no manifest
   pointer, which is why `account._owned_paths()` owns the account's directory
   rather than a list of manifest keys: a key list would have left a deleted
