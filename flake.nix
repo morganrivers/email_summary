@@ -156,8 +156,14 @@
           # are separate containers now, so one container's gate says nothing
           # about another's, and a shared one-shot would be a gate that passes
           # for a process that never asked.
+          #
+          # The role is passed through because what a container must be
+          # provisioned with is a function of which container it is. The gate
+          # used to apply the whole-box set, which no role satisfies: `web` has
+          # no inference key and `mail` no SESSION_SECRET, both by design, so
+          # both crash-looped on first boot.
           gate() {
-            if ! python -m backend.tee.tee_boot; then
+            if ! python -m backend.tee.tee_boot "$role"; then
               echo "tee_boot gate failed; refusing to start $role" >&2
               exit 1
             fi

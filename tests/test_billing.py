@@ -7,6 +7,7 @@ while an activated one becomes routable. Polar's API is never hit: every path
 tested resolves the account from data carried in the event itself.
 """
 
+import pytest
 from harness import account_entry as _entry
 from harness import write_manifest as _manifest
 
@@ -139,8 +140,9 @@ def test_checkout_url_mints_against_the_sandbox_when_toggled(monkeypatch):
     monkeypatch.setenv("POLAR_PRODUCT_ID_SANDBOX", "prod_1")
     monkeypatch.setenv("POLAR_API_TOKEN_SANDBOX", "tok")
     monkeypatch.setattr(polar_api, "create_checkout", fake_create)
-    url = billing.checkout_url("dan@x.com", fallback="/dashboard")
+    url, checkout_id = billing.checkout_url("dan@x.com", fallback="/dashboard")
     assert url == "https://sandbox.polar.sh/checkout/abc"
+    assert checkout_id is None, "the fake response carries no id to bind to"
     assert seen["base"] == polar_api.SANDBOX_BASE
     assert "{CHECKOUT_ID}" in seen["success_url"], "the return trip needs the id"
     assert seen["metadata"] == {billing.CHECKOUT_ACCOUNT_KEY: "dan@x.com"}, (
@@ -247,6 +249,91 @@ def test_confirm_checkout_refuses_an_unpaid_checkout_of_the_buyers_own(
     assert paid is False
     assert "status=open" in detail
     assert account.get_account("dan@x.com") is None
+
+
+def test_an_unpaid_checkout_links_no_polar_customer(tmp_path, monkeypatch):
+    """The customer link happens after the paid check, never before it.
+
+    The attack it closes: mint a checkout through /billing/checkout so it is
+    stamped with your own account and the ownership test passes, then type a
+    victim's address on Polar's page so Polar attaches their existing customer
+    to it, then come back. Linking first put the victim's customer on the
+    attacker's account, and `portal_url()` mints a Polar customer-portal session
+    for whatever this field names -- payment methods, invoices, cancellation."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("thief@x.com", status="inactive"),
+    ]))
+    _checkout(monkeypatch, {"id": "co_6", "status": "open",
+                            "customer_id": "cus_victim",
+                            "metadata": {billing.CHECKOUT_ACCOUNT_KEY: "thief@x.com"}})
+    b = _billing(monkeypatch)
+    paid, _ = b.confirm_checkout("co_6", account.account_for_email("thief@x.com"))
+    assert paid is False
+    assert account.account_for_email("thief@x.com").polar_customer_id is None
+
+
+def test_a_polar_customer_belongs_to_one_account(tmp_path, monkeypatch):
+    """Two accounts holding one customer id makes `account_for_customer_id`
+    answer with whichever the manifest lists first, so the reconcile then
+    decides a third party's entitlement."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("victim@x.com", status="active", polar_customer_id="cus_shared"),
+        _entry("thief@x.com", status="inactive"),
+    ]))
+    with pytest.raises(account.InvalidAccountData, match="already linked"):
+        account.set_polar_customer_id("thief@x.com", "cus_shared")
+    assert account.account_for_email("thief@x.com").polar_customer_id is None
+    # Re-linking an account to the customer it already holds is not a conflict.
+    assert account.set_polar_customer_id(
+        "victim@x.com", "cus_shared").polar_customer_id == "cus_shared"
+
+
+def test_a_manifest_that_already_drifted_is_caught_at_load(tmp_path, monkeypatch):
+    """Asserted on read as well as on write, the same way duplicate handles are:
+    a store that got into this state before the writer refused it should fail
+    where it is loaded rather than silently at resolve time."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("a@x.com", polar_customer_id="cus_1"),
+        _entry("b@x.com", polar_customer_id="cus_1"),
+    ]))
+    with pytest.raises(AssertionError, match="share a Polar customer id"):
+        account.all_accounts()
+
+
+def test_an_unstamped_object_may_introduce_a_link_but_never_move_one(
+        tmp_path, monkeypatch):
+    """`customer_email` is a form field the buyer edits at Polar, and only an
+    unstamped object ever reaches the email branch. An account already linked to
+    a different customer was linked by something exact, so a buyer-typed address
+    must not override it."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("dan@x.com", status="active", polar_customer_id="cus_dan"),
+        _entry("erin@x.com", status="active"),
+    ]))
+    b = _billing(monkeypatch)
+    hostile = {"customer_id": "cus_other", "customer_email": "dan@x.com"}
+    assert b.resolve_account(hostile) is None
+    # An account with no link at all still resolves: this refuses a move, not
+    # an introduction.
+    assert b.resolve_account(
+        {"customer_id": "cus_other", "customer_email": "erin@x.com"}).id == "erin@x.com"
+
+
+def test_the_enclave_mints_no_unstamped_checkout(monkeypatch):
+    """The static dashboard link carries no CHECKOUT_ACCOUNT_KEY -- there is no
+    API call to stamp -- so everything downstream falls back to resolving by an
+    address the buyer edits. Inside the enclave there is no operator to notice
+    the difference, and /billing/checkout already renders "unavailable"."""
+    monkeypatch.setenv("POLAR_CHECKOUT_URL", "https://buy.polar.sh/prod")
+    monkeypatch.delenv("POLAR_PRODUCT_ID", raising=False)
+    monkeypatch.delenv("POLAR_SANDBOX", raising=False)
+
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    url, checkout_id = billing.checkout_url("dan@x.com", fallback="/billing")
+    assert url.startswith("https://buy.polar.sh/prod") and checkout_id is None
+
+    monkeypatch.setenv("TEE_REQUIRED", "1")
+    assert billing.checkout_url("dan@x.com", fallback="/billing") == ("/billing", None)
 
 
 def test_stamped_metadata_resolves_a_webhook_event(tmp_path, monkeypatch):

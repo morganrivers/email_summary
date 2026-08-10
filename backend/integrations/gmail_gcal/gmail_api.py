@@ -331,3 +331,17 @@ def register_watch(account, topic_name):
         "labelFilterAction": "include",
     }).execute()
     return {"historyId": res.get("historyId"), "expiration": res.get("expiration")}
+
+
+def stop_watch(account):
+    """Sole users.stop call, the other half of `register_watch`.
+
+    Called when an account is deleted. Nothing called it before, so Google went
+    on pushing a deleted user's mailbox for up to seven days: each push spooled
+    their plaintext address into the wake spool and woke a daemon that resolved
+    nothing. Noise, and an address on disk belonging to somebody who asked to be
+    forgotten.
+
+    Needs a token, so it runs before the account's data key is destroyed."""
+    gmail(account).users().stop(userId="me").execute()
+    return True

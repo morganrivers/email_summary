@@ -19,7 +19,8 @@ import json
 
 import pytest
 
-from backend import paths, secrets, secrets_checks
+from backend import paths, secrets, secrets_checks, site
+from backend.integrations import inference_attestation
 from backend.integrations.gmail_gcal import oauth_app
 from backend.tee import tee_boot
 
@@ -206,11 +207,19 @@ def attested(tmp_path, monkeypatch):
     # attested fixture has to name one. It is the guest agent's answer here,
     # which is the case the two tests below take apart.
     monkeypatch.setenv("EXPECTED_COMPOSE_HASH", FakeDstack.INFO["compose_hash"])
+    # The two role capabilities, satisfied so the secret checks are what these
+    # tests are reading. Whether the dcap-qvl wheel made it into the image is a
+    # property of the build and not of this environment; the hosts are read at
+    # import, so a CVM sets them before the process starts and a test cannot.
+    monkeypatch.setattr(inference_attestation, "configured", lambda providers: None)
+    monkeypatch.setattr(site, "APP_HOST", "enclave.example")
+    monkeypatch.setattr(site, "API_HOST", "api.enclave.example")
 
 
-def test_gate_passes_when_attested_and_provisioned(attested, env_file, monkeypatch):
+@pytest.mark.parametrize("role", sorted(secrets_checks.REQUIRED_BY_ROLE))
+def test_gate_passes_when_attested_and_provisioned(attested, env_file, monkeypatch, role):
     _provision(monkeypatch)
-    assert tee_boot.run_gate() == 0
+    assert tee_boot.run_gate(role) == 0
 
 
 def test_gate_fails_closed_without_an_expected_compose_hash(
@@ -221,7 +230,7 @@ def test_gate_fails_closed_without_an_expected_compose_hash(
     _provision(monkeypatch)
     monkeypatch.delenv("EXPECTED_COMPOSE_HASH", raising=False)
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate("mail") == 1
     assert "EXPECTED_COMPOSE_HASH" in capsys.readouterr().err
 
 
@@ -230,7 +239,7 @@ def test_gate_fails_closed_on_the_wrong_compose(attested, env_file, monkeypatch,
     _provision(monkeypatch)
     monkeypatch.setenv("EXPECTED_COMPOSE_HASH", "some-other-hash")
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate("mail") == 1
     assert "compose_hash mismatch" in capsys.readouterr().err
 
 
@@ -238,15 +247,69 @@ def test_gate_fails_closed_on_a_missing_secret(attested, env_file, monkeypatch, 
     _provision(monkeypatch)
     monkeypatch.delenv("SESSION_SECRET", raising=False)
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate("web") == 1
     assert "SESSION_SECRET" in capsys.readouterr().err
+
+
+def test_the_gate_asks_only_what_a_role_is_handed(attested, env_file, monkeypatch):
+    """The bug this replaced: the gate applied the whole-box set, so `web`
+    failed for holding no inference key and `mail` for holding no
+    SESSION_SECRET. Both are absent by design and measured to be absent, so the
+    tempting repair -- every variable in every container -- is the partition
+    undone."""
+    _provision(monkeypatch)
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("NEARAI_API_KEY", raising=False)
+
+    assert tee_boot.run_gate("mail") == 1, "mail needs an inference key"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    monkeypatch.setenv("NEARAI_API_KEY", "k")
+    assert tee_boot.run_gate("mail") == 0, "mail was refused for a secret it never holds"
+
+
+def test_the_gate_refuses_a_container_it_cannot_name(attested, env_file, monkeypatch, capsys):
+    """No role, nothing to require. A gate that fell back to the whole-box set
+    here would be the old bug reachable by dropping one argument, and one that
+    fell back to the empty set would pass anything."""
+    _provision(monkeypatch)
+
+    assert tee_boot.run_gate("") == 1
+    assert tee_boot.run_gate("everything") == 1
+    assert "FAIL-CLOSED" in capsys.readouterr().err
+
+
+def test_the_gate_refuses_a_role_still_naming_the_other_deployment(
+        attested, env_file, monkeypatch, capsys):
+    """Every externally visible URL is built from `site.APP_HOST`. Left at the
+    compiled-in default, an enclave sends its users to the Hetzner box for
+    consent and for the checkout return."""
+    _provision(monkeypatch)
+    monkeypatch.setattr(site, "APP_HOST", site.DEFAULT_APP_HOST)
+
+    assert tee_boot.run_gate("web") == 1
+    assert "LETTERLOCK_HOST" in capsys.readouterr().err
+
+
+def test_the_mail_gate_refuses_an_image_that_cannot_attest_inference(
+        attested, env_file, monkeypatch, capsys):
+    """A build that dropped the dcap-qvl wheel starts cleanly and then refuses
+    every confidential draft at the first email, with the reason in a per-draft
+    log line. The role that drafts is the role that has to ask at boot."""
+    _provision(monkeypatch)
+    monkeypatch.setattr(inference_attestation, "configured",
+                        lambda providers: "dcap-qvl is not installed")
+
+    assert tee_boot.run_gate("web") == 0, "the web role reads no mailbox"
+    assert tee_boot.run_gate("mail") == 1
+    assert "dcap-qvl" in capsys.readouterr().err
 
 
 def test_gate_fails_closed_when_a_dotenv_file_exists(attested, env_file, monkeypatch, capsys):
     _provision(monkeypatch)
     env_file.write_text("DEEPSEEK_API_KEY=from-the-volume\n")
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate("mail") == 1
     assert "FAIL-CLOSED" in capsys.readouterr().err
 
 
@@ -258,7 +321,7 @@ def test_gate_fails_closed_when_the_oauth_key_file_exists(attested, env_file,
     _provision(monkeypatch)
     keys = write_keys_file(tmp_path)
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate("mail") == 1
     assert str(keys) in capsys.readouterr().err
 
 
@@ -268,7 +331,7 @@ def test_gate_fails_closed_without_the_oauth_client(attested, env_file, monkeypa
     _provision(monkeypatch)
     monkeypatch.delenv(secrets.GOOGLE_CLIENT_SECRET_ENV, raising=False)
 
-    assert tee_boot.run_gate() == 1
+    assert tee_boot.run_gate("mail") == 1
     assert secrets.GOOGLE_CLIENT_SECRET_ENV in capsys.readouterr().err
 
 
@@ -281,7 +344,7 @@ def test_the_ra_tls_key_is_never_readable_by_anyone_else(attested, env_file, mon
     tee_boot.ATTEST_DIR.mkdir(parents=True, exist_ok=True)
     tee_boot.ATTEST_DIR.chmod(0o777)
 
-    assert tee_boot.run_gate() == 0
+    assert tee_boot.run_gate("mail") == 0
     key = tee_boot.ATTEST_DIR / "ra_tls.key"
     assert key.stat().st_mode & 0o777 == 0o600, oct(key.stat().st_mode)
 
@@ -291,7 +354,7 @@ def test_gate_no_ops_outside_a_tee(env_file, monkeypatch):
     monkeypatch.delenv("TEE_REQUIRED", raising=False)
     env_file.write_text("DEEPSEEK_API_KEY=from-the-volume\n")
 
-    assert tee_boot.run_gate() == 0
+    assert tee_boot.run_gate("mail") == 0
 
 
 def test_fingerprint_identifies_without_revealing():

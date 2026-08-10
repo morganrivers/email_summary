@@ -9,6 +9,7 @@ import base64
 import inspect
 import json
 
+import pytest
 from identity_fixture import OWNER_EMAIL
 
 from backend import paths
@@ -120,9 +121,16 @@ def test_route_push_spools_the_address_without_reading_the_store(tmp_path, monke
     hook.route_push(_push_body("stranger@x.com"))       # unregistered: the daemon drops it
     assert wake_queue.drain() == ["stranger@x.com"] and signals == [1]
 
+    # Unparseable: refused, and nothing is woken. This used to fall back to an
+    # address-less wake, which the daemon reads as "process every account" --
+    # one co-signer unwrap-and-sign each, which is what
+    # `cosigner.policy._sweep_refusal` refuses, and its refusal stops mail for
+    # everyone. A genuine push always parses, so the only caller of that
+    # fallback was somebody replaying a captured Pub/Sub token.
     signals.clear()
-    hook.route_push(b"not-json")                         # unparseable: full-sweep fallback
-    assert wake_queue.drain() == [] and signals == [1]
+    with pytest.raises(hook.HookError):
+        hook.route_push(b"not-json")
+    assert wake_queue.drain() == [] and signals == []
 
 
 def test_hook_does_not_import_the_account_store():

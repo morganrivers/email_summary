@@ -60,6 +60,7 @@ from pathlib import Path
 import certifi
 import requests
 
+from backend import secrets as secrets_module
 from backend.tee import quote_policy
 from backend.tee.quote_policy import DEV_INSECURE
 
@@ -108,7 +109,23 @@ def _hex(raw, field, length=None):
 
 
 def allowlist_path():
-    return Path(os.environ.get("LETTERLOCK_INFERENCE_ALLOWLIST") or DEFAULT_ALLOWLIST)
+    """Which pin list decides. The override is for a laptop, and inside the
+    enclave it is refused rather than honoured.
+
+    `Policy.mode()` already refuses `dev-insecure` while the allowlist has
+    entries, but repointing this at an empty file satisfies both halves at once
+    and every confidential provider then passes unverified. Neither variable
+    appears in the compose file or in `allowed_envs`, so today the measurement
+    is what prevents it -- which puts the whole check one line away in a file
+    whose every other line is deliberate. The enclave should not be able to
+    spell the escape hatch at all."""
+    override = os.environ.get("LETTERLOCK_INFERENCE_ALLOWLIST")
+    if override and secrets_module.tee_required():
+        raise quote_policy.AllowlistInvalid(
+            f"LETTERLOCK_INFERENCE_ALLOWLIST={override!r} is set under "
+            "TEE_REQUIRED; the pin list inside the enclave is the measured one"
+        )
+    return Path(override or DEFAULT_ALLOWLIST)
 
 
 def policy():
@@ -130,7 +147,13 @@ def reset_for_test(path=None):
 
 
 def mode():
-    return policy().mode(os.environ.get("LETTERLOCK_INFERENCE_ATTESTATION"))
+    """Required or dev-insecure. The override is ignored inside the enclave for
+    the same reason the allowlist path is: it is a laptop's switch, and an
+    enclave that can turn attestation off is an enclave whose attestation is a
+    configuration value."""
+    override = None if secrets_module.tee_required() else \
+        os.environ.get("LETTERLOCK_INFERENCE_ATTESTATION")
+    return policy().mode(override)
 
 
 def configured(providers):
@@ -301,7 +324,13 @@ def verify(provider):
 
     Keying on the identity rather than the URL is what makes the cache safe:
     one hostname is a pool of CVMs, and each fetch may reach a different one."""
-    current = mode()
+    try:
+        current = mode()
+    except quote_policy.AllowlistInvalid as err:
+        # No pin list means nothing can be decided, and inside the enclave it
+        # also means someone tried to repoint one. Either way a denial with a
+        # reason, never a traceback out of the middle of drafting.
+        return quote_policy.Verdict(False, provider.name, reason=str(err))
     if current == DEV_INSECURE:
         return quote_policy.Verdict(True, provider.name,
                                     reason="attestation disabled (dev)", attested=False)

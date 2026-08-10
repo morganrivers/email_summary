@@ -90,8 +90,8 @@ def _provider_hosts():
 
 
 def _google_hosts():
-    """Consent, token exchange and the token-info check the Pub/Sub webhook
-    runs, plus the two API roots. `oauth_app.TOKEN_ENDPOINT` is
+    """Consent, token exchange, revocation and the token-info check the Pub/Sub
+    webhook runs, plus the two API roots. `oauth_app.TOKEN_ENDPOINT` is
     `cosigner.protocol`'s, which is the same string the co-signer's policy pins
     `htu` against, so one edit moves the allowlist and the policy together.
 
@@ -107,6 +107,10 @@ def _google_hosts():
     return {
         _host(oauth_app.AUTH_ENDPOINT),
         _host(oauth_app.TOKEN_ENDPOINT),
+        # The same host as the token endpoint today. Derived rather than left to
+        # that coincidence: if Google ever splits them, a deletion that cannot
+        # revoke is a grant we told the user we withdrew.
+        _host(oauth_app.REVOKE_ENDPOINT),
         _host(gmail_hook_server.CERTS_URL),
         _host(calendar_public.ICS_ROOT),
     } | set(GOOGLE_API_HOSTS)

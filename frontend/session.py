@@ -1,4 +1,5 @@
-"""HMAC-signed cookies: the session, and the OAuth state (Track U3).
+"""HMAC-signed cookies: the session, the OAuth state and the Polar checkout
+(Track U3).
 
 Both are `{kid}:{value}:{iat}:{signature}`, where the signature is
 HMAC-SHA256(key, "{purpose}:{kid}:{value}:{iat}"). The purpose is inside the
@@ -238,62 +239,111 @@ def csrf_ok(token, account_id):
     return signed is not None and hmac.compare_digest(signed, account_id)
 
 
-# --- the OAuth state ------------------------------------------------------
+# --- cookies holding several pending values at once -----------------------
 #
-# The state is signed the way the session is, with the same keyring and the
+# Two round trips need the same thing: this browser started something, went to
+# a third party, and came back naming it. The OAuth consent is one, the Polar
+# checkout is the other, and both need room for more than one at a time -- a
+# single slot meant a second sign-in tab overwrote the first tab's state, so
+# finishing the older consent failed as "state mismatch (possible CSRF)", an
+# alarming way to say the user opened two tabs.
+#
+# Each entry is signed the way the session is, with the same keyring and the
 # same `<kid>:<value>:<iat>:<sig>` shape, because it answers the same question:
-# did this box mint this, and how long ago. What it adds is room for more than
-# one at a time. A single-slot cookie meant a second sign-in tab overwrote the
-# first tab's state, so finishing the older consent failed as "state mismatch
-# (possible CSRF)" -- an alarming way to say the user opened two tabs.
-#
-# It inherits rotation from that shape, and needs to: a restart lands in the
-# middle of somebody's consent round trip, and a state minted seconds before it
-# must still come back as ours rather than as the same CSRF alarm.
-#
-# Each state is still verified individually, so accepting several does not
-# weaken the check: an attacker who cannot sign one cannot sign any of the
-# three.
+# did this box mint this, and how long ago. It inherits rotation from that
+# shape, and needs to: a restart lands in the middle of somebody's consent round
+# trip, and a value minted seconds before it must still come back as ours rather
+# than as the same CSRF alarm. Each entry is verified individually, so accepting
+# several does not weaken the check -- an attacker who cannot sign one cannot
+# sign any of the three.
+
+SEPARATOR = "|"
+# Enough for a couple of stray tabs, few enough that the cookie stays small and
+# an old entry ages out rather than lingering behind a wall of newer ones.
+MAX_PENDING = 3
+
+
+class PendingValues:
+    """One cookie holding up to `MAX_PENDING` signed values, newest first.
+
+    Parsing, expiry, the cap and the Set-Cookie rendering live here once. What
+    a caller compares against an entry does not, because the two users differ:
+    the OAuth state travels in the URL already signed, so it is compared as the
+    whole string, while a Polar checkout id arrives raw and is compared against
+    the value inside an entry."""
+
+    def __init__(self, cookie, purpose, ttl):
+        self.cookie = cookie
+        self.purpose = purpose
+        self.ttl = ttl
+
+    def live(self, headers):
+        """The still-valid entries. Anything expired or unsigned by us is
+        dropped here rather than compared against, so a stale cookie cannot keep
+        a value alive past its TTL."""
+        if headers is None:
+            return []
+        raw = _cookie_value(headers, self.cookie) or ""
+        return [c for c in raw.split(SEPARATOR)
+                if c and _open_signed(self.purpose, c, self.ttl)]
+
+    def _render(self, pending):
+        value = SEPARATOR.join(pending[:MAX_PENDING])
+        return (f"{self.cookie}={value}; HttpOnly; Path=/; "
+                f"Max-Age={self.ttl}; SameSite=Lax; Secure")
+
+    def sign(self, value):
+        """`value` as an entry. The separator would split one entry into two, so
+        a value carrying it is refused rather than mangled."""
+        assert value and SEPARATOR not in str(value), \
+            f"{self.purpose} value is unusable in a cookie: {value!r}"
+        return _signed(self.purpose, value, int(time.time()))
+
+    def with_entry(self, entry, headers=None):
+        """The Set-Cookie carrying `entry` plus whatever earlier ones are still
+        live. Pass the request headers so a second tab adds to the list rather
+        than evicting what the first tab is waiting on."""
+        assert entry, "with_entry needs an entry"
+        return self._render([entry] + [e for e in self.live(headers) if e != entry])
+
+    def without(self, entry, headers=None):
+        """The Set-Cookie with `entry` removed and the rest left pending.
+
+        This is what makes a value one-shot. Membership alone left it valid for
+        the remainder of its TTL on every path that did not clear the whole
+        cookie, so a refused callback left a reusable token behind -- and the
+        PKCE verifier is a deterministic function of the state, which makes
+        state reuse verifier reuse."""
+        return self._render([e for e in self.live(headers) if e != entry])
+
+    def clear(self):
+        return f"{self.cookie}=; Path=/; Max-Age=0"
+
+
+# --- the OAuth state ------------------------------------------------------
 
 STATE_COOKIE = "letterlock_oauth_state"
-STATE_SEPARATOR = "|"
-# Enough for a couple of stray tabs, few enough that the cookie stays small and
-# an old state ages out rather than lingering behind a wall of newer ones.
-MAX_PENDING_STATES = 3
+_STATES = PendingValues(STATE_COOKIE, STATE_PURPOSE, STATE_TTL)
 
 
 def new_state():
     """A fresh state value, signed and ready for both the URL and the cookie."""
-    return _signed(STATE_PURPOSE, secrets_mod.token_urlsafe(24), int(time.time()))
+    return _STATES.sign(secrets_mod.token_urlsafe(24))
 
 
 def state_cookie(state, headers=None):
-    """The Set-Cookie carrying `state` plus whatever earlier states are still
-    live, newest first. Pass the request headers so a second tab adds to the
-    list rather than evicting what the first tab is waiting on."""
-    assert state, "state_cookie needs a state"
-    pending = [state] + [s for s in _pending_states(headers) if s != state]
-    value = STATE_SEPARATOR.join(pending[:MAX_PENDING_STATES])
-    return (f"{STATE_COOKIE}={value}; HttpOnly; Path=/; "
-            f"Max-Age={STATE_TTL}; SameSite=Lax; Secure")
+    return _STATES.with_entry(state, headers)
+
+
+def state_cookie_without(state, headers=None):
+    """The Set-Cookie that consumes `state`. Every /auth/callback response sets
+    one, refusals included: a callback that failed must not leave its state
+    usable for the remaining half hour."""
+    return _STATES.without(state, headers)
 
 
 def clear_state_cookie():
-    return f"{STATE_COOKIE}=; Path=/; Max-Age=0"
-
-
-def _pending_states(headers):
-    """The still-valid states in the cookie. Anything expired or unsigned by us
-    is dropped here rather than compared against, so a stale cookie cannot keep
-    a value alive past its TTL."""
-    if headers is None:
-        return []
-    raw = _cookie_value(headers, STATE_COOKIE) or ""
-    live = []
-    for candidate in raw.split(STATE_SEPARATOR):
-        if candidate and _open_signed(STATE_PURPOSE, candidate, STATE_TTL):
-            live.append(candidate)
-    return live
+    return _STATES.clear()
 
 
 def state_is_ours(state, headers):
@@ -302,4 +352,49 @@ def state_is_ours(state, headers):
     if not state or not _open_signed(STATE_PURPOSE, state, STATE_TTL):
         return False
     return any(hmac.compare_digest(state, known)
-               for known in _pending_states(headers))
+               for known in _STATES.live(headers))
+
+
+# --- the Polar checkout ---------------------------------------------------
+#
+# `/billing/return` is a GET whose `checkout_id` comes out of a query string the
+# browser controls, and SameSite=Lax sends the session cookie on a cross-site
+# top-level navigation, so an attacker-supplied link fires that handler with the
+# victim's session. The metadata stamp answers "does this checkout belong to
+# this account"; this answers the stronger question, "did this browser start
+# it", which is the binding a return trip actually calls for.
+#
+# Longer-lived than the OAuth state because a checkout is: card details, a bank
+# app, a 3-D Secure round trip. A buyer who exceeds it, or who pays in a
+# different browser, is not refused anything they bought -- the reconcile and
+# the webhook still settle them, and the return page already says the flip may
+# still be in flight.
+
+CHECKOUT_COOKIE = "letterlock_checkout"
+CHECKOUT_PURPOSE = "checkout"
+CHECKOUT_TTL = 3600
+_CHECKOUTS = PendingValues(CHECKOUT_COOKIE, CHECKOUT_PURPOSE, CHECKOUT_TTL)
+
+
+def checkout_cookie(checkout_id, headers=None):
+    """The Set-Cookie recording that this browser minted `checkout_id`."""
+    return _CHECKOUTS.with_entry(_CHECKOUTS.sign(checkout_id), headers)
+
+
+def checkout_is_ours(checkout_id, headers):
+    """Did this browser start this checkout? Compared against the value inside
+    each pending entry, because Polar hands the id back raw."""
+    if not checkout_id:
+        return False
+    return any(hmac.compare_digest(_open_signed(CHECKOUT_PURPOSE, e, CHECKOUT_TTL) or "",
+                                   checkout_id)
+               for e in _CHECKOUTS.live(headers))
+
+
+def checkout_cookie_without(checkout_id, headers=None):
+    """The Set-Cookie that consumes `checkout_id`, so a return trip is one-shot
+    the way a consent callback is."""
+    for entry in _CHECKOUTS.live(headers):
+        if _open_signed(CHECKOUT_PURPOSE, entry, CHECKOUT_TTL) == checkout_id:
+            return _CHECKOUTS.without(entry, headers)
+    return None

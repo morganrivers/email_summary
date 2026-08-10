@@ -235,6 +235,46 @@ def rewrap(uid, handle):
     return dek_path(uid)
 
 
+class AccountGone(wrapping.CustodyError):
+    """The account this key belongs to is no longer in the manifest.
+
+    Not an assert: the manifest is read from disk and another process may have
+    removed the row a moment ago, which is a race to refuse rather than a bug
+    in this caller."""
+
+
+def _refuse_if_deleted(account, uid):
+    """Refuse to mint a data key for an account that has been deleted.
+
+    Called only where a key would be *created*, which is the whole of the race.
+    Deletion runs in the web process; this may be the daemon, which can hold a
+    cached key for `DEK_TTL` and a voice generation that finishes after the
+    manifest row is gone. `write_encrypted` would then mint a key, recreate
+    `database/<id>/` and write a file into it -- unreadable, since the record
+    was shredded, but the directory, its name and its timestamps are back after
+    the user asked to be erased.
+
+    `handoff.OP_ACCOUNT_FORGET` waits for that job before the deletion and is
+    the tidy path; this is the one that has to be right, because a notification
+    can be lost and a thread can outlast the wait for it.
+
+    Two things are deliberately not refused. An `(id, handle)` pair, because
+    `identify()` accepts that shape for exactly one caller -- onboarding, which
+    encrypts a refresh token *before* writing the entry that would carry it. And
+    a box with no manifest at all, which is a laptop or a test rather than a
+    store somebody was removed from: absence of the file is not absence of the
+    row."""
+    if isinstance(account, tuple):
+        return
+    if account_store.MANIFEST.exists() and \
+            account_store.account_for_email(uid, include_inactive=True) is None:
+        forget(uid)
+        raise AccountGone(
+            f"{uid} is not in the account manifest; refusing to create a data "
+            "key for an account that has been deleted"
+        )
+
+
 def dek_for(account):
     """A cached data key for reading the documents this account owns.
 
@@ -348,6 +388,7 @@ def write_encrypted(account, name, text, shared=True):
     key."""
     uid, handle = identify(account)
     if not has_key(uid):
+        _refuse_if_deleted(account, uid)
         create(uid, handle)
     path = path_for(account, name)
     account_store.secure_dir(path.parent)

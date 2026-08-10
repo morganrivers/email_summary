@@ -19,6 +19,9 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from unittest import mock
+
+from backend import secrets_checks
 
 REPO = Path(__file__).resolve().parent.parent
 COMPOSE = REPO / "deploy" / "phala" / "docker-compose.yml"
@@ -67,6 +70,87 @@ def _networks_of(block):
     """The networks one service attaches to, in the order it names them."""
     found = re.search(r"^\s+networks:\n((?:\s+-\s+\S+\n?)+)", block, re.M)
     return tuple(re.findall(r"-\s+(\S+)", found.group(1))) if found else ()
+
+
+def _common_env_names():
+    """Names in the `x-common-env` anchor. A role that merges it receives them,
+    so a per-role check that ignored them would call TEE_REQUIRED absent."""
+    text = COMPOSE.read_text()
+    block = text.split("\nx-common:", 1)[1].split("\nservices:", 1)[0]
+    return set(re.findall(r"^\s+([A-Z][A-Z0-9_]*):\s", block, re.M))
+
+
+def _env_names(role):
+    """Every variable a role's container actually receives.
+
+    The merge is read rather than assumed: `egress` deliberately does not take
+    `*common-env`, because the one container holding a route off the host must
+    not be pointed at itself, and a check that handed it the anchor anyway would
+    be reading a partition the compose file does not describe."""
+    block = _service_blocks()[role]
+    own = set(re.findall(r"^\s+([A-Z][A-Z0-9_]*):\s", block, re.M))
+    return (own | _common_env_names()) if "*common-env" in block else own
+
+
+def test_each_role_is_handed_exactly_the_secrets_its_boot_gate_demands():
+    """The gate and the partition, checked against each other.
+
+    These are the two halves of one fact and they used to be written
+    independently: `tee_boot` applied the whole-box `secrets_checks.REQUIRED`,
+    which no role satisfies -- `web` is deliberately handed no inference key and
+    `mail` no SESSION_SECRET -- so both crash-looped on first boot behind
+    `restart: always`. The repair an operator reaches for under that pressure is
+    to give every container every variable, which is the partition RTMR3
+    measures, undone.
+
+    Answered by running the real checks against an environment holding exactly
+    what the compose file interpolates, rather than by a second list of variable
+    names here: a list is the drift. Values are dummies because every check asks
+    only whether a value arrived."""
+    for role in ROLES:
+        env = {name: "x" for name in _env_names(role)}
+        # `hook` merges the common block and nothing else, so it inherits
+        # TEE_REQUIRED from there; spelled out so the intent survives an edit.
+        env["TEE_REQUIRED"] = "1"
+        with mock.patch.dict(os.environ, env, clear=True):
+            gaps = secrets_checks.missing(role)
+        assert gaps == [], f"the {role} container cannot pass its own boot gate: {gaps}"
+
+
+def test_no_enclave_role_is_asked_for_the_polar_webhook_secret():
+    """The one check no role can satisfy, named rather than quietly dropped.
+
+    No role is a Polar receiver: entitlement in the enclave is `confirm_checkout()`
+    in `web` plus the reconcile in `mail`, both of which read Polar's API. So
+    there is no correct value of POLAR_WEBHOOK_SECRET to inject, and a gate that
+    demanded one would be unsatisfiable by construction."""
+    assert secrets_checks.polar_webhook_configured in secrets_checks.ROLE_EXEMPT
+    for role in ROLES:
+        assert "POLAR_WEBHOOK_SECRET" not in _env_names(role)
+
+
+def test_the_gate_runs_per_role_and_the_entrypoint_says_which():
+    """A gate given no role cannot know what to require, so it refuses. The
+    entrypoint has to pass the compose `command:` through for that to work."""
+    flake = FLAKE.read_text()
+    assert 'python -m backend.tee.tee_boot "$role"' in flake, (
+        "the entrypoint runs the gate without naming the role")
+
+
+def test_every_role_names_this_deployments_hostnames():
+    """`backend/site.py` compiles in the Hetzner hosts, and every externally
+    visible URL is built from them. A role left on the defaults sends its users
+    to the other box, which holds a different SESSION_SECRET -- so the consent
+    round trip either refuses as "did not start in this browser" or lets the box
+    exchange the authorization code and take custody of the refresh token.
+
+    Interpolated with no `:-` default on purpose: an unset value must be visibly
+    empty rather than quietly the box's hostname."""
+    blocks = _service_blocks()
+    for role in ("mail", "web"):
+        for name in ("LETTERLOCK_HOST", "LETTERLOCK_API_HOST"):
+            assert f'{name}: "${{{name}}}"' in blocks[role], (
+                f"{role} does not name {name}, or gives it a fallback")
 
 
 def test_every_role_is_present_and_none_of_them_is_root():
@@ -226,6 +310,7 @@ def test_the_interpolated_names_are_the_deploy_time_checklist():
         "POLAR_API_TOKEN", "POLAR_ORGANIZATION_ID", "POLAR_PRODUCT_ID",
         "POLAR_CHECKOUT_URL", "POLAR_SANDBOX",
         "SESSION_SECRET", "SESSION_SECRET_PREVIOUS",
+        "LETTERLOCK_HOST", "LETTERLOCK_API_HOST",
         "LETTERLOCK_COSIGNER_URL", "WEB_TRUSTED_PROXIES",
         "WEBHOOK_AUD", "PUBSUB_SERVICE_ACCOUNT",
     }

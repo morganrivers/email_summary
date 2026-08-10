@@ -19,18 +19,29 @@ from __future__ import annotations
 import os
 import socket
 import struct
+import sys
 import threading
 import traceback
 
 from backend import paths
 from backend.accounts import account as account_mod
 from backend.accounts import chat_link
-from backend.custody import handoff
+from backend.custody import handoff, tokens
 from backend.drafting import voice_generation
 from backend.integrations import llm_client
+from backend.integrations.gmail_gcal import gmail_api, google_client
 from backend.onboarding import provisioning
 
 BACKLOG = 16
+
+
+def _log(msg):
+    """The listener and `dispatch` are handed a `log` per connection; a handler
+    is not. The one that releases an account writes several lines and none of
+    them belongs in the caller's reply, so it writes here. Underscored to stay
+    distinct from that parameter."""
+    sys.stderr.write(f"handoff_server {msg}\n")
+    sys.stderr.flush()
 
 
 def _peer(conn):
@@ -88,7 +99,21 @@ def _sign_in(query, state_ok, redirect_uri, fallback="/dashboard"):
 
     The browser check arrives as an answer because the cookie that produces it
     is the web tier's. Wrapping it in a predicate keeps `handle_callback`'s
-    signature the one the tests already drive."""
+    signature the one the tests already drive.
+
+    The types are asserted on this side of the socket and not only on the
+    client's. `state_ok` becomes `if not state_ok(state)` in `handle_callback`,
+    so any truthy JSON value passes the browser check -- the string "false"
+    among them. The web tier is the only permitted peer, so this is hardening
+    rather than a live hole, but a callee that trusts its caller's type
+    discipline is trusting the wrong side of a boundary."""
+    assert isinstance(state_ok, bool), (
+        f"state_ok crossed the socket as {type(state_ok).__name__}; anything "
+        "but a bool is truthy and would pass the browser check"
+    )
+    assert isinstance(query, dict), (
+        f"query crossed the socket as {type(query).__name__}, not an object"
+    )
     acct, location = provisioning.handle_callback(
         query, lambda _state: state_ok, redirect_uri, fallback)
     return {"account_id": acct.id, "location": location}
@@ -122,6 +147,51 @@ def _chat_forget(account_id):
     return None
 
 
+def _account_forget(account_id):
+    """Release everything this process holds for an account, and withdraw the
+    Google grant while the key that reads it still exists.
+
+    Ordered, and the order is the whole of it:
+
+      1. wait out a running voice generation. `clear_status` refuses to drop a
+         running job, and `_run_job` ends in `write_encrypted`, which mints a
+         data key and recreates `database/<id>/` if it has to. A deletion racing
+         one puts the directory back after the user asked to be erased.
+      2. revoke at Google and stop the mailbox watch, both of which need the
+         refresh token and so must happen before the shred.
+      3. drop the caches. `tokens.forget` fans out to `keyring.forget`, and the
+         per-thread Google service objects go with them.
+
+    Every step is best effort and reports what it managed: the caller is about
+    to delete the account either way, and a user asking to be erased must not be
+    held up by an outage at Google. Returns a dict the web tier logs.
+
+    Runs in the daemon because the web process cannot read `token.bin` and,
+    more to the point, because these are the daemon's own caches -- the web
+    tier's `keyring.destroy` clears only its own."""
+    result = {"voice": voice_generation.await_job(account_id),
+              "revoked": False, "watch_stopped": False}
+    acct = account_mod.account_for_email(account_id, include_inactive=True)
+    if acct is None:
+        # Already gone from the manifest: there is nothing to read a token with
+        # and nothing to name at Google. Still worth dropping the caches, which
+        # is exactly the race this operation exists to lose gracefully.
+        tokens.forget_id(account_id)
+        google_client.forget_services(account_id)
+        return result
+    for name, action in (("watch_stopped", lambda: gmail_api.stop_watch(acct)),
+                         ("revoked", lambda: tokens.revoke(acct))):
+        try:
+            result[name] = bool(action())
+        except Exception as err:
+            _log(f"account-forget {account_id}: {name} failed: "
+                 f"{type(err).__name__}: {err}")
+    tokens.forget(acct)
+    google_client.forget_services(account_id)
+    _log(f"account-forget {account_id}: {result}")
+    return result
+
+
 def _providers():
     """Which inference providers this deployment holds a key for.
 
@@ -142,6 +212,7 @@ HANDLERS = {
     handoff.OP_CHAT_FINISH: _chat_finish,
     handoff.OP_CHAT_FORGET: _chat_forget,
     handoff.OP_PROVIDERS: _providers,
+    handoff.OP_ACCOUNT_FORGET: _account_forget,
 }
 
 assert set(HANDLERS) == set(handoff.OPS), (
@@ -168,9 +239,17 @@ def dispatch(request, log):
         return {handoff.F_ERROR: {handoff.F_CODE: err.code, handoff.F_MSG: err.msg}}
     except chat_link.ChangeRefused as err:
         # 409 rather than 400: the request was well formed and this process
-        # declined it, and the message is written for the user to read.
+        # declined it, and the message is written for the user to read. It is
+        # also the one code whose message the web tier renders unaltered, so the
+        # text is checked here as well as at the raise site -- the assert costs
+        # a set lookup and stands between a future refusal that interpolates an
+        # id and a browser being shown it.
         log(f"{op} refused: {err}")
-        return {handoff.F_ERROR: {handoff.F_CODE: 409, handoff.F_MSG: str(err)}}
+        assert str(err) in chat_link.USER_MESSAGES, (
+            f"{op} refused with text nothing vetted: {err!r}"
+        )
+        return {handoff.F_ERROR: {handoff.F_CODE: handoff.RENDERABLE_CODE,
+                                  handoff.F_MSG: str(err)}}
     except TypeError as err:
         log(f"{op} called with arguments it does not take: {err}")
         return {handoff.F_ERROR: {handoff.F_CODE: 400, handoff.F_MSG: "malformed request"}}

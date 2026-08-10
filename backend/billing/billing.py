@@ -73,7 +73,22 @@ def product_id():
 def _static_checkout_url(email, fallback):
     """A checkout link created in the Polar dashboard, prefilled with the buyer's
     address. Where the buyer lands after paying is a field on the link, so this
-    path cannot guarantee they come back to us."""
+    path cannot guarantee they come back to us.
+
+    It also carries no CHECKOUT_ACCOUNT_KEY stamp -- there is no API call to
+    stamp -- so everything downstream falls back to resolving by
+    `customer_email`, a field the buyer edits at Polar. That is exactly the
+    surface the stamp was added to close, reached automatically on any transient
+    Polar failure.
+
+    So it is refused inside the enclave, where there is no operator to notice
+    the difference and `/billing/checkout` already renders "checkout unavailable,
+    try again". On the box it stays, because a checkout the user can complete
+    beats no checkout at all and `resolve_account` will not let an unstamped
+    object move a link that already exists."""
+    if secrets.tee_required():
+        log("no API checkout; refusing the unstamped static link under TEE_REQUIRED")
+        return fallback
     base = select_env("POLAR_CHECKOUT_URL", sandbox_enabled())
     if not base:
         return fallback
@@ -82,16 +97,20 @@ def _static_checkout_url(email, fallback):
 
 
 def checkout_url(email, fallback="/dashboard"):
-    """Where to send a user to pay. Shared by the web app and the onboarding
-    flow; both used to carry their own copy of this.
+    """Where to send a user to pay, and the id of the checkout minted for them.
+    Shared by the web app and the onboarding flow; both used to carry their own
+    copy of this.
+
+    Returns `(url, checkout_id)`. The id is None on the static fallback, which
+    mints nothing to name; a caller uses it to record in the buyer's browser
+    which checkout it started, so the return trip can be bound to the browser
+    rather than only to the account.
 
     Prefers a checkout session minted through the API, because that carries
     site.checkout_success_url() and so brings the buyer back to us afterwards. A
     static dashboard link ends on Polar's own receipt page unless someone
     remembers to fill in a success-URL field, which is exactly how a paid buyer
-    got stranded there. Falls back to the static link when no product id is
-    configured or the API call fails: a checkout the user can complete beats no
-    checkout at all, even without the return trip.
+    got stranded there.
 
     The session is stamped with CHECKOUT_ACCOUNT_KEY, which is what makes the
     return trip verifiable: PolarBilling.confirm_checkout resolves the checkout
@@ -99,7 +118,7 @@ def checkout_url(email, fallback="/dashboard"):
     assert email, "checkout_url needs the account the checkout is minted for"
     pid = product_id()
     if not pid:
-        return _static_checkout_url(email, fallback)
+        return _static_checkout_url(email, fallback), None
     try:
         token = select_env("POLAR_API_TOKEN", sandbox_enabled())
         status, body = polar_api.create_checkout(
@@ -108,11 +127,11 @@ def checkout_url(email, fallback="/dashboard"):
         )
     except AssertionError as err:
         log(f"checkout session unavailable ({err}); using the static link")
-        return _static_checkout_url(email, fallback)
+        return _static_checkout_url(email, fallback), None
     if status not in (200, 201) or not isinstance(body, dict) or not body.get("url"):
         log(f"create_checkout failed: {status} {body}; using the static link")
-        return _static_checkout_url(email, fallback)
-    return body["url"]
+        return _static_checkout_url(email, fallback), None
+    return body["url"], body.get("id")
 
 
 def webhook_secret():
@@ -214,7 +233,20 @@ class PolarBilling:
             email = self._customer_email(cid)
         if not email:
             return None
-        return account.account_for_email(email, include_inactive=True)
+        by_email = account.account_for_email(email, include_inactive=True)
+        # The email branch is the weak one: `customer_email` is a form field the
+        # buyer edits at Polar, and only an unstamped object ever reaches here
+        # (the static checkout link, which mints nothing to stamp). It may
+        # introduce a link, never move one. An account that already names a
+        # different Polar customer was linked by something exact, and letting a
+        # buyer-typed address override that is how one person's checkout claims
+        # another's subscription.
+        if (by_email is not None and cid and by_email.polar_customer_id
+                and by_email.polar_customer_id != cid):
+            log(f"refusing to resolve customer={cid} to {by_email.id} by email: "
+                f"that account is already linked to another Polar customer")
+            return None
+        return by_email
 
     def _apply(self, acct, target):
         assert target in ("active", "inactive")
@@ -300,11 +332,25 @@ class PolarBilling:
                 f"{owner.id if owner else 'no account'}, not {acct.id}; refusing")
             return False, "that checkout does not belong to this account"
         state = body.get("status")
-        customer_id = self._customer_id(body)
-        if customer_id and acct.polar_customer_id != customer_id:
-            acct = account.set_polar_customer_id(acct.id, customer_id)
         if state not in self.PAID_CHECKOUT_STATUSES:
             return False, f"checkout status={state}"
+        # After the paid check, never before it. An open checkout is enough to
+        # reach this function -- mint one through /billing/checkout so the
+        # ownership test above passes, then type a victim's address on Polar's
+        # page so Polar attaches its existing customer to it, then come back.
+        # Linking first moved that customer onto the attacker's account, and
+        # `portal_url()` then mints a Polar customer-portal session for it:
+        # payment methods, invoices, cancellation. `set_polar_customer_id`
+        # refuses a customer another account already holds, which is the other
+        # half; this ordering is what stops an unpaid checkout being a way to
+        # claim an unlinked one.
+        customer_id = self._customer_id(body)
+        if customer_id and acct.polar_customer_id != customer_id:
+            try:
+                acct = account.set_polar_customer_id(acct.id, customer_id)
+            except account.InvalidAccountData as err:
+                log(f"checkout {checkout_id}: {err}")
+                return False, "that Polar customer belongs to another account"
         return True, self._apply(acct, "active")
 
     def portal_url(self, acct):

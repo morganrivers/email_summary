@@ -158,6 +158,39 @@ def test_a_change_that_completed_elsewhere_invalidates_this_one(acct, bot):
         chat_link.finish(acct.id)
 
 
+def test_the_chat_asked_is_the_chat_replaced(acct, bot):
+    """`action_for` distinguishes linked from unlinked and nothing else, so a
+    target moved from one chat to another inside one window leaves the action
+    still CHAT_UNLINK while the pending entry names the old chat. A code posted
+    from the old chat would then unlink the new one -- the single path where the
+    chat asked is not the chat replaced, which is the whole content of the
+    rule."""
+    _link(acct, bot)                                   # linked to CHAT
+    _action, stale_code, _ = chat_link.begin(acct.id)  # unlink of CHAT pending
+    # The owner completes a full unlink-then-link cycle in the meantime.
+    chat_link._forget(acct.id)
+    account.set_telegram(acct.id, clear=True)
+    _link(acct, bot, chat_id=OTHER)
+    chat_link._pending[acct.id] = {
+        "action": handoff.CHAT_UNLINK, "code": stale_code,
+        "since": bot.now, "expires": bot.now + chat_link.PENDING_TTL,
+        "chat_id": CHAT,
+    }
+
+    bot.post(CHAT, stale_code)
+    with pytest.raises(chat_link.ChangeRefused, match="changed in the meantime"):
+        chat_link.finish(acct.id)
+    assert account.account_for_email(acct.id).telegram.chat_id == OTHER
+
+
+def test_every_refusal_is_a_sentence_somebody_vetted(acct, bot):
+    """The web tier renders these unaltered, which is safe exactly as long as
+    the set is fixed. A refusal interpolating a chat id or an exception string
+    would be rendered the same way and nothing would have refused it."""
+    with pytest.raises(AssertionError, match="USER_MESSAGES"):
+        raise chat_link.ChangeRefused(f"chat {CHAT} said no")
+
+
 def test_the_operator_path_needs_no_proof(acct, bot):
     """The way out for a user who has lost the Telegram account itself. It has
     to exist, and it has to stay a command."""

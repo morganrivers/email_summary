@@ -8,6 +8,7 @@ Everything else here works offline against a recorded report.
 """
 
 import copy
+import datetime
 import json
 import os
 from pathlib import Path
@@ -113,6 +114,38 @@ def test_dev_insecure_is_refused_on_a_pinned_box():
     with pytest.raises(quote_policy.AllowlistInvalid) as err:
         att.policy().mode("dev-insecure")
     assert "looks provisioned for production" in str(err.value)
+
+
+def test_the_enclave_cannot_spell_the_escape_hatches(tmp_path, monkeypatch):
+    """`Policy.mode()` refuses dev-insecure while the allowlist has entries --
+    but repointing the path at an empty file satisfies both halves at once, and
+    then every confidential provider passes unverified. Neither variable appears
+    in the compose file, so today the measurement is what prevents it, which
+    puts the whole check one line away in a file whose every other line is
+    deliberate. The escape hatches are for a laptop."""
+    empty = tmp_path / "allowlist.json"
+    # Carries an expiry because `Policy.mode()` refuses dev-insecure without
+    # one. Far future, so the escape hatch under test is the repointed path and
+    # not a date this test would rot on.
+    expires = (datetime.date.today() + datetime.timedelta(days=365)).isoformat()
+    empty.write_text(json.dumps({"mode": "dev-insecure", "measurements": [],
+                                 "dev_insecure_expires": expires}))
+
+    monkeypatch.delenv("TEE_REQUIRED", raising=False)
+    att.reset_for_test(empty)
+    assert att.mode() == quote_policy.DEV_INSECURE, "a laptop can still turn it off"
+
+    monkeypatch.setenv("TEE_REQUIRED", "1")
+    with pytest.raises(quote_policy.AllowlistInvalid, match="TEE_REQUIRED"):
+        att.mode()
+    verdict = att.verify(provider("nearai-glm"))
+    assert not verdict.ok, "a refused allowlist must be a denial, not a traceback"
+
+    # And the mode override alone is ignored rather than honoured, so the
+    # measured pin list decides even when someone sets the variable.
+    att.reset_for_test()
+    monkeypatch.setenv("LETTERLOCK_INFERENCE_ATTESTATION", "dev-insecure")
+    assert att.mode() == quote_policy.REQUIRED
 
 
 def test_require_raises_rather_than_returning_an_unverified_client(monkeypatch):
