@@ -220,11 +220,11 @@ def _h(text):
             .replace('"', "&quot;"))
 
 
-def _csrf_field(email):
+def _csrf_field(account_id):
     """The hidden anti-CSRF input for a state-changing form, bound to the
-    signed-in email. Every authenticated POST form carries one; `_posted_form`
+    signed-in account. Every authenticated POST form carries one; `_posted_form`
     on the handler is the single place they are checked."""
-    return f'<input type="hidden" name="csrf" value="{_h(sess.csrf_token(email))}">'
+    return f'<input type="hidden" name="csrf" value="{_h(sess.csrf_token(account_id))}">'
 
 
 def _layout(title, body, active=None, user_email=None, refresh=None):
@@ -1583,7 +1583,15 @@ class Handler(BaseHTTPRequestHandler):
         them -- including naming somebody else's address. The header is trusted
         because of who sent it, never because of how this process happens to be
         bound: a WEB_HOST that reaches past loopback then costs a wrong log
-        entry rather than a forgeable one."""
+        entry rather than a forgeable one.
+
+        Which is what the enclave costs today. There this process is published
+        on a port and reached over a docker network, so the peer is dstack's
+        ingress rather than loopback and every row records that one address
+        until somebody names it in LETTERLOCK_TRUSTED_PROXIES
+        (site.EXTRA_TRUSTED_PROXIES). Naming an address that is not really in
+        front of us is the forgeable version, so the default stays empty and the
+        wrong entry is the one taken deliberately."""
         peer = self.client_address[0] if self.client_address else None
         if peer not in site.TRUSTED_PROXIES:
             return peer
@@ -2015,6 +2023,16 @@ def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     log(f"listening on {HOST}:{PORT}, redirect_uri={REDIRECT_URI} "
         f"{sess.describe_keys()}")
+    if HOST != site.LOOPBACK and not site.EXTRA_TRUSTED_PROXIES:
+        # Bound past loopback with nothing named in front of us, which is the
+        # enclave today. `_source_ip` then records the peer -- one address for
+        # every user -- and the log that exists to answer "who did this from
+        # where" answers the second half with the ingress. Said out loud at
+        # startup rather than refused: it is a loss of precision in a record,
+        # and taking the product down over it would be the larger failure.
+        log(f"WARNING bound to {HOST} with no LETTERLOCK_TRUSTED_PROXIES set; "
+            "audit rows will carry the address of whatever is in front of this "
+            "process rather than the browser's")
     server.serve_forever()
 
 

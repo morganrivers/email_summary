@@ -8,7 +8,7 @@ starts rather than described as a pattern over filenames.
 The pattern it replaced was wrong in both directions. It shipped `cosigner/`
 whole -- the outer key derivation, the request policy, the audit store -- into
 the one machine that is supposed to hold ciphertext and not keys, plus the
-egress proxy, the billing webhook and poller and the by-hand tools. And it
+billing webhook and poller and the by-hand tools. And it
 shipped no data file at all, because a filter for `.py` and `.css` matches
 neither `default_voice.md` nor `inference_allowlist.json` nor a favicon: the
 first account without its own voice profile would have asserted, no confidential
@@ -48,13 +48,20 @@ def test_the_cosigners_keys_and_policy_are_not_in_the_image():
     )
 
 
-def test_the_egress_proxy_is_not_in_the_image():
-    """It is the box's control, it runs under its own uid there, and no entry
-    point in flake.nix starts it. In the image it would be an HTTP CONNECT
-    proxy sitting in the address space that reads mail."""
+def test_the_egress_proxy_is_in_the_image_and_is_its_own_role():
+    """It ships because the enclave now runs it, and it runs in a container of
+    its own -- the `egress` role in flake.nix, on the two networks
+    docker-compose.yml defines, with the mail role on the internal one alone.
+
+    It was deliberately absent while nothing started it, and the reason it was
+    absent is the reason it must not be a thread: an HTTP CONNECT proxy in the
+    address space that reads mail is the process holding the network being the
+    process holding the keys."""
     listed = set(render_image_manifest.render_paths())
-    assert "backend/daemons/egress_proxy.py" not in listed
-    assert "backend/egress.py" not in listed
+    assert "backend/daemons/egress_proxy.py" in listed
+    assert "backend/egress.py" in listed
+    assert "egress)" in render_image_manifest.paths.REPO_ROOT.joinpath(
+        "flake.nix").read_text()
 
 
 def test_the_data_files_the_enclave_reads_are_all_listed():

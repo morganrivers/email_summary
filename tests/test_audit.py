@@ -10,6 +10,7 @@ The co-signer's log (tests/test_cosigner.py) is the other half and shares no
 code with this one on purpose; see backend/audit.py.
 """
 
+import importlib
 import json
 import re
 import time
@@ -216,6 +217,50 @@ def test_record_prunes_at_most_once_an_interval(monkeypatch):
     assert len(calls) == 1
 
 
+def test_the_daemon_prunes_a_box_nobody_signs_in_to():
+    """Riding on record() alone made retention conditional on somebody using
+    the product: rows age out on a clock, and the only thing that deleted one
+    was writing another. A departed user's address then outlived
+    RETENTION_DAYS on a quiet box, which is the one bound this table has.
+
+    The daemon's pass calls this, so the sweep happens whether or not a person
+    does anything."""
+    now = time.time()
+    audit.record("gone@x.com", audit.SIGN_IN, "ok",
+                 ts=now - (audit.RETENTION_DAYS + 1) * 86400)
+    audit.reset_for_test()  # a fresh process: nothing has written a row in it
+
+    assert audit.maybe_prune() == 1
+    assert [r["account_id"] for r in rows()] == []
+    assert audit.maybe_prune() == 0, "the interval does not bound repeat calls"
+
+
+def test_the_audit_log_does_not_narrow_the_directory_it_lives_in():
+    """state/ is 2771 rather than 2770: four uids open a file in there and are
+    deliberately not all in one group, so traversal is what lets each file's own
+    mode be the grant. This module used to create the directory by taking
+    `shared_dir`'s default, which was 2770 -- so the first row written after a
+    boot locked the Gmail push receiver out of its own spool, and nothing said
+    so.
+
+    The mode it asks for is what is checked, not the mode on disk: on a
+    checkout with no `letterlock-data` group `shared_dir` correctly falls back
+    to owner-only, and that fallback is the thing this must not be confused
+    with."""
+    seen = []
+    original = paths.shared_dir
+
+    def spy(path, mode):
+        seen.append(mode)
+        return original(path, mode)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(paths, "shared_dir", spy)
+        audit.reset_for_test(audit.state_dir())
+        audit.connect()
+    assert seen and set(seen) == {paths.DIR_MODE_TRAVERSABLE}, seen
+
+
 # --- the web tier ---------------------------------------------------------
 
 
@@ -268,6 +313,24 @@ def test_caddy_proxies_from_a_peer_the_app_trusts():
         f"Caddy proxies from {sorted(set(upstreams) - site.TRUSTED_PROXIES)}, "
         "whose X-Forwarded-For the app discards"
     )
+
+
+def test_a_front_proxy_can_be_named_and_loopback_is_never_dropped(monkeypatch):
+    """The enclave publishes the web port and is reached over a docker network,
+    so the peer is dstack's ingress and not loopback. Naming it is how the audit
+    log records browsers again -- and it can only add, because everything that
+    reads TRUSTED_PROXIES on the box (site.upstream's assert, the Caddyfile
+    check above) rests on loopback still being in the set."""
+    monkeypatch.setenv("LETTERLOCK_TRUSTED_PROXIES", "172.28.0.2, 172.28.0.3")
+    reloaded = importlib.reload(site)
+    try:
+        assert reloaded.TRUSTED_PROXIES == {
+            reloaded.LOOPBACK, "::1", "172.28.0.2", "172.28.0.3"}
+        assert reloaded.upstream(reloaded.WEB_PORT).startswith(reloaded.LOOPBACK)
+    finally:
+        monkeypatch.delenv("LETTERLOCK_TRUSTED_PROXIES")
+        importlib.reload(site)
+    assert site.TRUSTED_PROXIES == {site.LOOPBACK, "::1"}
 
 
 def test_the_schema_has_nowhere_to_put_content():

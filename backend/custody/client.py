@@ -56,10 +56,10 @@ import time
 
 import requests
 
-from backend import secrets, site
+from backend import paths, secrets, site
 from backend.custody.wrapping import CustodyError
 from backend.integrations import telegram
-from backend.tee import tee_boot
+from backend.tee import quote_policy, tee_boot
 from backend.tee.dstack_client import DstackClient, DstackError
 from cosigner import protocol
 
@@ -78,11 +78,20 @@ ALERT_INTERVAL = 300
 _last_alert = 0.0
 _jwk_cache = None
 _client_identity_cache = None
+_attestation_checked = False
 
 
 class CoSignerUnavailable(CustodyError):
     """The co-signer refused or could not be reached. Never caught into a
     fallback: there isn't one."""
+
+
+class CoSignerNotAttesting(CustodyError):
+    """The co-signer is not verifying the enclave it is answering.
+
+    Its own type because it is neither an outage nor a bug: it is the two boxes
+    disagreeing about whether this deployment is production, and the answer is
+    to fix the co-signer's allowlist rather than to retry."""
 
 
 def _jwk_b64u(raw):
@@ -153,8 +162,12 @@ def _client_identity():
     cert_path = out_dir / "cosigner_client.crt"
     key_path = out_dir / "cosigner_client.key"
     cert_path.write_text("\n".join(chain))
-    key_path.write_text(tls["key"])
-    key_path.chmod(0o600)
+    # Created at 0600 rather than created and then narrowed: the tmpfs this
+    # lands on is mounted mode 0777 (the runtime makes it as root, the
+    # container's process is not root), so a plain write_text puts the key
+    # this enclave authenticates with on a world-readable file until the
+    # chmod lands.
+    paths.write_private(key_path, tls["key"])
     _client_identity_cache = (str(cert_path), str(key_path))
     return _client_identity_cache
 
@@ -169,7 +182,50 @@ def _verify():
     return ca if ca else True
 
 
+def _require_attesting_cosigner():
+    """Refuse to use a co-signer that is not checking who it answers.
+
+    `cosigner/allowlist.json` can say `dev-insecure`, under which
+    `attest.verify_client` passes a request carrying no client certificate at
+    all. That switch is read on the co-signer's box, and the only thing guarding
+    it there is `TEE_REQUIRED` in the co-signer's *own* environment -- a
+    variable the enclave sets for itself and cannot set for another machine. So
+    an attested enclave could hand every record it owns to a service that
+    authenticates nobody, and nothing anywhere would say so.
+
+    This is the missing half: the side that knows it is production asks the
+    other side what it is doing. Once per process, because the answer is a
+    configuration file read at that service's startup, and under
+    `TEE_REQUIRED` only, because outside a CVM dev-insecure is the correct
+    answer and asking would break every laptop.
+
+    It is not a proof. A co-signer that has been taken over answers whatever it
+    likes here, and only its client certificate check could tell us otherwise --
+    which is the thing being asked about. What it closes is the
+    misconfiguration: the deploy that pins measurements on one box and leaves
+    the other in the mode it was built in."""
+    global _attestation_checked
+    if _attestation_checked or not secrets.tee_required():
+        return
+    stated = _request("GET", protocol.HEALTH_PATH).get(protocol.F_ATTESTATION)
+    if stated != quote_policy.REQUIRED:
+        msg = (
+            f"co-signer reports attestation={stated!r}, not "
+            f"{quote_policy.REQUIRED!r}. This enclave runs under TEE_REQUIRED, so "
+            "the co-signer must verify the RA-TLS quote of whatever connects to "
+            "it; while it does not, its client certificate check is authenticating "
+            "nothing. Refusing to use it."
+        )
+        _alert_operator(msg)
+        raise CoSignerNotAttesting(msg)
+    _attestation_checked = True
+
+
 def _request(method, path, body=None):
+    # The health check is how the question below gets asked, so it is the one
+    # request that cannot wait for its answer.
+    if path != protocol.HEALTH_PATH:
+        _require_attesting_cosigner()
     url = site.cosigner_url(path)
     try:
         resp = requests.request(
@@ -322,7 +378,8 @@ def rewrap(handle, outer):
 def reset_cache():
     """Drop cached co-signer material. For tests and for a co-signer that has
     rotated its DPoP key; the enclave then re-fetches on the next call."""
-    global _jwk_cache, _client_identity_cache, _last_alert
+    global _jwk_cache, _client_identity_cache, _last_alert, _attestation_checked
     _jwk_cache = None
     _client_identity_cache = None
     _last_alert = 0.0
+    _attestation_checked = False

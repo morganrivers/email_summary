@@ -250,8 +250,13 @@ def secure_dir(path):
     Delegates because the answer stopped being one mode: the web tier and the
     mail units are separate uids and both write here, so the grant is to the
     group holding exactly those two. `paths.shared_dir` falls back to owner-only
-    where that group does not exist."""
-    return paths.shared_dir(path)
+    where that group does not exist.
+
+    Shared and not traversable: `state/` carries the extra execute bit because
+    the two webhooks reach a spool in it and are deliberately outside the data
+    group, and nothing of the sort is true here -- who has an account is itself
+    worth keeping."""
+    return paths.shared_dir(path, paths.DIR_MODE_SHARED)
 
 
 def check_id(account_id):

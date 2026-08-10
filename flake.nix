@@ -90,6 +90,10 @@
         mail = { uid = 10001; groups = [ "letterlock-data" "letterlock-wake" ]; };
         web = { uid = 10002; groups = [ "letterlock-data" ]; };
         hook = { uid = 10003; groups = [ "letterlock-wake" ]; };
+        # The egress proxy: in no shared group at all, because it reads no file
+        # of ours. It is its own account for the reason it is on the box -- the
+        # process holding the network must not be the one holding the API keys.
+        egress = { uid = 10004; groups = [ ]; };
       };
       sharedGids = { letterlock-data = 10010; letterlock-wake = 10011; };
 
@@ -109,7 +113,7 @@
             lib.filterAttrs (_: a: lib.elem group a.groups) accounts))}
       '') sharedGids));
 
-      # One image, one entrypoint, three roles. Which role a container plays is
+      # One image, one entrypoint, four roles. Which role a container plays is
       # a `command:` in docker-compose.yml, and that file's hash is the dstack
       # `compose-hash` extended into RTMR3 -- so which process runs as which
       # account, and which secrets each is handed, is measured rather than
@@ -180,8 +184,16 @@
               # is resolved by the mail role, which is gated.
               exec python -m backend.daemons.gmail_hook_server
               ;;
+            egress)
+              # The one container with a route off the host, and the reason the
+              # others do not need one. No gate: it opens no account, unseals
+              # nothing, and is deliberately given no guest-agent socket to run
+              # a gate with. docker-compose.yml puts it on both networks and
+              # every other role on the internal one.
+              exec python -m backend.daemons.egress_proxy
+              ;;
             *)
-              echo "usage: email-bot-entrypoint {mail|web|hook}" >&2
+              echo "usage: email-bot-entrypoint {mail|web|hook|egress}" >&2
               exit 2
               ;;
           esac

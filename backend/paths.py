@@ -196,13 +196,21 @@ def chmod_if_owned(path, mode):
         return False
 
 
-def shared_dir(path, mode=DIR_MODE_SHARED):
+def shared_dir(path, mode):
     """Create a directory the mail uid and the web uid share, and nobody else
     reaches.
 
     Owner-only where the shared group does not exist, so this is never a
     widening: it either grants the one group both uids are in, or it grants
-    nobody."""
+    nobody.
+
+    `mode` is required and has no default. It used to default to
+    DIR_MODE_SHARED, and `backend/audit.py` took the default for `state/`, so
+    the first audit row written after a boot re-set that directory from 2771 to
+    2770 and the Gmail push receiver -- outside DATA_GROUP by design -- silently
+    stopped being able to traverse to its own spool. The mode is the grant, so
+    the caller has to say which one it means: a directory has one correct mode
+    and the module that owns the directory is what knows it."""
     assert mode in (DIR_MODE_SHARED, DIR_MODE_TRAVERSABLE), f"unexpected {mode:o}"
     path.mkdir(parents=True, exist_ok=True)
     gid = data_gid()
@@ -226,6 +234,27 @@ def file_mode(shared=True):
     if not shared or data_gid() is None:
         return FILE_MODE_PRIVATE
     return FILE_MODE_SHARED
+
+
+def write_private(path, text):
+    """Write `text` to `path`, which never exists at a mode anyone else can
+    read.
+
+    The alternative -- ``write_text`` then ``chmod`` -- leaves the file readable
+    for the width of two syscalls, at whatever the directory and umask allow.
+    That is not academic here: the enclave writes its RA-TLS private keys onto a
+    tmpfs the compose file mounts at mode 0777, because the runtime creates it
+    as root and the container's process is not root, so the widest the file can
+    briefly be is world-readable.
+
+    ``O_TRUNC`` and an explicit ``fchmod`` because the mode argument to
+    ``os.open`` applies only when the file is created: a rewrite would otherwise
+    keep whatever mode the previous one had."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, FILE_MODE_PRIVATE)
+    with os.fdopen(fd, "w") as handle:
+        os.fchmod(fd, FILE_MODE_PRIVATE)
+        handle.write(text)
+    return path
 
 
 def group_file(path, gid):

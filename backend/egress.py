@@ -36,6 +36,7 @@ dependency that ships a release which phones home. Do not describe it as
 anything wider.
 """
 
+import importlib.util
 import os
 from urllib.parse import urlsplit
 
@@ -121,16 +122,26 @@ def _billing_hosts():
 
 
 def _pccs_hosts():
-    """The provisioning certification caching service both quote verifiers
-    fetch collateral from. Asked of the two allowlist files rather than
-    hardcoded, since re-pinning against a different PCCS is a thing those files
-    are allowed to do."""
-    from backend.integrations import inference_attestation
-    from cosigner import attest
+    """The provisioning certification caching service each quote verifier on
+    this machine fetches collateral from. Asked of the allowlist files rather
+    than hardcoded, since re-pinning against a different PCCS is a thing those
+    files are allowed to do.
 
-    return {_host(url) for url in
-            (inference_attestation.policy().get("pccs_url"),
-             attest.policy().get("pccs_url")) if url}
+    "On this machine" is the whole of the guard below. The co-signer is a
+    separate service on a separate box, and the enclave image deliberately
+    carries only its wire contract (`cosigner/protocol.py`) -- so where its code
+    is absent, the process that would fetch that collateral is absent too, and
+    an entry for it would be a host allowed for nobody. `find_spec` asks exactly
+    that question; the import that follows is by name so a static import graph
+    does not pull the module into an image that has no co-signer to run it.
+    Every other failure still raises: this is a deployment question, not an
+    exception to swallow."""
+    from backend.integrations import inference_attestation
+
+    urls = [inference_attestation.policy().get("pccs_url")]
+    if importlib.util.find_spec("cosigner.attest") is not None:
+        urls.append(importlib.import_module("cosigner.attest").policy().get("pccs_url"))
+    return {_host(url) for url in urls if url}
 
 
 def _alert_hosts():

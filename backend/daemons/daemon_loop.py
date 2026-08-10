@@ -25,7 +25,7 @@ import sys
 import time
 import traceback
 
-from backend import paths, secrets
+from backend import audit, paths, secrets
 from backend.accounts import account as account_mod
 from backend.billing import billing_queue
 from backend.billing.billing import PolarBilling
@@ -118,6 +118,27 @@ def process_billing():
                     f"{billing_queue.MAX_ATTEMPTS} attempts", err)
 
 
+def prune_audit():
+    """Age out the web tier's audit rows on this pass, at most once an hour.
+
+    Here because the rows age out on a clock and the only thing that pruned
+    them was writing another one, so a box nobody signed in to kept a departed
+    user's address past the retention period that module documents. This loop
+    runs whether or not a person does anything.
+
+    A failure logs and does not propagate, for the same reason
+    `cosigner/retention.py` never takes that service down: a log that grew too
+    long is a smaller problem than a drafting pass that stopped, and nothing
+    here decides anything."""
+    try:
+        removed = audit.maybe_prune()
+        if removed:
+            log(f"audit: pruned {removed} row(s) older than "
+                f"{audit.RETENTION_DAYS}d")
+    except Exception as err:
+        log(f"audit prune failed: {type(err).__name__}: {err}")
+
+
 def process_accounts(ids):
     for aid in ids:
         acct = account_mod.get_account(aid)
@@ -190,6 +211,7 @@ def main():
             # last pass ran is in force for this one: an account flipped to
             # active is an account this sweep should process.
             process_billing()
+            prune_audit()
             ids = wake_queue.drain()
             if ids:
                 log(f"routed wake for {len(ids)} account(s): {ids}")

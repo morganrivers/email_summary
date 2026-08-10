@@ -209,7 +209,7 @@ def get_email(headers):
 # moved onto a request shape a Lax cookie does follow.
 #
 # It is signed from the same keyring as the session, with its own purpose and
-# bound to the signed-in email, so a token minted for one account cannot
+# bound to the signed-in account, so a token minted for one account cannot
 # authorise a POST for another. Rotating the secret does not invalidate the
 # tokens on pages already open, for the same reason a session survives a
 # rotation, and a restart mid-form does not reject the next save.
@@ -217,20 +217,25 @@ def get_email(headers):
 CSRF_PURPOSE = "csrf"
 
 
-def csrf_token(email):
-    """A fresh anti-CSRF token bound to the signed-in email, for a form."""
-    assert email, "csrf_token needs the signed-in email"
-    return _signed(CSRF_PURPOSE, email, int(time.time()))
+def csrf_token(account_id):
+    """A fresh anti-CSRF token bound to the signed-in account, for a form.
+
+    The account id, not the address: every caller passes `acct.id`, and the two
+    are not the same thing anywhere else in this tree -- an account names
+    several addresses. They were consistent here because the check reads back
+    whatever the mint wrote, so the name was the only thing wrong with it."""
+    assert account_id, "csrf_token needs the signed-in account id"
+    return _signed(CSRF_PURPOSE, account_id, int(time.time()))
 
 
-def csrf_ok(token, email):
-    """Whether `token` is one we minted for this signed-in email and is still
-    within the session TTL. Bound to the email, so knowing the shape of a token
-    is not enough to post as another account."""
-    if not token or not email:
+def csrf_ok(token, account_id):
+    """Whether `token` is one we minted for this signed-in account and is still
+    within the session TTL. Bound to the account, so knowing the shape of a
+    token is not enough to post as another one."""
+    if not token or not account_id:
         return False
     signed = _open_signed(CSRF_PURPOSE, token, SESSION_TTL)
-    return signed is not None and hmac.compare_digest(signed, email)
+    return signed is not None and hmac.compare_digest(signed, account_id)
 
 
 # --- the OAuth state ------------------------------------------------------

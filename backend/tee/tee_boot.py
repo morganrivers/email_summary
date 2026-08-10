@@ -30,7 +30,7 @@ import os
 import sys
 from pathlib import Path
 
-from backend import secrets
+from backend import paths, secrets
 from backend.tee.dstack_client import DstackClient, DstackError, DstackUnavailable
 
 APP_KEY_PATH = "tee-email-bot/app"
@@ -46,7 +46,13 @@ def _report_data_for_cert(cert_pem: str) -> bytes:
 def _write_attestation_record(info: dict, tls: dict, quote: dict) -> None:
     ATTEST_DIR.mkdir(parents=True, exist_ok=True)
     chain = tls.get("certificate_chain") or []
-    (ATTEST_DIR / "ra_tls.key").write_text(tls.get("key", ""))
+    # Created 0600 rather than written and then chmodded. The compose file
+    # mounts this directory as a tmpfs at mode 0777 -- the runtime creates it as
+    # root and the container's process is not root -- so a default-mode create
+    # is a world-readable private key for as long as it takes to reach the
+    # chmod. paths.write_private is the same call in backend/custody/client.py,
+    # which writes the co-signer client key into this same directory.
+    paths.write_private(ATTEST_DIR / "ra_tls.key", tls.get("key", ""))
     (ATTEST_DIR / "ra_tls.crt").write_text("\n".join(chain))
     record = {
         "app_id": info.get("app_id"),
@@ -60,19 +66,35 @@ def _write_attestation_record(info: dict, tls: dict, quote: dict) -> None:
         "report_data": quote.get("report_data"),
     }
     (ATTEST_DIR / "boot_info.json").write_text(json.dumps(record, indent=2))
-    # tokens are sensitive; keep the private key unreadable to group/other.
-    (ATTEST_DIR / "ra_tls.key").chmod(0o600)
 
 
-def _assert_expected_measurement(info: dict) -> None:
+def _measurement_gap(info: dict) -> str | None:
+    """Why this boot is not the published one, or None when it is.
+
+    An unset EXPECTED_COMPOSE_HASH used to return here silently, so the check
+    was on only for whoever remembered to set the variable -- and the compose
+    file ships it as `${EXPECTED_COMPOSE_HASH:-}`, which is unset by default.
+    A comparison that passes when one side is missing is not a comparison.
+
+    What it is worth, exactly, since it is easy to over-read: the value comes
+    from the enclave's own environment, so it is the enclave checking a claim it
+    was handed rather than one anybody else made. It catches the deploy that
+    published one compose and booted another. The statement no operator can
+    forge is `cosigner/attest.py`'s allowlist, on the other box.
+
+    A reason string rather than an assert because it is operator input, and
+    because `run_gate` has one way of reporting a refusal and every other
+    fail-closed branch already uses it."""
     expected = os.environ.get("EXPECTED_COMPOSE_HASH", "").strip()
     if not expected:
-        return
+        return ("EXPECTED_COMPOSE_HASH is unset. Under TEE_REQUIRED the enclave "
+                "has to be told which compose it is supposed to be, or it will "
+                "run whichever one it was given.")
     actual = (info.get("compose_hash") or "").strip()
-    assert actual == expected, (
-        f"compose_hash mismatch: running {actual!r} != published {expected!r}. "
-        "Image does not match the published measurement."
-    )
+    if actual != expected:
+        return (f"compose_hash mismatch: running {actual!r} != published "
+                f"{expected!r}. Image does not match the published measurement.")
+    return None
 
 
 def run_gate() -> int:
@@ -102,7 +124,10 @@ def run_gate() -> int:
         print(f"[tee_boot] FAIL-CLOSED: TEE_REQUIRED but no guest agent: {e}", file=sys.stderr)
         return 1
 
-    _assert_expected_measurement(info)
+    gap = _measurement_gap(info)
+    if gap:
+        print(f"[tee_boot] FAIL-CLOSED: {gap}", file=sys.stderr)
+        return 1
 
     try:
         # GetTlsKey is KMS-gated: success proves attestation passed and gives us

@@ -1,4 +1,4 @@
-# Three containers from one image, because one container was one uid.
+# Four containers from one image, because one container was one uid.
 #
 # This file used to run a single service whose entrypoint started the mail
 # daemon, the Pub/Sub receiver and the web server as children of one shell. That
@@ -32,6 +32,29 @@
 #     unconfigured. That list is set at deploy time by the phala CLI and is not
 #     in this repository.
 #
+# Where the machine may connect to, which the box answers with
+# `IPAddressDeny=any` in `deploy/hetzner/hardening.conf` and this file answered
+# with nothing at all. The `egress` service is the same CONNECT proxy the box
+# runs (`backend/daemons/egress_proxy.py`), the destinations it allows are the
+# same `backend/egress.py`, and every role's HTTP clients are pointed at it
+# below. Two networks decide who can go around it:
+#
+#   * `inner` is `internal: true`: docker installs no route off the host for it,
+#     so a container attached to it alone reaches the internet through the proxy
+#     or not at all. `mail` is that container -- the one holding the Google
+#     token, the inference keys and decrypted mail.
+#   * `edge` is an ordinary bridge. `egress` is on it because being on it is its
+#     job. `web` and `hook` are on it because they must *receive* traffic from
+#     outside the CVM: an internal network drops forwarded ingress, so a
+#     published port on one never reaches the container.
+#
+# So for `web` and `hook` the proxy is configuration and not enforcement, and
+# saying otherwise would be the kind of claim this file exists to avoid. It
+# still buys the dependency-phones-home case and the post-compromise case where
+# the attacker uses our own HTTP clients. Closing it for those two means an
+# ingress container in front of them holding no data, which is what Caddy is on
+# the box; it is not in this repository yet.
+#
 # NOTE: none of this has been run in a CVM. It is derived from dstack's source
 # (dstack-util/src/system_setup.rs, os/common/rootfs/app-compose.{service,sh}),
 # and the boot of each role should be watched the first time it deploys.
@@ -44,7 +67,22 @@ x-common: &common
     # backend/secrets.py read no file at all, which is why no service below
     # mounts one.
     TEE_REQUIRED: "1"
+    # Which compose this image is supposed to be running under. Empty is
+    # refused: `tee_boot._measurement_gap` used to return silently on an unset
+    # value, so the check was on only for whoever remembered to set it. It must
+    # be interpolated rather than written here -- the value is the hash of this
+    # file, which cannot contain it.
     EXPECTED_COMPOSE_HASH: "${EXPECTED_COMPOSE_HASH:-}"
+    # Both cases of every variable, because the HTTP clients in this tree
+    # disagree about which they read; the same six lines are in
+    # deploy/hetzner/hardening.conf and for the same reason. `egress` is the
+    # service name, resolved by docker's embedded DNS on both networks below.
+    HTTP_PROXY: "http://egress:8792"
+    HTTPS_PROXY: "http://egress:8792"
+    http_proxy: "http://egress:8792"
+    https_proxy: "http://egress:8792"
+    NO_PROXY: "127.0.0.1,::1,localhost"
+    no_proxy: "127.0.0.1,::1,localhost"
 
 services:
   # The only role that opens a mailbox. Holds the Google client credentials, the
@@ -85,6 +123,13 @@ services:
       # processes no mail at all while that box is unreachable, by design: see
       # docs/plan_token_custody.md §1 on the availability trade.
       LETTERLOCK_COSIGNER_URL: "${LETTERLOCK_COSIGNER_URL:-}"
+    # The only role on the internal network alone, and the only one for which
+    # the allowlist below is enforced rather than configured: it publishes no
+    # port, so nothing has to reach it from outside and docker can refuse it a
+    # route out. Everything it does reach -- Google, the inference provider,
+    # Telegram, Polar, the co-signer -- goes through `egress`.
+    networks:
+      - inner
     volumes:
       - database:/app/database
       - state:/app/state
@@ -95,8 +140,10 @@ services:
       # rest. Per container, not shared: each role derives its own client
       # certificate from GetTlsKey, so no private key crosses a container
       # boundary. Mode 0777 because the tmpfs is created by the runtime as root
-      # and the container's single process is not; tee_boot chmods ra_tls.key
-      # to 0600 itself, and nothing else runs in here to read it.
+      # and the container's single process is not; the private keys are created
+      # at 0600 by paths.write_private (never written and then narrowed, which
+      # on a 0777 directory is a world-readable key for two syscalls), and
+      # nothing else runs in here to read them.
       - type: tmpfs
         target: /app/attestation
         tmpfs:
@@ -132,6 +179,30 @@ services:
       POLAR_CHECKOUT_URL: "${POLAR_CHECKOUT_URL:-}"
       POLAR_SANDBOX: "${POLAR_SANDBOX:-0}"
       LETTERLOCK_COSIGNER_URL: "${LETTERLOCK_COSIGNER_URL:-}"
+      # The one interface the product is served on. It binds loopback by
+      # default (`site.LOOPBACK`), which on the box is right -- Caddy is in
+      # front of it there -- and in here meant the published port below reached
+      # a socket listening on the container's own loopback and the UI answered
+      # nobody.
+      WEB_HOST: "0.0.0.0"
+      # Which peer's X-Forwarded-For `web_server._source_ip` may believe.
+      # Loopback is always trusted; this names whatever dstack's ingress
+      # connects from, and until somebody has watched a real CVM and can say
+      # what that address is, it stays empty. Empty costs a wrong audit row
+      # (every sign-in recorded as coming from the ingress); a guess costs a
+      # forgeable one, which is worse. Naming it here also means adding the
+      # variable to `allowed_envs` in app-compose.json.
+      LETTERLOCK_TRUSTED_PROXIES: "${WEB_TRUSTED_PROXIES:-}"
+    # Both networks. `edge` because a published port on an internal-only
+    # network never receives forwarded ingress, and this is the product's UI;
+    # `inner` so it reaches `egress` the same way the mail role does. Being on
+    # `edge` is what makes the proxy configuration rather than enforcement for
+    # this role -- see the header.
+    networks:
+      - inner
+      - edge
+    ports:
+      - "8790:8790"
     volumes:
       - database:/app/database
       - state:/app/state
@@ -168,9 +239,57 @@ services:
       WEBHOOK_PORT: "8787"
       WEBHOOK_AUD: "${WEBHOOK_AUD}"
       PUBSUB_SERVICE_ACCOUNT: "${PUBSUB_SERVICE_ACCOUNT}"
+    # `edge` for the same reason as `web`: Google posts to it. It reaches the
+    # network for one thing only, verifying the Pub/Sub token's signature, and
+    # that goes through the proxy like everything else.
+    networks:
+      - inner
+      - edge
     volumes:
       - state:/app/state
+
+  # The only container allowed to open a connection to the internet, and the
+  # same code the box runs as `egress-proxy.service`. An HTTP CONNECT proxy on
+  # 8792: it reads one request line, checks the hostname against
+  # `backend/egress.py`, and moves opaque bytes. TLS is end to end between the
+  # role and the destination, so this process holds no decrypted byte and no key
+  # that would let it.
+  #
+  # It is the cheapest role to isolate after `hook` and it needs even less: no
+  # volume, no guest-agent socket, no secret, and therefore no attestation gate
+  # (it has nothing to unseal). What it does need is the one thing no other role
+  # has, which is why it is a container of its own rather than a thread in the
+  # mail daemon: on the box the process holding the network is deliberately not
+  # the process holding the API keys.
+  #
+  # It publishes no port. The only things that can reach 8792 are containers on
+  # these two networks, which is every role and nothing else. It does not
+  # authenticate its callers -- the boundary is over destinations, not callers,
+  # and `inner` is what stops a role going around it.
+  egress:
+    <<: *common
+    command: ["egress"]
+    user: "10004:10004"
+    environment:
+      # Deliberately not *common-env: this container must not be pointed at
+      # itself, and it needs none of the rest. TEE_REQUIRED is here so
+      # backend/secrets.py reads no file, the same as everywhere else.
+      TEE_REQUIRED: "1"
+      # Its clients are other containers, so loopback would answer none of them.
+      EGRESS_PROXY_BIND: "0.0.0.0"
+    networks:
+      - inner
+      - edge
 
 volumes:
   database:
   state:
+
+networks:
+  # No route off the host. A container attached to this alone reaches the
+  # internet through `egress` or not at all.
+  inner:
+    internal: true
+  # An ordinary bridge, for the containers that must receive traffic from
+  # outside the CVM and for the one that must leave it.
+  edge:

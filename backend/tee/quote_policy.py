@@ -28,6 +28,7 @@ about which code booted.
 """
 
 import asyncio
+import datetime
 import hashlib
 import json
 import threading
@@ -36,6 +37,14 @@ from pathlib import Path
 
 REQUIRED = "required"
 DEV_INSECURE = "dev-insecure"
+
+# The date after which an allowlist may no longer say `dev-insecure`, named in
+# the allowlist itself. A switch that turns verification off has to expire on
+# its own, because the failure mode is silence: nothing breaks, nothing logs an
+# error, and the box keeps accepting whatever connects to it. It is required
+# rather than optional for the same reason -- an optional deadline is one an
+# operator omits on the day they are in a hurry.
+DEV_INSECURE_EXPIRY_KEY = "dev_insecure_expires"
 
 MEASUREMENT_FIELDS = ("mr_td", "rt_mr0", "rt_mr1", "rt_mr2", "rt_mr3")
 
@@ -101,16 +110,50 @@ class Policy:
         The escape hatch is deliberately hard to leave on by accident: an
         allowlist with entries in it means somebody provisioned this box for
         production, and then the refusal fires at startup rather than after a
-        month of unverified calls."""
+        month of unverified calls. The expiry date is the other half of that,
+        for the case the entries cannot cover -- a box nobody has provisioned
+        yet, where dev-insecure is correct today and is still correct-looking
+        on the day it stops being."""
         value = (override or self.get("mode") or REQUIRED).strip()
         if value not in (REQUIRED, DEV_INSECURE):
             raise AllowlistInvalid(f"unknown attestation mode {value!r}")
-        if value == DEV_INSECURE and self.entries():
-            raise AllowlistInvalid(
-                "attestation is dev-insecure but the allowlist names authorized "
-                f"measurements ({self.path}); this box looks provisioned for production"
-            )
+        if value == DEV_INSECURE:
+            if self.entries():
+                raise AllowlistInvalid(
+                    "attestation is dev-insecure but the allowlist names authorized "
+                    f"measurements ({self.path}); this box looks provisioned for "
+                    "production"
+                )
+            self._check_dev_insecure_expiry()
         return value
+
+    def _check_dev_insecure_expiry(self):
+        """Refuse `dev-insecure` past the date the allowlist names for it.
+
+        A missing or malformed date is a refusal too. The alternative is a file
+        that turns verification off for as long as nobody re-reads it, which is
+        how a development shortcut becomes the deployment."""
+        stated = self.get(DEV_INSECURE_EXPIRY_KEY)
+        if not stated:
+            raise AllowlistInvalid(
+                f"{self.path} says mode {DEV_INSECURE!r} without a "
+                f"{DEV_INSECURE_EXPIRY_KEY} date; a switch that disables "
+                "verification has to name the day it stops being allowed"
+            )
+        try:
+            expires = datetime.date.fromisoformat(str(stated).strip())
+        except ValueError:
+            raise AllowlistInvalid(
+                f"{self.path}: {DEV_INSECURE_EXPIRY_KEY} is {stated!r}, "
+                "which is not a YYYY-MM-DD date"
+            )
+        today = datetime.date.today()
+        if today > expires:
+            raise AllowlistInvalid(
+                f"attestation is {DEV_INSECURE!r} and expired on {expires} "
+                f"({self.path}); pin the measurements and set mode {REQUIRED!r}, "
+                "or move the date deliberately"
+            )
 
     def rows(self, key, scope=None):
         """Authorized entries under one key, optionally only those naming a
