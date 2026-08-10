@@ -24,8 +24,10 @@ PROBE_BACKUP="$(mktemp)"
 cp "$PROBE_FILE" "$PROBE_BACKUP"
 
 image_sha() {
+  # The probe edits tee_boot.py, which is in the mail (and web) image; the mail
+  # image is the one that runs the gate, so its measurement is the one to move.
   local out
-  out="$(nix build .#image --no-link --print-out-paths 2>/dev/null | tail -1)"
+  out="$(nix build .#image-mail --no-link --print-out-paths 2>/dev/null | tail -1)"
   sha256sum "$out" | awk '{print $1}'
 }
 

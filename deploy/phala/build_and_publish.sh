@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Reproducible-build + publish driver for Track E (reproducible builds).
 #
-# Builds the measured OCI image from pinned source via Nix, optionally verifies
-# it is bit-for-bit reproducible, and optionally pushes it to a container
-# registry and pins docker-compose.yml to the pushed digest.
+# Builds the four measured OCI images (one per enclave role: mail, web, hook,
+# egress)
+# from pinned source via Nix, optionally verifies each is bit-for-bit
+# reproducible, and optionally pushes each to a container registry and pins its
+# docker-compose.yml service to the pushed digest. Each role is pushed to
+# "${REGISTRY}-${role}".
 #
 # Three distinct hashes are involved; keep them straight:
 #   1. tarball sha256   - hash of the Nix build output. Proves the *build* is
@@ -29,7 +32,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HASH_FILE="$REPO_ROOT/deploy/phala/IMAGE_HASH.txt"
 COMPOSE_FILE="$REPO_ROOT/deploy/phala/docker-compose.yml"
-LOCAL_IMAGE="tee-email-bot:latest"
+# Four images now, one per enclave role, each carrying only its reachable code.
+# The registry destination for a role is "${REGISTRY}-${role}", matching the
+# local image name tee-email-bot-${role} the flake produces.
+ROLES=(mail web hook egress)
 TAG="${TAG:-latest}"
 
 cd "$REPO_ROOT"
@@ -47,72 +53,100 @@ for arg in "$@"; do
 done
 
 if [[ "$PUSH" == 1 && -z "${REGISTRY:-}" ]]; then
-  echo "--push requires REGISTRY=<repo> (e.g. ghcr.io/you/tee-email-bot)" >&2
+  echo "--push requires REGISTRY=<repo> base (e.g. ghcr.io/you/tee-email-bot); each role pushes to <repo>-<role>" >&2
   exit 2
 fi
 
-build() {
-  nix build .#image --no-link --print-out-paths 2>/dev/null | tail -1
+build_role() {
+  nix build ".#image-$1" --no-link --print-out-paths 2>/dev/null | tail -1
 }
 
-echo "building measured image via nix..."
-OUT="$(build)"
-IMG_SHA="$(sha256sum "$OUT" | awk '{print $1}')"
-echo "image tarball: $OUT"
-echo "tarball sha256: $IMG_SHA"
+# Pin one service's `image:` line, keyed on the `command: ["$role"]` line right
+# below it so a re-pin matches whatever the current value is (a bare tag the
+# first time, a digest after). The compose image line is the single source of
+# truth for what the CVM runs, so it must carry a literal digest, never a tag or
+# a variable an operator could swap.
+#
+# The role and the ref reach perl through the environment rather than through
+# the -e text. Substituting them into the program was the obvious way to write
+# this and it silently dropped the digest: a registry ref contains `@sha256`,
+# perl read that as an array in the interpolated replacement, and every push
+# pinned `repo:<64 hex>` -- a tag, and exactly the thing the pin exists to
+# forbid. \Q..\E for the same class of reason on the pattern side.
+pin_compose() {
+  local role="$1" ref="$2"
+  ROLE="$role" REF="$ref" perl -0pi -e '
+    my ($role, $ref) = ($ENV{ROLE}, $ENV{REF});
+    s{image: \S+\n(\s*)command: \["\Q$role\E"\]}{image: $ref\n$1command: ["$role"]}
+  ' "$COMPOSE_FILE"
+}
+
+declare -A OUTS SHAS REFS
+for role in "${ROLES[@]}"; do
+  echo "building $role image via nix..."
+  OUTS[$role]="$(build_role "$role")"
+  SHAS[$role]="$(sha256sum "${OUTS[$role]}" | awk '{print $1}')"
+  echo "  $role tarball: ${OUTS[$role]}"
+  echo "  $role sha256:  ${SHAS[$role]}"
+  REFS[$role]="<not pushed>"
+done
 
 if [[ "$VERIFY" == 1 ]]; then
-  echo "verifying reproducibility (second build)..."
-  OUT2="$(build)"
-  IMG_SHA2="$(sha256sum "$OUT2" | awk '{print $1}')"
-  if [[ "$IMG_SHA" != "$IMG_SHA2" ]]; then
-    echo "NON-REPRODUCIBLE: $IMG_SHA != $IMG_SHA2" >&2
-    exit 1
-  fi
-  echo "reproducible: identical hash across two builds."
+  for role in "${ROLES[@]}"; do
+    echo "verifying $role reproducibility (second build)..."
+    OUT2="$(build_role "$role")"
+    SHA2="$(sha256sum "$OUT2" | awk '{print $1}')"
+    if [[ "${SHAS[$role]}" != "$SHA2" ]]; then
+      echo "NON-REPRODUCIBLE ($role): ${SHAS[$role]} != $SHA2" >&2
+      exit 1
+    fi
+  done
+  echo "reproducible: identical hash across two builds, all roles."
 fi
 
-REGISTRY_REF=""
 if [[ "$LOAD" == 1 || "$PUSH" == 1 ]]; then
-  echo "loading tarball into docker..."
-  docker load < "$OUT"
+  for role in "${ROLES[@]}"; do
+    echo "loading $role tarball into docker..."
+    docker load < "${OUTS[$role]}"
+  done
 fi
 
 if [[ "$PUSH" == 1 ]]; then
-  DEST="$REGISTRY:$TAG"
-  echo "tagging $LOCAL_IMAGE -> $DEST"
-  docker tag "$LOCAL_IMAGE" "$DEST"
-  echo "pushing $DEST ..."
-  docker push "$DEST"
-  # RepoDigests is populated after a successful push; take the one for our repo.
-  DIGEST="$(docker inspect "$DEST" \
-    --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-    | grep "^$REGISTRY@" | head -1 | cut -d@ -f2)"
-  if [[ -z "$DIGEST" ]]; then
-    echo "could not resolve registry digest after push" >&2
-    exit 1
-  fi
-  REGISTRY_REF="$REGISTRY@$DIGEST"
-  echo "registry digest: $DIGEST"
-  echo "pinning compose image to $REGISTRY_REF"
-  # Replace the first `image:` line under the service. `#` delimiter avoids the
-  # slashes in the registry ref. The compose image line is the single source of
-  # truth for what the CVM runs, so it must carry a literal digest (not a tag or
-  # a variable an operator could swap).
-  sed -i "0,/^\( *\)image: .*/s##\1image: $REGISTRY_REF#" "$COMPOSE_FILE"
+  for role in "${ROLES[@]}"; do
+    LOCAL="tee-email-bot-$role:latest"
+    DEST="$REGISTRY-$role:$TAG"
+    echo "tagging $LOCAL -> $DEST"
+    docker tag "$LOCAL" "$DEST"
+    echo "pushing $DEST ..."
+    docker push "$DEST"
+    # RepoDigests is populated after a successful push; take the one for our repo.
+    DIGEST="$(docker inspect "$DEST" \
+      --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+      | grep "^$REGISTRY-$role@" | head -1 | cut -d@ -f2)"
+    if [[ -z "$DIGEST" ]]; then
+      echo "could not resolve registry digest after pushing $role" >&2
+      exit 1
+    fi
+    REFS[$role]="$REGISTRY-$role@$DIGEST"
+    echo "  $role registry digest: $DIGEST"
+    echo "  pinning $role compose image to ${REFS[$role]}"
+    pin_compose "$role" "${REFS[$role]}"
+  done
   echo "updated $COMPOSE_FILE"
 fi
 
 {
-  echo "# Published hashes for Track E reproducible builds."
+  echo "# Published hashes for Track E reproducible builds, one line per role."
   echo "#"
   echo "# tarball-sha256: hash of the Nix build output; proves the build is"
   echo "#   source-reproducible (rebuild from this repo -> identical value)."
   echo "#   Regenerate/verify with: deploy/phala/build_and_publish.sh --verify"
   echo "# registry-ref:   what the Phala CVM pulls; pinned into docker-compose.yml."
-  echo "#   Populated by --push. Empty until first push."
-  echo "nix-store-path: $OUT"
-  echo "tarball-sha256: $IMG_SHA"
-  echo "registry-ref:   ${REGISTRY_REF:-<not pushed>}"
+  echo "#   Populated by --push. <not pushed> until first push."
+  for role in "${ROLES[@]}"; do
+    echo "$role nix-store-path: ${OUTS[$role]}"
+    echo "$role tarball-sha256: ${SHAS[$role]}"
+    echo "$role registry-ref:   ${REFS[$role]}"
+  done
 } > "$HASH_FILE"
 echo "wrote $HASH_FILE"

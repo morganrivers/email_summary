@@ -1,8 +1,8 @@
-"""Render the measured image's file list from what the enclave actually loads.
+"""Render each enclave container's file list from what that role actually loads.
 
-`flake.nix` used to copy the repository into the image behind a filter written
+`flake.nix` used to copy the repository into one image behind a filter written
 as "every .py that is not a test, plus .css, minus five directory names". That
-filter is wrong in both directions at once.
+filter was wrong in both directions at once.
 
 Too much: it shipped the co-signer's key derivation and request policy, the
 egress proxy, the billing webhook and poller, the masking evaluator and the
@@ -11,24 +11,29 @@ an attacker with execution inside the enclave can call, and every dependency
 bump touching them changes the measurement for a path that does not run.
 
 Too little, and worse: it shipped no data files at all, because none end in .py
-or .css. The image has no `default_voice.md`, so the first account without its
+or .css. The image had no `default_voice.md`, so the first account without its
 own profile asserts; no `inference_allowlist.json`, so no confidential provider
 can be authorized; and no brand assets, so every page 500s on its own icon. The
 filter was a description of the tree rather than an answer about the program.
 
-So the list is derived instead. `tools/reachability.py` walks imports from the
-entry points `flake.nix` itself starts, and that set of modules is the list.
-Adding a module to the image now means importing it from something that runs.
+So the list is derived instead -- and now derived *per role*, because the three
+enclave containers (`mail`, `web`, `hook`) run three different entry points from
+one repository. `tools/reachability.py` walks imports from each role's entry
+points, and that set of modules is that role's list. A module ships into a
+container because something *that container starts* imports it, so the receiver
+Google posts to no longer carries the inference client or the custody stack that
+the mail role's imports drag in.
 
     python -m deploy.render_image_manifest            # rewrite the file
     python -m deploy.render_image_manifest --check    # exit 1 if it is stale
 
 `tests/test_image_manifest.py` runs the check, so a new import that pulls a new
-module into the enclave fails there rather than in a CVM.
+module into a container fails there rather than in a CVM.
 
 Data files cannot be derived -- nothing in an import graph says a module reads a
 JSON file beside it -- so they are listed here, each with the module that reads
-it, and the renderer asserts every one exists.
+it. A data file ships into a role's image exactly when that role reaches its
+reader, and the renderer asserts every one exists.
 """
 
 import sys
@@ -38,8 +43,44 @@ from tools import reachability
 
 MANIFEST_FILE = paths.REPO_ROOT / "deploy" / "phala" / "image_files.nix"
 
-# Path -> the module that reads it. Asserted to exist at render time, because a
-# renamed asset that silently drops out of the image is the failure this whole
+ROLES = ("mail", "web", "hook", "egress")
+
+# role -> the entry-point modules it starts, mirroring flake.nix's entrypoint:
+# the `case "$role"` branches plus, for mail, the crontab beside them and, for
+# the two data-holding roles, the attest-before-run gate they call. This is the
+# partition the flake cannot express as one grep, so it is stated here and the
+# union is asserted equal to reachability.enclave_roots() -- a `python -m` added
+# to the flake without a home here fails the render rather than shipping nowhere.
+#
+# `egress` has one root and no gate: it unseals nothing, so there is nothing for
+# a gate to release, and it is deliberately handed no guest-agent socket to run
+# one against. Its image is the proxy and the allowlist, which is the whole
+# reason it is a container rather than a thread in the mail daemon -- the process
+# holding the network must not be the one holding the API keys, and that is a
+# claim about address spaces, not only about uids.
+ROLE_ROOTS = {
+    "mail": {
+        "backend.daemons.daemon_loop",
+        "backend.drafting.email_summary",
+        "backend.onboarding.watch_renew",
+        "backend.billing.billing_poller",
+        "backend.tee.tee_boot",
+    },
+    "web": {
+        "frontend.web_server",
+        "backend.tee.tee_boot",
+    },
+    "hook": {
+        "backend.daemons.gmail_hook_server",
+    },
+    "egress": {
+        "backend.daemons.egress_proxy",
+    },
+}
+
+# Path -> the module that reads it. A data file ships into a role's image when
+# that role reaches its reader. Asserted to exist at render time, because a
+# renamed asset that silently drops out of an image is the failure this whole
 # module is about.
 DATA_FILES = {
     "backend/drafting/default_voice.md": "backend.drafting.voice_dna",
@@ -53,24 +94,31 @@ DATA_FILES = {
     "frontend/static/mark.png": "frontend.web_server",
 }
 
-# Modules nothing starts, that still have to be in the enclave because the data
-# they work on is only there. An import graph cannot find these -- that is the
-# point of a command -- so each is written down with the reason it ships.
+# Modules nothing starts, that still have to be in a role's image because the
+# data they work on is only there. An import graph cannot find these -- that is
+# the point of a command -- so each is written down with the role it belongs to
+# and the reason it ships. Both operate on the manifest and the wrapped records,
+# which the mail role writes and holds.
 EXTRA_MODULES = {
-    "backend.accounts.whois":
+    "backend.accounts.whois": (
+        "mail",
         "the only mapping from an opaque handle back to a person lives in the "
-        "manifest, and the manifest is here",
-    "backend.custody.rotate":
+        "manifest, and the manifest is the mail role's",
+    ),
+    "backend.custody.rotate": (
+        "mail",
         "rotation rewrites every record onto a new co-signer key, and the "
-        "records are here; a rotation tool on the box would have nothing to "
-        "rewrite",
+        "records are the mail role's; a rotation tool anywhere else would have "
+        "nothing to rewrite",
+    ),
 }
 
-HEADER = """# Every file the measured enclave image carries.
+HEADER = """# Every file each measured enclave image carries, per role.
 #
 # Generated by deploy/render_image_manifest.py from the modules reachable from
-# the entry points in flake.nix -- do not edit. A module belongs here because
-# something that starts imports it; add the import, then re-render.
+# each role's entry points in flake.nix -- do not edit. A module belongs in a
+# role because something that role starts imports it; add the import, then
+# re-render.
 #
 #   python -m deploy.render_image_manifest
 #
@@ -78,40 +126,63 @@ HEADER = """# Every file the measured enclave image carries.
 """
 
 
-def module_files():
-    """The source files the enclave's entry points reach, repo-relative."""
-    graph = reachability.Graph()
-    for name in EXTRA_MODULES:
+def _assert_roots_cover_the_flake():
+    """Every enclave entry point flake.nix starts has exactly one role here."""
+    union = set().union(*ROLE_ROOTS.values())
+    flake = reachability.enclave_roots()
+    assert union == flake, (
+        "ROLE_ROOTS and flake.nix disagree about the enclave's entry points; "
+        f"only in ROLE_ROOTS: {sorted(union - flake)}; "
+        f"only in flake.nix: {sorted(flake - union)}"
+    )
+
+
+def _reachable(graph, role):
+    """The modules `role` reaches, its hand-run commands included."""
+    extra = {name for name, (r, _) in EXTRA_MODULES.items() if r == role}
+    for name in extra:
         assert name in graph.modules, (
-            f"{name} is listed as an enclave command but is not a module")
-    reachable = graph.reachable_modules(
-        reachability.enclave_roots() | set(EXTRA_MODULES))
+            f"{name} is listed as a {role} command but is not a module")
+    return graph.reachable_modules(ROLE_ROOTS[role] | extra)
+
+
+def role_files(graph, role):
+    """One role's image file list, repo-relative and sorted: the source files
+    its entry points reach, plus the data files whose reader it reaches."""
+    reachable = _reachable(graph, role)
     out = set()
     for name in reachable:
-        mod = graph.modules[name]
-        out.add(str(mod.path.relative_to(paths.REPO_ROOT)))
-    assert out, "the enclave reaches no modules; the entry points did not parse"
-    return out
+        out.add(str(graph.modules[name].path.relative_to(paths.REPO_ROOT)))
+    for rel, reader in DATA_FILES.items():
+        if reader in reachable:
+            out.add(rel)
+    assert out, f"the {role} role reaches no modules; its entry points did not parse"
+    return sorted(out)
 
 
-def data_files():
+def _assert_data_files_exist():
     for rel, reader in sorted(DATA_FILES.items()):
         assert (paths.REPO_ROOT / rel).is_file(), (
             f"{rel} is listed as an image data file for {reader} but is not "
             f"there; a renamed asset drops out of the image silently otherwise"
         )
-    return set(DATA_FILES)
 
 
-def render_paths():
-    """The image's file list, sorted. The one answer both the renderer and the
-    tests read, so a test cannot pass against a list the image does not use."""
-    return sorted(module_files() | data_files())
+def render_paths(role):
+    """One role's file list. The one answer both the renderer and the tests
+    read, so a test cannot pass against a list an image does not use."""
+    return role_files(reachability.Graph(), role)
 
 
 def render():
-    body = "".join(f'  "{rel}"\n' for rel in render_paths())
-    return f"{HEADER}[\n{body}]\n"
+    _assert_roots_cover_the_flake()
+    _assert_data_files_exist()
+    graph = reachability.Graph()
+    blocks = []
+    for role in ROLES:
+        body = "".join(f'    "{rel}"\n' for rel in role_files(graph, role))
+        blocks.append(f"  {role} = [\n{body}  ];\n")
+    return f"{HEADER}{{\n{''.join(blocks)}}}\n"
 
 
 def main(argv):
@@ -124,7 +195,8 @@ def main(argv):
             return 1
         return 0
     MANIFEST_FILE.write_text(rendered)
-    print(f"wrote {MANIFEST_FILE} ({rendered.count(chr(10)) - HEADER.count(chr(10)) - 2} files)")
+    counts = ", ".join(f"{role} {len(render_paths(role))}" for role in ROLES)
+    print(f"wrote {MANIFEST_FILE} ({counts})")
     return 0
 
 

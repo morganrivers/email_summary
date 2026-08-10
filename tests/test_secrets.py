@@ -19,7 +19,7 @@ import json
 
 import pytest
 
-from backend import paths, secrets
+from backend import paths, secrets, secrets_checks
 from backend.integrations.gmail_gcal import oauth_app
 from backend.tee import tee_boot
 
@@ -100,7 +100,7 @@ def _provision(monkeypatch):
 
 def test_fully_provisioned_box_has_no_gaps(env_file, monkeypatch):
     _provision(monkeypatch)
-    assert secrets.missing() == []
+    assert secrets_checks.missing() == []
 
 
 @pytest.mark.parametrize("name", [
@@ -115,7 +115,7 @@ def test_each_required_secret_is_actually_required(env_file, monkeypatch, name):
     _provision(monkeypatch)
     monkeypatch.delenv(name, raising=False)
 
-    gaps = secrets.missing()
+    gaps = secrets_checks.missing()
     assert gaps, f"{name} missing but the gate saw no gap"
     assert any(name in reason for reason in gaps), gaps
 
@@ -141,7 +141,7 @@ def test_the_key_file_still_serves_a_plain_box(env_file, tmp_path, monkeypatch):
     write_keys_file(tmp_path)
 
     assert oauth_app.load_keys() == ("file-id", "file-secret")
-    assert secrets.google_oauth_configured() is None
+    assert secrets_checks.google_oauth_configured() is None
 
 
 def test_half_an_injected_pair_is_not_a_pair(env_file, tmp_path, monkeypatch):
@@ -171,7 +171,7 @@ def test_a_tee_refuses_the_key_file_and_names_what_to_inject(
     assert secrets.GOOGLE_CLIENT_SECRET_ENV in str(err.value)
     assert "file-secret" not in str(err.value), "the refusal quoted the secret"
 
-    reason = secrets.google_oauth_configured()
+    reason = secrets_checks.google_oauth_configured()
     assert reason and secrets.GOOGLE_CLIENT_ID_ENV in reason
 
 

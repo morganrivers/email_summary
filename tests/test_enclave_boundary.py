@@ -15,12 +15,15 @@ nor requirements-dev.txt, and a boundary test is a bad reason to add a
 dependency to a list whose whole point is being the only list.
 """
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 COMPOSE = REPO / "deploy" / "phala" / "docker-compose.yml"
 FLAKE = REPO / "flake.nix"
+PUBLISH = REPO / "deploy" / "phala" / "build_and_publish.sh"
 
 ROLES = ("mail", "web", "hook", "egress")
 
@@ -79,6 +82,26 @@ def test_every_role_is_present_and_none_of_them_is_root():
         assert found.group(1) != "0", f"{role} runs as root"
         uids[role] = found.group(1)
     assert len(set(uids.values())) == len(ROLES), f"roles share a uid: {uids}"
+
+
+def test_each_role_runs_its_own_image():
+    """One image per role now, each carrying only its reachable code (flake.nix,
+    deploy/phala/image_files.nix). The compose names a distinct image per service
+    and each is measured into the compose-hash, so the receiver's image cannot
+    silently gain the mail role's custody stack the way one shared image left it
+    able to. A service that inherited a single shared image, or two services
+    naming the same one, would undo that."""
+    blocks = _service_blocks()
+    images = {}
+    for role, block in blocks.items():
+        found = re.search(r"^\s+image:\s*(\S+)", block, re.M)
+        assert found, f"{role} names no image of its own"
+        images[role] = found.group(1)
+    assert len(set(images.values())) == len(ROLES), (
+        f"roles share an image: {images}")
+    for role, ref in images.items():
+        assert f"tee-email-bot-{role}" in ref, (
+            f"{role} runs {ref}, not its own tee-email-bot-{role} image")
 
 
 def test_the_push_receiver_reaches_no_account_data_and_no_kms():
@@ -233,27 +256,62 @@ def test_no_role_asks_for_privilege_the_partition_would_not_survive():
         assert setting not in text, f"the compose file asks for {setting}"
 
 
-def test_the_image_is_pinned_by_digest_or_is_the_pre_publish_placeholder():
-    """One `image:` line, and it names bytes rather than a name somebody can
-    repoint. A mutable tag or a `${VAR}` would let the operator swap the image
-    under a compose file whose hash is what the KMS gates secret release on, so
-    the digest is the difference between the measurement meaning the code and
-    the measurement meaning the intention.
+def test_every_image_is_pinned_by_digest_or_is_the_pre_publish_placeholder():
+    """One `image:` line per role, and each names bytes rather than a name
+    somebody can repoint. A mutable tag or a `${VAR}` would let the operator swap
+    an image under a compose file whose hash is what the KMS gates secret release
+    on, so the digest is the difference between the measurement meaning the code
+    and the measurement meaning the intention. Per role, because one image per
+    role means one chance per role to leave a swappable name behind.
 
     The placeholder is allowed because it is what the tree carries before the
-    first push, and `build_and_publish.sh --push` rewrites this exact line;
-    that script is checked here so the line it targets cannot drift from the
-    line this test reads."""
+    first push, and `build_and_publish.sh --push` rewrites these exact lines;
+    that script is checked here so what it targets cannot drift from what this
+    test reads. It keys its rewrite on the `command: ["<role>"]` line below the
+    image, which is what lets it re-pin a digest as readily as a first tag."""
     images = re.findall(r"^\s*image:\s*(\S+)", COMPOSE.read_text(), re.M)
-    assert len(images) == 1, f"expected one image reference, found {images}"
-    ref = images[0]
-    if ref != "tee-email-bot:latest":
-        assert re.fullmatch(r"[^\s$]+@sha256:[0-9a-f]{64}", ref), (
-            f"the compose image {ref!r} is neither the pre-publish placeholder "
-            "nor a literal registry digest")
-    publish = (REPO / "deploy" / "phala" / "build_and_publish.sh").read_text()
-    assert "LOCAL_IMAGE=\"tee-email-bot:latest\"" in publish
-    assert "s##\\1image: $REGISTRY_REF#" in publish
+    assert len(images) == len(ROLES), (
+        f"expected one image reference per role, found {images}")
+    for ref in images:
+        if not re.fullmatch(r"tee-email-bot-(?:%s):latest" % "|".join(ROLES), ref):
+            assert re.fullmatch(r"[^\s$]+@sha256:[0-9a-f]{64}", ref), (
+                f"the compose image {ref!r} is neither the pre-publish "
+                "placeholder nor a literal registry digest")
+    publish = PUBLISH.read_text()
+    assert 'LOCAL="tee-email-bot-$role:latest"' in publish
+    assert 'ROLES=(%s)' % " ".join(ROLES) in publish, (
+        "build_and_publish.sh does not build and pin every role")
+
+
+def test_the_push_actually_writes_a_digest_into_every_service(tmp_path):
+    """What the rule above forbids, checked by running the rewrite rather than
+    by reading it.
+
+    It is checked this way because reading it was not enough. The rewrite
+    substituted the registry ref into the perl program text, a registry ref
+    contains `@sha256`, and perl read that as an array interpolation in the
+    replacement -- so every `--push` wrote `repo:<64 hex>`, a mutable tag, into
+    the one line whose whole job is to name bytes. The compose still parsed and
+    the CVM would still have booted something."""
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text(COMPOSE.read_text())
+    body = re.search(r"^pin_compose\(\) \{\n(.*?)^\}", PUBLISH.read_text(),
+                     re.M | re.S)
+    assert body, "pin_compose is no longer a shell function in the publish script"
+    digest = "sha256:" + "ab" * 32
+    script = "pin_compose() {\n%s}\n" % body.group(1) + "".join(
+        f'pin_compose {role} "ghcr.io/x/tee-email-bot-{role}@{digest}"\n'
+        for role in ROLES)
+    run = subprocess.run(["bash", "-c", script], env={"COMPOSE_FILE": str(compose),
+                                                      "PATH": os.environ["PATH"]},
+                         capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+
+    pinned = re.findall(r"^\s*image:\s*(\S+)", compose.read_text(), re.M)
+    assert len(pinned) == len(ROLES), pinned
+    for role, ref in zip(ROLES, pinned):
+        assert ref == f"ghcr.io/x/tee-email-bot-{role}@{digest}", (
+            f"{role} was pinned to {ref!r}, which is not the digest it was given")
 
 
 def test_the_mail_role_has_no_route_off_the_host_except_the_proxy():

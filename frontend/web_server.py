@@ -61,7 +61,6 @@ from backend.drafting import personal_context, voice_dna
 from backend.integrations import llm_client, telegram
 from backend.integrations.gmail_gcal import oauth_app
 from backend.masking import pseudonymizer
-from backend.onboarding import provisioning
 from frontend import session as sess
 
 app_secrets.load()
@@ -156,7 +155,10 @@ def log(msg):
 
 
 # The OAuth sequence (auth url, code exchange, creds custody, registration,
-# watch) lives in backend.onboarding.provisioning, which is its only copy.
+# watch) lives in backend.onboarding.provisioning, which is its only copy. This
+# tier does not import it: the sequence needs a Google token and runs in the
+# mail role over backend.custody.handoff, so provisioning -- and the token
+# custody it pulls in -- is deliberately not on this process's import graph.
 
 
 _BILLING = None
@@ -1787,7 +1789,7 @@ class Handler(BaseHTTPRequestHandler):
                     "Your subscription is already active, so there is nothing "
                     "to buy. Use Manage subscription to change or cancel it."
                 )))
-            location = provisioning.checkout_redirect(acct.id, fallback="")
+            location = billing.checkout_url(acct.id, fallback="")
             if not location:
                 return self._send(200, _page_billing(acct, error=(
                     "Checkout is unavailable right now. Please try again shortly."

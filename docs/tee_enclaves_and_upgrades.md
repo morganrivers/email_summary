@@ -960,12 +960,15 @@ strong risk-reduction argument and not a legal exemption.
 The point of the whole architecture is that these steps are available to a
 stranger.
 
-1. **Rebuild.** `git clone`, `nix build .#image`, `sha256sum` the output,
-   compare to `deploy/phala/IMAGE_HASH.txt`. Two different people on two
-   different machines should get the same value.
-2. **Read the compose file.** Confirm the `image:` line carries a literal
-   `@sha256:` digest, not a tag or a variable. Confirm the digest corresponds to
-   the pushed artifact of the build in step 1.
+1. **Rebuild.** `git clone`, then build each role's image —
+   `nix build .#image-mail .#image-web .#image-hook .#image-egress` (or
+   `.#images` for all four) — `sha256sum` the outputs, compare to the per-role
+   rows in
+   `deploy/phala/IMAGE_HASH.txt`. Two different people on two different machines
+   should get the same values.
+2. **Read the compose file.** Confirm each service's `image:` line carries a
+   literal `@sha256:` digest, not a tag or a variable. Confirm each digest
+   corresponds to the pushed artifact of the matching role from step 1.
 3. **Fetch a live quote** with a nonce of your choosing from the on-demand
    attestation endpoint (Track G).
 4. **Verify the quote**: chain to Intel's root, TCB status acceptable, QE
