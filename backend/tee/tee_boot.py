@@ -35,7 +35,7 @@ import os
 import sys
 from pathlib import Path
 
-from backend import paths, secrets, secrets_checks
+from backend import paths, roles, secrets, secrets_checks
 from backend.tee.dstack_client import DstackClient, DstackError, DstackUnavailable
 
 APP_KEY_PATH = "tee-email-bot/app"
@@ -144,16 +144,22 @@ def _host_overridden() -> str | None:
 # are properties of the image and of this deployment's configuration rather
 # than values the KMS releases, and because the compose file cannot satisfy
 # them by naming a variable.
+#
+# ``ingress`` and ``egress`` are empty for the same reason they run no gate at
+# all: they mint no URL, pin no image and unseal nothing, so there is no
+# property of this deployment for them to be wrong about.
 CAPABILITIES_BY_ROLE = {
     "mail": (_inference_attestable, _host_overridden),
     "web": (_host_overridden,),
     "hook": (),
+    "ingress": (),
     "egress": (),
 }
 
-assert set(CAPABILITIES_BY_ROLE) == set(secrets_checks.REQUIRED_BY_ROLE), (
-    "the two role tables name different roles; a role admitted by one and "
-    "missing from the other is a KeyError inside the gate"
+assert (set(CAPABILITIES_BY_ROLE) == set(secrets_checks.REQUIRED_BY_ROLE)
+        == set(roles.ROLES)), (
+    "the role tables disagree with backend/roles.py; a role admitted by one "
+    "and missing from another is a KeyError inside the gate"
 )
 
 

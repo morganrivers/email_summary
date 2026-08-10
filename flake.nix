@@ -60,6 +60,13 @@
       # docstring.
       imageManifests = import ./deploy/phala/image_files.nix;
 
+      # The role names, derived rather than restated. That file is generated
+      # from `backend/roles.py` and keyed by exactly those names, so this is the
+      # same list the boot gate and the boundary tests read; spelling it again
+      # here is how a role comes to exist in four places and be missing from the
+      # fifth. `deploy/phala/build_and_publish.sh` reads it the same way.
+      roleNames = builtins.attrNames imageManifests;
+
       # One role's source tree: exactly the files its manifest names. Nix store
       # paths are content-addressed, so a file shared by two roles is stored and
       # pulled once across the images rather than duplicated -- the dedup is what
@@ -105,6 +112,12 @@
         # of ours. It is its own account for the reason it is on the box -- the
         # process holding the network must not be the one holding the API keys.
         egress = { uid = 10004; groups = [ ]; };
+        # The ingress forwarder, and the counterpart of the above. It is what
+        # lets `web` and `hook` give up their published ports and move onto the
+        # internal network alone, which turns the egress allowlist from a
+        # setting their own HTTP clients honour into something docker enforces
+        # for them. Also in no group: it moves bytes and reads nothing.
+        ingress = { uid = 10005; groups = [ ]; };
       };
       sharedGids = { letterlock-data = 10010; letterlock-wake = 10011; };
 
@@ -210,11 +223,19 @@
               # others do not need one. No gate: it opens no account, unseals
               # nothing, and is deliberately given no guest-agent socket to run
               # a gate with. docker-compose.yml puts it on both networks and
-              # every other role on the internal one.
+              # every role that holds data on the internal one.
               exec python -m backend.daemons.egress_proxy
               ;;
+            ingress)
+              # The only container the outside world connects to, and what lets
+              # the two roles that used to publish ports stop doing so. A TCP
+              # forwarder: it parses nothing, holds nothing, and its routing
+              # table is fixed before it accepts anything. No gate, for the same
+              # reasons as egress.
+              exec python -m backend.daemons.ingress_proxy
+              ;;
             *)
-              echo "usage: email-bot-entrypoint {mail|web|hook|egress}" >&2
+              echo "usage: email-bot-entrypoint {${lib.concatStringsSep "|" roleNames}}" >&2
               exit 2
               ;;
           esac
@@ -231,24 +252,28 @@
       # the data group, database/ is not because who has an account is itself
       # worth keeping. The hook role mounts state but not database, so its image
       # seeds only state -- the account store is not in its filesystem at all,
-      # and the egress role mounts neither, because it reads no file of ours.
+      # and the two network roles mount neither, because they read no file of
+      # ours.
       roleVolumes = {
         mail = [ "database" "state" ];
         web = [ "database" "state" ];
         hook = [ "state" ];
         egress = [ ];
+        ingress = [ ];
       };
-      # The port each role's container publishes. Metadata only -- compose
+      # The port each role's container listens on. Metadata only -- compose
       # declares the real mapping -- but kept per role so the image states what
-      # it listens on: the web UI on 8790, the Pub/Sub receiver on 8787, the
-      # CONNECT proxy on 8792, and the mail role nothing (it is reached over the
-      # custody socket and the FIFO). The proxy's port is published to no host:
-      # compose puts it on the two container networks and nowhere else.
+      # it listens on. Only `ingress` is published to the host; `web` and `hook`
+      # listen on the internal network alone, which is the whole point of that
+      # role, and `egress` is reached by container name on the same networks.
+      # The mail role listens on nothing (it is reached over the custody socket
+      # and the FIFO).
       rolePorts = {
         mail = [ ];
         web = [ "8790" ];
         hook = [ "8787" ];
         egress = [ "8792" ];
+        ingress = [ "8790" "8787" ];
       };
 
       seedVolume = vol: ''

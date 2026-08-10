@@ -174,13 +174,13 @@ image inherits the default, since a commented-out pin is not rendered.
 
 ## How the enclave is split
 
-Four containers, one per role, and four images — one per role, each carrying
+Five containers, one per role, and five images — one per role, each carrying
 only the code that role's entry points reach. Not four processes under one uid,
 and no longer one shared image either.
 `deploy/phala/docker-compose.yml` names a role per service (`mail`, `web`,
-`hook`, `egress`) and a distinct image per service
-(`tee-email-bot-{mail,web,hook,egress}`),
-`flake.nix` bakes the four accounts and the two shared groups
+`hook`, `egress`, `ingress`) and a distinct image per service
+(`tee-email-bot-{mail,web,hook,egress,ingress}`),
+`flake.nix` bakes the five accounts and the two shared groups
 (`letterlock-data`, `letterlock-wake`) into `/etc/passwd` and `/etc/group` under
 the same names `backend/paths.py` resolves, so one piece of code sets modes on
 the box and in every image. TDX answers the host operator; it does nothing about
@@ -191,19 +191,51 @@ receiver's image against the custody and inference modules), so a bug in the
 receiver has no custody stack in its address space to reach for — belt to the
 uid/group/secret suspenders, not a replacement for them.
 
-`egress` is the newest and is the box's `egress-proxy.service` in here: same
-module, same allowlist, its own uid and no group at all, no volume, no
-guest-agent socket and so no gate. What makes it enforcement rather than
-configuration is the pair of compose networks. `inner` is `internal: true`, so
-docker installs no route off the host for it; `mail` is on it alone and reaches
-the internet through the proxy or not at all. `web` and `hook` are on `edge`
-too, because a published port on an internal-only network never receives
-forwarded ingress and both of them have to be reached from outside the CVM — so
-for those two the allowlist is configuration, and saying otherwise in product
-copy is the thing to refuse. Closing it for them means an ingress container in
-front of them holding no data, which is what Caddy is on the box and is not in
-this repository. `web` publishes 8790 and binds `0.0.0.0`; the cost of that is
-in `backend/site.py` below.
+`egress` is the box's `egress-proxy.service` in here: same module, same
+allowlist, its own uid and no group at all, no volume, no guest-agent socket and
+so no gate. What makes it enforcement rather than configuration is the pair of
+compose networks. `inner` is `internal: true`, so docker installs no route off
+the host for it, and a container on it alone reaches the internet through the
+proxy or not at all.
+
+`ingress` is what makes that true of every role that holds anything, and it is
+worth stating why it had to exist. A published port on an internal-only network
+never receives forwarded ingress, so `web` and `hook` had to sit on `edge` as
+well to be reachable from outside the CVM — and `edge` is a route off the host.
+For those two the allowlist was `HTTPS_PROXY` and its five spellings, which is a
+setting their own HTTP clients honour and an attacker with code execution
+ignores. The two roles the control missed were the two facing the internet, and
+they are the ones holding `SESSION_SECRET` and the account store.
+
+So the published ports moved to a container that holds nothing.
+`backend/daemons/ingress_proxy.py` is a TCP forwarder: no request line, no
+headers, no TLS termination, and a routing table (`roles.INGRESS_ROUTES`) fixed
+before it accepts a connection, so no byte a client sends reaches a decision. It
+is on both networks, `web` and `hook` are now on `inner` alone with no `ports:`
+at all, and `tests/test_enclave_boundary.py` asserts that for every role in
+`roles.DATA_ROLES` rather than for `mail` alone. In-repo rather than an
+off-the-shelf ingress for the reason the egress proxy is, plus one more: every
+image here is measured into the `compose-hash` the KMS gates secret release on,
+and pinning somebody else's digest makes the measurement mean "the bytes we were
+handed" instead of "the bytes we can rebuild".
+
+What it costs, since it is easy to assume otherwise: a pure TCP forwarder cannot
+add an `X-Forwarded-For` without becoming an HTTP parser, so `web` sees the
+forwarder as its peer. That is not a regression — inside a CVM the peer was
+already dstack's ingress rather than a browser — and it is why
+`LETTERLOCK_TRUSTED_PROXIES` still ships empty. `web` binds `0.0.0.0` and
+publishes nothing; the interface it answers on is the internal network.
+
+The role names live in `backend/roles.py` and nowhere else. They were spelled in
+six places — the flake's `case`, its usage line, `build_and_publish.sh`, the
+manifest renderer, `secrets_checks.REQUIRED_BY_ROLE` and the boundary tests —
+and a role added to five of them ships with no image, or no boot gate, or no
+push. `flake.nix` and the publish script derive the list from the generated
+`image_files.nix` (an attrset keyed by exactly those names); `REQUIRED_BY_ROLE`,
+`tee_boot.CAPABILITIES_BY_ROLE` and `render_image_manifest.ROLE_ROOTS` each
+assert their keys against it. `DATA_ROLES` and `NETWORK_ROLES` partition it, and
+an assert refuses a role that is in both — a role holding data and the network is
+the arrangement this split removed.
 
 The compose file is the partition and not merely its description. dstack
 decrypts `.encrypted-env` to the guest filesystem, `app-compose.service` reads
@@ -267,7 +299,8 @@ than accepting a value nothing checked.
 ## What the enclave image carries
 
 `deploy/phala/image_files.nix` is the file list **per role** — a
-`{ mail; web; hook; egress; }` attrset — and `flake.nix` builds one image per role
+`{ mail; web; hook; egress; ingress; }` attrset — and `flake.nix` builds one image
+per role
 copying exactly that role's list. Generated, like the pyproject and the
 Caddyfile:
 
@@ -283,7 +316,8 @@ Derived from what actually starts, per role: `tools/reachability.py` walks
 imports from each role's `python -m` entry points, so a module ships into a
 container because something *that container starts* imports it — mail from the
 daemon plus its crontab and gate, web from the web server plus the gate, hook
-from the receiver alone, egress from the proxy alone.
+from the receiver alone, egress from the proxy alone, ingress from the
+forwarder alone.
 `render_image_manifest.ROLE_ROOTS` is that partition (the flake's `case` cannot
 be one grep), asserted to union to `reachability.enclave_roots()` so a
 `python -m` added to the flake without a home fails the render. The reachability
@@ -484,6 +518,23 @@ Each has a matching `--exclude` in `deploy/deploy.sh`.
   silently turn the control off. Written in-repo rather than tinyproxy/squid
   because it faces an attacker with code execution and a memory-unsafe C parser
   is the wrong thing there.
+- `backend/daemons/ingress_proxy.py` — the enclave's only inbound door, and what
+  lets `web` and `hook` give up their published ports and move onto `inner`
+  alone. Enclave-only: on the box that job is Caddy's and there is no unit for
+  it. A TCP forwarder and nothing more — it parses no request line, no header and
+  no TLS, and its routing table (`roles.INGRESS_ROUTES`, keyed by the outside
+  port) is fixed before it accepts a connection, so no byte a client sends picks
+  a destination. No volume, no guest-agent socket, no group, no secret, no gate.
+  It does not add an `X-Forwarded-For`, because that would make it an HTTP
+  parser, which is the surface it exists to avoid.
+- `backend/daemons/relay.py` — the byte pump both proxies use. One relays a
+  CONNECT tunnel outward and the other a published port inward; the halves that
+  differ are each module's own, and the loop underneath is one loop, so a
+  half-close bug fixed in one copy and not the other cannot be a truncated
+  response on whichever side nobody tested.
+- `backend/roles.py` — the enclave's role names, the data/network split between
+  them, and which published port forwards where. One tuple, imported rather than
+  restated; see "How the enclave is split" for the six places it used to live.
 
 Code changes take effect on service restart, which `deploy/deploy.sh` does. The
 daemon also honors `restart.flag`; the webhook needs a real service restart.
@@ -554,7 +605,7 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   partition undone. `ROLE_EXEMPT` names the one check no role can satisfy
   (`POLAR_WEBHOOK_SECRET`; no role is a receiver) and an assert keeps the union
   covering `REQUIRED`, so a new check cannot be added to one and forgotten in
-  the other. `hook` and `egress` are named with an empty tuple rather than left
+  the other. `hook`, `ingress` and `egress` are named with an empty tuple rather than left
   out: neither runs the gate, and a table that answers for the whole partition
   is one a role later given a gate cannot fall out of.
   `volume_secrets()` is the one list of files whose mere presence fails the boot
@@ -620,9 +671,9 @@ Keep these centralized. If you need behavior that lives here, import — don't c
   `deploy/check_egress.py` proves it is on — `IPAddressDeny=` needs cgroup v2
   with BPF, and without it systemd logs a line and starts the unit anyway.
   In the enclave the same module runs as the `egress` container and the
-  enforcement is docker's `internal: true` network rather than systemd's, which
-  covers the `mail` role alone: see "How the enclave is split" for which roles
-  it is enforced for and which it is merely configured for.
+  enforcement is docker's `internal: true` network rather than systemd's. It
+  covers every role that holds anything, which it did not until `ingress` took
+  the published ports off `web` and `hook` — see "How the enclave is split".
 - `cosigner/` — imports nothing from `backend/` except the Telegram call in
   `alerts.py`, so it can move to its own box under its own operator; the
   dependency points the other way (`backend/site.py` and the custody client

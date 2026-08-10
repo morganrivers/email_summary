@@ -38,12 +38,13 @@ reader, and the renderer asserts every one exists.
 
 import sys
 
-from backend import paths
+from backend import paths, roles
 from tools import reachability
 
 MANIFEST_FILE = paths.REPO_ROOT / "deploy" / "phala" / "image_files.nix"
 
-ROLES = ("mail", "web", "hook", "egress")
+# The names live in backend/roles.py; this module owns what each role *starts*.
+ROLES = roles.ROLES
 
 # role -> the entry-point modules it starts, mirroring flake.nix's entrypoint:
 # the `case "$role"` branches plus, for mail, the crontab beside them and, for
@@ -76,7 +77,15 @@ ROLE_ROOTS = {
     "egress": {
         "backend.daemons.egress_proxy",
     },
+    "ingress": {
+        "backend.daemons.ingress_proxy",
+    },
 }
+
+assert set(ROLE_ROOTS) == set(ROLES), (
+    "every role in backend/roles.py needs entry points here or it ships an "
+    f"empty image; missing: {sorted(set(ROLES) - set(ROLE_ROOTS))}"
+)
 
 # Path -> the module that reads it. A data file ships into a role's image when
 # that role reaches its reader. Asserted to exist at render time, because a

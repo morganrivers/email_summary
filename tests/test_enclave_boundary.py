@@ -21,14 +21,18 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
-from backend import secrets_checks
+from backend import roles, secrets_checks
 
 REPO = Path(__file__).resolve().parent.parent
 COMPOSE = REPO / "deploy" / "phala" / "docker-compose.yml"
 FLAKE = REPO / "flake.nix"
 PUBLISH = REPO / "deploy" / "phala" / "build_and_publish.sh"
 
-ROLES = ("mail", "web", "hook", "egress")
+# Imported, not restated. This list used to be written out in six places -- the
+# flake's `case`, its usage line, the publish script, the manifest renderer, the
+# boot gate's table and here -- and a role added to five of them ships with no
+# image, or no boot gate, or no push.
+ROLES = roles.ROLES
 
 
 def _service_blocks():
@@ -364,8 +368,14 @@ def test_every_image_is_pinned_by_digest_or_is_the_pre_publish_placeholder():
                 "placeholder nor a literal registry digest")
     publish = PUBLISH.read_text()
     assert 'LOCAL="tee-email-bot-$role:latest"' in publish
-    assert 'ROLES=(%s)' % " ".join(ROLES) in publish, (
-        "build_and_publish.sh does not build and pin every role")
+    # The script reads its role list out of the generated manifest rather than
+    # carrying one. A hand-written list here is how a role reaches the compose
+    # file and never the registry, which fails at boot in a CVM instead of in
+    # this suite.
+    assert not re.search(r"^ROLES=\(\w", publish, re.M), (
+        "build_and_publish.sh hardcodes a role list instead of deriving it")
+    assert "image_files.nix" in publish, (
+        "build_and_publish.sh does not derive its roles from the manifest")
 
 
 def test_the_push_actually_writes_a_digest_into_every_service(tmp_path):
@@ -392,40 +402,87 @@ def test_the_push_actually_writes_a_digest_into_every_service(tmp_path):
                          capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
 
-    pinned = re.findall(r"^\s*image:\s*(\S+)", compose.read_text(), re.M)
-    assert len(pinned) == len(ROLES), pinned
-    for role, ref in zip(ROLES, pinned):
-        assert ref == f"ghcr.io/x/tee-email-bot-{role}@{digest}", (
+    # Matched by name and not by position: which service comes first in the file
+    # is not a thing this test should have an opinion about, and a pin that
+    # landed on the wrong service is exactly what it must catch.
+    pinned = dict(re.findall(r"^\s*image:\s*\S+?-(\w+)@(\S+)",
+                             compose.read_text(), re.M))
+    assert set(pinned) == set(ROLES), (
+        f"pinned {sorted(pinned)}, expected every role in {sorted(ROLES)}")
+    for role, ref in pinned.items():
+        assert ref == digest, (
             f"{role} was pinned to {ref!r}, which is not the digest it was given")
 
 
-def test_the_mail_role_has_no_route_off_the_host_except_the_proxy():
-    """The enclave's answer to `IPAddressDeny=any` on the box, and the reason
-    `egress` exists in here at all.
+def test_no_role_that_holds_data_has_a_route_off_the_host():
+    """The enclave's answer to `IPAddressDeny=any` on the box, and now a real
+    one for every role rather than for `mail` alone.
 
-    `inner` is internal, so docker installs no route off the host for it and a
-    container attached to it alone reaches the internet through the proxy or not
-    at all. `mail` is that container: it publishes no port, so nothing has to
-    reach it from outside.
+    `inner` is internal, so docker installs no route off the host for it: a
+    container attached to it alone reaches the internet through `egress` or not
+    at all. That was only ever true of `mail`. `web` and `hook` had to be on
+    `edge` too, because a published port on an internal-only network never
+    receives forwarded ingress and both must be reached from outside the CVM --
+    and `edge` is a route out, so for those two the allowlist was a pair of
+    environment variables their own HTTP clients honoured. An attacker with code
+    execution does not honour them, which made it configuration and not a
+    control, on precisely the two roles facing the internet.
 
-    `web` and `hook` are on `edge` as well, because a published port on an
-    internal-only network never receives forwarded ingress -- so for those two
-    the allowlist is configuration and not enforcement, which is the header's
-    claim and is asserted here rather than left to be read as more than it is."""
+    `ingress` closed it by taking the published ports, so this asserts the thing
+    that is now true: every role holding a token, a session secret or an
+    account's data is on `inner` and nothing else, and publishes nothing."""
     text = COMPOSE.read_text()
     assert re.search(r"^  inner:\n    internal: true$", text, re.M), (
         "the inner network is not internal, so nothing is enforced")
     blocks = _service_blocks()
-    assert _networks_of(blocks["mail"]) == ("inner",), (
-        "the mail role can leave the host without the proxy")
-    assert set(_networks_of(blocks["egress"])) == {"inner", "edge"}
-    for role in ("web", "hook"):
-        assert "inner" in _networks_of(blocks[role]), (
-            f"{role} cannot reach the proxy")
-    assert not re.search(r"^\s+ports:", blocks["mail"], re.M), (
-        "the mail role publishes a port, which is what its network forbids")
-    assert not re.search(r"^\s+ports:", blocks["egress"], re.M), (
-        "the proxy is reachable from outside the CVM")
+    for role in sorted(roles.DATA_ROLES):
+        assert _networks_of(blocks[role]) == ("inner",), (
+            f"{role} holds data and can leave the host without the proxy")
+        assert not re.search(r"^\s+ports:", blocks[role], re.M), (
+            f"{role} publishes a port, which is what being on `inner` forbids")
+    for role in sorted(roles.NETWORK_ROLES):
+        assert set(_networks_of(blocks[role])) == {"inner", "edge"}, (
+            f"{role} is the network's job and is not on both networks")
+
+
+def test_only_the_ingress_is_reachable_from_outside_the_cvm():
+    """One way in, and it is the container that holds nothing.
+
+    The published ports are the CVM's whole attack surface, so which container
+    owns them is the question. `egress` must not: it is the one with a route
+    out, and publishing a port on it would let the outside reach the thing whose
+    entire job is leaving. Everything else holds data."""
+    blocks = _service_blocks()
+    publishing = {role for role, block in blocks.items()
+                  if re.search(r"^\s+ports:", block, re.M)}
+    assert publishing == {"ingress"}, (
+        f"something other than the ingress is published: {sorted(publishing)}")
+
+    ingress = blocks["ingress"]
+    for port in sorted(roles.INGRESS_ROUTES):
+        assert re.search(rf'^\s+-\s+"{port}:{port}"$', ingress, re.M), (
+            f"port {port} is in roles.INGRESS_ROUTES and is not published")
+    assert 'INGRESS_PROXY_BIND: "0.0.0.0"' in ingress, (
+        "the forwarder binds loopback and the published ports reach nothing")
+
+
+def test_the_ingress_holds_nothing_worth_reaching_it_for():
+    """It is the first process an attacker talks to, so what it has is what a
+    bug in it is worth. No volume, so no account store and no spool; no
+    guest-agent socket, which is the sharp one, since that socket is
+    unauthenticated and GetKey takes a caller-supplied derivation path; no
+    group, so nothing shared; and no secret beyond the flag that stops
+    backend/secrets.py reading a file."""
+    ingress = _service_blocks()["ingress"]
+    assert not re.search(r"^\s+volumes:", ingress, re.M), "the ingress mounts a volume"
+    assert "dstack.sock" not in ingress, "the ingress can reach the KMS"
+    assert not re.search(r"^\s+group_add:", ingress, re.M), "the ingress states a group"
+    assert secrets_checks.REQUIRED_BY_ROLE["ingress"] == (), (
+        "the ingress is gated on a secret it should not have")
+    for name in ("SESSION_SECRET", "GOOGLE_OAUTH_CLIENT", "TELEGRAM_", "POLAR_",
+                 "DEEPSEEK_API_KEY", "NEARAI_API_KEY", "PROXY"):
+        assert name not in ingress.replace("INGRESS_PROXY_BIND", ""), (
+            f"the ingress is handed {name}")
 
 
 def test_every_role_that_runs_our_http_clients_is_pointed_at_the_proxy():
@@ -446,11 +503,16 @@ def test_every_role_that_runs_our_http_clients_is_pointed_at_the_proxy():
 def test_the_web_role_is_reachable_and_says_who_may_forward_for_it():
     """A UI bound to the container's own loopback answers nobody, and one that
     believes an X-Forwarded-For from an unnamed peer lets a client choose what
-    the audit log says about them. Publishing the port is what makes the first
-    true; `LETTERLOCK_TRUSTED_PROXIES` is where the second is decided, and
-    empty is the honest default until somebody has watched a real CVM."""
+    the audit log says about them.
+
+    It binds 0.0.0.0 and publishes nothing: the interface it answers on is the
+    internal network, where `ingress` is what connects to it.
+    `LETTERLOCK_TRUSTED_PROXIES` is where the second question is decided, and
+    empty is still the right default -- the forwarder parses nothing, so it adds
+    no X-Forwarded-For to believe, and the peer is a container rather than a
+    browser either way."""
     web = _service_blocks()["web"]
     assert 'WEB_HOST: "0.0.0.0"' in web
-    assert re.search(r'^\s+-\s+"8790:8790"$', web, re.M), (
-        "the web role publishes no port")
     assert "LETTERLOCK_TRUSTED_PROXIES" in web
+    upstream = {host for host, _port in roles.INGRESS_ROUTES.values()}
+    assert "web" in upstream, "nothing forwards to the web role and it publishes nothing"

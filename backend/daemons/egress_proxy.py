@@ -39,12 +39,12 @@ this file.
 
 import ipaddress
 import os
-import selectors
 import socket
 import socketserver
 import sys
 
 from backend import egress, site
+from backend.daemons import relay
 
 HOST = os.environ.get("EGRESS_PROXY_BIND", "127.0.0.1")
 PORT = int(os.environ.get("EGRESS_PROXY_PORT", str(site.EGRESS_PROXY_PORT)))
@@ -53,8 +53,7 @@ MAX_LINE_BYTES = 4096
 MAX_HEADER_LINES = 64
 HANDSHAKE_TIMEOUT = 10
 CONNECT_TIMEOUT = 15
-IDLE_TIMEOUT = 300
-CHUNK = 65536
+IDLE_TIMEOUT = relay.IDLE_TIMEOUT
 
 
 def log(msg):
@@ -103,7 +102,7 @@ class Handler(socketserver.StreamRequestHandler):
         log(f"allow {host}:{port}")
         self._send("HTTP/1.1 200 Connection established\r\n\r\n")
         try:
-            _pump(self.connection, upstream)
+            relay.pump(self.connection, upstream)
         finally:
             upstream.close()
 
@@ -199,44 +198,6 @@ def _connect(host, port):
             sock.close()
             last = err
     raise Refused(502, f"{host}:{port} refused the connection: {last}")
-
-
-def _pump(client, upstream):
-    """Move bytes both ways until one side closes or the tunnel goes idle.
-
-    Half-close is forwarded rather than treated as end of session: an HTTP
-    client that has finished its request and is waiting on a response has
-    shut down its write side, and tearing the whole tunnel down there would
-    truncate every reply larger than a socket buffer."""
-    sockets = {client: upstream, upstream: client}
-    selector = selectors.DefaultSelector()
-    for sock in sockets:
-        sock.settimeout(IDLE_TIMEOUT)
-        selector.register(sock, selectors.EVENT_READ)
-    try:
-        while selector.get_map():
-            ready = selector.select(IDLE_TIMEOUT)
-            if not ready:
-                return
-            for key, _events in ready:
-                source = key.fileobj
-                try:
-                    data = source.recv(CHUNK)
-                except OSError:
-                    return
-                if not data:
-                    selector.unregister(source)
-                    try:
-                        sockets[source].shutdown(socket.SHUT_WR)
-                    except OSError:
-                        return
-                    continue
-                try:
-                    sockets[source].sendall(data)
-                except OSError:
-                    return
-    finally:
-        selector.close()
 
 
 class Server(socketserver.ThreadingTCPServer):

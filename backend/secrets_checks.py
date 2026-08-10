@@ -31,7 +31,7 @@ and the gate must not refuse a role for lacking a secret the partition
 deliberately withholds from it.
 """
 
-from backend import secrets
+from backend import roles, secrets
 
 
 def volume_secrets():
@@ -150,20 +150,27 @@ REQUIRED = (
 # container every variable, which is the partition undone, so the gate has to be
 # the thing that knows better.
 #
-# Names every role ``flake.nix``'s entrypoint accepts, including the two that
+# Names every role ``flake.nix``'s entrypoint accepts, including the three that
 # run no gate at all. ``hook`` verifies a Pub/Sub JWT and appends an address to a
 # spool, and its own WEBHOOK_AUD / PUBSUB_SERVICE_ACCOUNT are not secrets;
-# ``egress`` holds the route off the host and deliberately none of the keys.
-# Both are named rather than omitted so this table answers for the whole
-# partition, and so a role later given a gate is not refused for being absent
-# from a list nobody remembered was the gate's.
+# ``ingress`` and ``egress`` are network position and deliberately none of the
+# keys. All three are named rather than omitted so this table answers for the
+# whole partition, and so a role later given a gate is not refused for being
+# absent from a list nobody remembered was the gate's. The assert below is what
+# makes that true of a role added tomorrow.
 REQUIRED_BY_ROLE = {
     "mail": (inference_configured, telegram_configured, polar_api_configured,
              google_oauth_configured),
     "web": (session_configured, polar_api_configured),
     "hook": (),
+    "ingress": (),
     "egress": (),
 }
+
+assert set(REQUIRED_BY_ROLE) == set(roles.ROLES), (
+    "the boot gate does not answer for every role in backend/roles.py; a role "
+    f"it cannot answer for cannot start: {sorted(set(roles.ROLES) - set(REQUIRED_BY_ROLE))}"
+)
 
 # Checks in REQUIRED that no enclave role can satisfy, and why. Separated rather
 # than dropped so the assert below still covers REQUIRED whole: adding a check

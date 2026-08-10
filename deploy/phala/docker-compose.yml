@@ -1,4 +1,4 @@
-# Four containers from one image, because one container was one uid.
+# Five containers, one image each, because one container was one uid.
 #
 # This file used to run a single service whose entrypoint started the mail
 # daemon, the Pub/Sub receiver and the web server as children of one shell. That
@@ -37,23 +37,28 @@
 # with nothing at all. The `egress` service is the same CONNECT proxy the box
 # runs (`backend/daemons/egress_proxy.py`), the destinations it allows are the
 # same `backend/egress.py`, and every role's HTTP clients are pointed at it
-# below. Two networks decide who can go around it:
+# below. Two networks decide who can go around it, and two roles that hold
+# nothing are what let every role that holds something stay on the closed one:
 #
 #   * `inner` is `internal: true`: docker installs no route off the host for it,
-#     so a container attached to it alone reaches the internet through the proxy
-#     or not at all. `mail` is that container -- the one holding the Google
-#     token, the inference keys and decrypted mail.
-#   * `edge` is an ordinary bridge. `egress` is on it because being on it is its
-#     job. `web` and `hook` are on it because they must *receive* traffic from
-#     outside the CVM: an internal network drops forwarded ingress, so a
-#     published port on one never reaches the container.
+#     so a container attached to it alone reaches the internet through `egress`
+#     or not at all, and is reached from outside through `ingress` or not at
+#     all. `mail`, `web` and `hook` are all on this and nothing else -- every
+#     container holding a token, a session secret, an inference key or an
+#     account's data.
+#   * `edge` is an ordinary bridge, and exactly two containers are on it:
+#     `egress`, whose job is leaving, and `ingress`, whose job is being reached.
+#     Neither holds a volume, a secret or a guest-agent socket.
 #
-# So for `web` and `hook` the proxy is configuration and not enforcement, and
-# saying otherwise would be the kind of claim this file exists to avoid. It
-# still buys the dependency-phones-home case and the post-compromise case where
-# the attacker uses our own HTTP clients. Closing it for those two means an
-# ingress container in front of them holding no data, which is what Caddy is on
-# the box; it is not in this repository yet.
+# `ingress` is what made that possible and is worth stating plainly, because
+# this file said the opposite until it existed. A published port on an
+# internal-only network never receives forwarded ingress, so `web` and `hook`
+# had to be on `edge` to be reachable -- and being on `edge` is a route off the
+# host, so for those two the allowlist was a pair of environment variables their
+# own HTTP clients chose to honour. An attacker with code execution does not.
+# The two roles the control failed to cover were the two facing the internet.
+# Now the published ports belong to a TCP forwarder that parses nothing and
+# holds nothing, and it forwards inward over `inner`.
 #
 # NOTE: none of this has been run in a CVM. It is derived from dstack's source
 # (dstack-util/src/system_setup.rs, os/common/rootfs/app-compose.{service,sh}),
@@ -217,16 +222,16 @@ services:
       # forgeable one, which is worse. Naming it here also means adding the
       # variable to `allowed_envs` in app-compose.json.
       LETTERLOCK_TRUSTED_PROXIES: "${WEB_TRUSTED_PROXIES:-}"
-    # Both networks. `edge` because a published port on an internal-only
-    # network never receives forwarded ingress, and this is the product's UI;
-    # `inner` so it reaches `egress` the same way the mail role does. Being on
-    # `edge` is what makes the proxy configuration rather than enforcement for
-    # this role -- see the header.
+    # `inner` alone, and no published port. This role used to be on `edge` too,
+    # because a published port on an internal-only network never receives
+    # forwarded ingress and the product's UI has to be reachable -- and being on
+    # `edge` gave it a route off the host, so the egress allowlist was two
+    # environment variables its own HTTP client chose to honour rather than
+    # anything docker enforced. `ingress` holds the published port now and
+    # forwards in over this network, so the UI is reachable and the route out is
+    # gone. See the header.
     networks:
       - inner
-      - edge
-    ports:
-      - "8790:8790"
     volumes:
       - database:/app/database
       - state:/app/state
@@ -256,20 +261,19 @@ services:
     # state/. Deliberately not letterlock-data, which is what keeps the account
     # list out of reach of the process Google posts to.
     group_add: ["10011"]
-    ports:
-      - "8787:8787"
     environment:
       <<: *common-env
       WEBHOOK_HOST: "0.0.0.0"
       WEBHOOK_PORT: "8787"
       WEBHOOK_AUD: "${WEBHOOK_AUD}"
       PUBSUB_SERVICE_ACCOUNT: "${PUBSUB_SERVICE_ACCOUNT}"
-    # `edge` for the same reason as `web`: Google posts to it. It reaches the
+    # `inner` alone, and no published port, for the reason `web` has none:
+    # `ingress` takes what Google posts and forwards it here. It reaches the
     # network for one thing only, verifying the Pub/Sub token's signature, and
-    # that goes through the proxy like everything else.
+    # that goes through `egress` like everything else -- now because it has no
+    # other route rather than because it was asked nicely.
     networks:
       - inner
-      - edge
     volumes:
       - state:/app/state
 
@@ -307,15 +311,59 @@ services:
       - inner
       - edge
 
+  # The only container the outside world connects to, and what makes the
+  # allowlist above enforcement for every role that holds anything.
+  #
+  # Before it, `web` and `hook` had to be on `edge` -- they must receive traffic
+  # from outside the CVM, and a published port on an internal-only network never
+  # receives forwarded ingress. Being on `edge` is a route off the host, so for
+  # those two the proxy was a pair of environment variables their own HTTP
+  # clients honoured, which an attacker with code execution does not. The two
+  # roles holding a session secret and an account's data were the two the
+  # control did not cover.
+  #
+  # This takes the published ports and forwards inward over `inner`, so both
+  # move to the internal network alone: still reachable, no longer routable.
+  # It is a TCP forwarder and parses nothing -- see the module docstring for why
+  # that matters and for the one thing it costs, which is that `web` sees this
+  # container as its peer rather than a browser.
+  #
+  # It is the cheapest role in the file: no volume, no guest-agent socket, no
+  # secret, no gate, no group, and a routing table fixed before it accepts a
+  # connection.
+  ingress:
+    <<: *common
+    image: tee-email-bot-ingress:latest
+    command: ["ingress"]
+    user: "10005:10005"
+    environment:
+      # Deliberately not *common-env. It needs no secret and must not be pointed
+      # at the egress proxy: it originates nothing, it only answers. TEE_REQUIRED
+      # is here so backend/secrets.py reads no file, the same as everywhere else.
+      TEE_REQUIRED: "1"
+      # The one listener in this tree that has to accept from off the host.
+      INGRESS_PROXY_BIND: "0.0.0.0"
+    # Both networks, and the only container for which that is the job rather
+    # than a compromise: `edge` to be reached, `inner` to reach `web` and `hook`
+    # by service name.
+    networks:
+      - inner
+      - edge
+    ports:
+      - "8790:8790"
+      - "8787:8787"
+
 volumes:
   database:
   state:
 
 networks:
   # No route off the host. A container attached to this alone reaches the
-  # internet through `egress` or not at all.
+  # internet through `egress` or not at all, and is reached from outside the CVM
+  # through `ingress` or not at all. Every role that holds data is on this and
+  # nothing else.
   inner:
     internal: true
-  # An ordinary bridge, for the containers that must receive traffic from
-  # outside the CVM and for the one that must leave it.
+  # An ordinary bridge, for the one container that must be reached from outside
+  # the CVM and the one that must leave it. Neither holds anything.
   edge:

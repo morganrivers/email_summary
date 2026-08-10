@@ -32,10 +32,22 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HASH_FILE="$REPO_ROOT/deploy/phala/IMAGE_HASH.txt"
 COMPOSE_FILE="$REPO_ROOT/deploy/phala/docker-compose.yml"
-# Four images now, one per enclave role, each carrying only its reachable code.
-# The registry destination for a role is "${REGISTRY}-${role}", matching the
-# local image name tee-email-bot-${role} the flake produces.
-ROLES=(mail web hook egress)
+# One image per enclave role, each carrying only its reachable code. The
+# registry destination for a role is "${REGISTRY}-${role}", matching the local
+# image name tee-email-bot-${role} the flake produces.
+#
+# The role list is read out of the generated manifest rather than written here.
+# That file is an attrset keyed by exactly the roles in backend/roles.py, and
+# flake.nix derives `roleNames` from the same import -- so a role added there is
+# built and pushed by this script without anybody remembering it exists. A
+# hand-written list is how a role ends up in the compose file and never in the
+# registry, which fails at boot in a CVM rather than here.
+mapfile -t ROLES < <(nix eval --raw --impure --expr \
+  "builtins.concatStringsSep \"\\n\" (builtins.attrNames (import $REPO_ROOT/deploy/phala/image_files.nix))")
+if [[ ${#ROLES[@]} -eq 0 ]]; then
+  echo "could not read the role list out of deploy/phala/image_files.nix" >&2
+  exit 1
+fi
 TAG="${TAG:-latest}"
 
 cd "$REPO_ROOT"
