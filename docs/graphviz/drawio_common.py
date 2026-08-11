@@ -1,17 +1,17 @@
 """
 drawio_common.py — shared primitives for the draw.io diagram generators in this
-folder (build_drawio.py for the src/ data-flow diagram, build_webapp_drawio.py
-for the webapp runtime diagram).
+folder (build_arch_diagrams.py, build_flow_diagram.py, build_interfaces_diagram.py).
 
-Both generators lay a node/edge graph out with Graphviz `dot`, then bake the
+The first two lay a node/edge graph out with Graphviz `dot`, then bake the
 resulting node positions and routed edge waypoints into an editable .drawio.
-Everything that is identical between them (the Graphviz run + plain-format
-parse, the pixel coordinate transform, node/edge/group-box emission, and the
-mxfile wrapper) lives here so there is a single source of truth. The
-per-diagram scripts keep only their own stage-banding and colour choices.
+The third places every rectangle itself, because a diagram of docked ports has
+no graph for `dot` to lay out. What is identical across all three (the pixel
+emission of a vertex, of an edge with waypoints, the tooltip encoding and the
+mxfile wrapper) lives here so there is a single source of truth; `run_dot` and
+`transforms` are used by the two that want a layout engine.
 
 Node dicts use the schema: id, lbl, type, grp, file, desc, robot, w, h.
-Edge dicts use: from, to, label, kind.
+Edge dicts use: from, to, label, kind, tip.
 """
 import subprocess, collections, html
 
@@ -22,9 +22,20 @@ def esc(s):
     return html.escape(str(s), quote=True)
 
 
+def text(s):
+    """Literal text for a cell label or tooltip.
+
+    Two layers escape here, and one is easy to miss. The value lands in an XML
+    attribute, and draw.io then renders that value as HTML because every style
+    in these diagrams sets html=1. So a `<` needs to survive both: escaped once
+    it arrives as a tag draw.io drops silently, which is how `database/<id>/`
+    rendered as `database//`."""
+    return esc(esc(s))
+
+
 def lblh(s):
-    """Node label with newlines turned into draw.io <br> (HTML-escaped)."""
-    return '&lt;br&gt;'.join(esc(x) for x in str(s).split('\n'))
+    """Cell label with newlines turned into draw.io <br>."""
+    return '&lt;br&gt;'.join(text(x) for x in str(s).split('\n'))
 
 
 def run_dot(dot_lines):
@@ -87,46 +98,73 @@ def group_box(nodes, ids, pos, X, Y, idkey, label, col, cells, pad=22, ptop=30):
     return (x0, y0, x1, y1)
 
 
+def tip_html(tip):
+    """Tooltip markup from plain text: first line bold, newlines as breaks.
+
+    The result is an *attribute value*, so its `<b>`/`<br>` arrive as the
+    escaped forms that XML parsing turns back into tags for draw.io to render,
+    while any `<` in `tip` stays literal."""
+    lines = str(tip).split('\n')
+    head = f'&lt;b&gt;{text(lines[0])}&lt;/b&gt;'
+    return head + ''.join('&lt;br&gt;' + text(x) for x in lines[1:])
+
+
+def emit_box(nid, x, y, w, h, label, style, tip_markup=None, link=None):
+    """Emit one vertex at an absolute rect. `tip_markup` is already-encoded
+    tooltip markup (see tip_html); `link` makes the cell clickable, which
+    drawio_to_png promotes to an <a xlink:href> wrapper in the SVG."""
+    attrs = f' tooltip="{tip_markup}"' if tip_markup else ''
+    if link:
+        attrs += f' link="{esc(link)}"'
+    return (f'<object label="{lblh(label)}" id="{esc(nid)}"{attrs}>'
+            f'<mxCell style="{style}" vertex="1" parent="1">'
+            f'<mxGeometry x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" as="geometry"/>'
+            f'</mxCell></object>')
+
+
 def emit_node(n, style, pos, X, Y):
-    """Emit one node as a labelled draw.io <object> (with hover tooltip). If the
-    node dict carries a 'link' key, it becomes the clickable URL for that cell
-    (preserved by drawio_to_png as an <a xlink:href> wrapper in the SVG)."""
+    """Emit one laid-out node as a labelled draw.io <object> with hover tooltip."""
     x = X(pos[n['id']][0]) - n['w'] / 2
     y = Y(pos[n['id']][1]) - n['h'] / 2
     rb = '🤖 ' if n.get('robot') else ''
-    tip = (f'&lt;b&gt;{esc(n["file"])}&lt;/b&gt;&lt;br&gt;&lt;br&gt;' if n.get('file') else '') + esc(n.get('desc', ''))
-    link_attr = f' link="{esc(n["link"])}"' if n.get('link') else ''
-    return (f'<object label="{rb}{lblh(n["lbl"])}" tooltip="{tip}"{link_attr} id="{n["id"]}">'
-            f'<mxCell style="{style}" vertex="1" parent="1">'
-            f'<mxGeometry x="{x:.0f}" y="{y:.0f}" width="{max(n["w"],70):.0f}" height="{max(n["h"],30):.0f}" as="geometry"/></mxCell></object>')
+    tip = (f'&lt;b&gt;{text(n["file"])}&lt;/b&gt;&lt;br&gt;&lt;br&gt;' if n.get('file') else '') + text(n.get('desc', ''))
+    return emit_box(n['id'], x, y, max(n['w'], 70), max(n['h'], 30),
+                    rb + n['lbl'], style, tip, n.get('link'))
+
+
+def emit_edge(eid, e, pts, style):
+    """Emit one edge between two cell ids, through explicit pixel waypoints.
+    `e` may carry label, tip (plain text) and link."""
+    wp = ''
+    if pts:
+        wp = '<Array as="points">' + ''.join(f'<mxPoint x="{px:.0f}" y="{py:.0f}"/>' for px, py in pts) + '</Array>'
+    geom = f'<mxGeometry relative="1" as="geometry">{wp}</mxGeometry>'
+    body = (f'<mxCell style="{style}" edge="1" parent="1" '
+            f'source="{esc(e["from"])}" target="{esc(e["to"])}">{geom}</mxCell>')
+    if e.get('link') or e.get('tip'):
+        attrs = f' label="{text(e["label"])}"' if e.get('label') else ''
+        if e.get('tip'):
+            attrs += f' tooltip="{tip_html(e["tip"])}"'
+        if e.get('link'):
+            attrs += f' link="{esc(e["link"])}"'
+        return f'<object id="{esc(eid)}"{attrs}>{body}</object>'
+    val = f' value="{text(e["label"])}"' if e.get('label') else ''
+    return (f'<mxCell id="{esc(eid)}"{val} style="{style}" edge="1" parent="1" '
+            f'source="{esc(e["from"])}" target="{esc(e["to"])}">{geom}</mxCell>')
 
 
 def emit_edges(edges, edgepts, X, Y, ebase, ek):
     """Emit every edge with Graphviz routing waypoints; `ek` maps edge kind →
-    extra style. Returns a list of mxCell strings. If an edge carries a 'link'
-    key, its mxCell is wrapped in <object link="..."> so the arrow is clickable
-    (drawio native, and drawio_to_png promotes it to an <a> in the SVG)."""
+    extra style. Returns a list of mxCell strings."""
     out = []
     used = collections.defaultdict(int)
     for i, e in enumerate(edges):
-        st = ebase + ek.get(e.get('kind'), '')
-        key = (e['from'], e['to']); wp = ''
+        key = (e['from'], e['to']); pts = []
         if edgepts[key]:
             idx = min(used[key], len(edgepts[key]) - 1); used[key] += 1
             raw = edgepts[key][idx]
-            pts = raw[1:-1] if len(raw) > 2 else []
-            if pts:
-                wp = '<Array as="points">' + ''.join(f'<mxPoint x="{X(px):.0f}" y="{Y(py):.0f}"/>' for px, py in pts) + '</Array>'
-        geom = f'<mxGeometry relative="1" as="geometry">{wp}</mxGeometry>'
-        if e.get('link'):
-            lbl = f' label="{esc(e["label"])}"' if e.get('label') else ''
-            out.append(f'<object id="e{i}"{lbl} link="{esc(e["link"])}">'
-                       f'<mxCell style="{st}" edge="1" parent="1" source="{e["from"]}" target="{e["to"]}">'
-                       f'{geom}</mxCell></object>')
-        else:
-            val = f' value="{esc(e["label"])}"' if e.get('label') else ''
-            out.append(f'<mxCell id="e{i}"{val} style="{st}" edge="1" parent="1" source="{e["from"]}" target="{e["to"]}">'
-                       f'{geom}</mxCell>')
+            pts = [(X(px), Y(py)) for px, py in (raw[1:-1] if len(raw) > 2 else [])]
+        out.append(emit_edge(f'e{i}', e, pts, ebase + ek.get(e.get('kind'), '')))
     return out
 
 

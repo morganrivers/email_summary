@@ -59,12 +59,14 @@ def collect(gm):
     verts, edges = {}, []
     for el in root:
         link = ''
+        tip = ''
         if el.tag == 'object':                      # label/tooltip wrapper
             cell = el.find('mxCell')
             if cell is None:
                 continue
             nid = el.get('id'); label = el.get('label', '')
             link = el.get('link', '') or ''
+            tip = el.get('tooltip', '') or ''
             style = cell.get('style', ''); geo = cell.find('mxGeometry')
         elif el.tag == 'mxCell':
             cell = el; nid = el.get('id'); label = el.get('value', '')
@@ -78,11 +80,12 @@ def collect(gm):
             if arr is not None:
                 pts = [(float(p.get('x')), float(p.get('y'))) for p in arr.findall('mxPoint')]
             edges.append({'src': cell.get('source'), 'dst': cell.get('target'),
-                          'pts': pts, 'style': st, 'label': label, 'link': link})
+                          'pts': pts, 'style': st, 'label': label, 'link': link,
+                          'tip': tip})
         elif cell.get('vertex') == '1' and geo is not None:
             verts[nid] = {'x': float(geo.get('x', 0)), 'y': float(geo.get('y', 0)),
                           'w': float(geo.get('width', 80)), 'h': float(geo.get('height', 40)),
-                          'style': st, 'label': label, 'link': link}
+                          'style': st, 'label': label, 'link': link, 'tip': tip}
     return verts, edges
 
 
@@ -112,6 +115,14 @@ def label_lines(raw):
     t = re.sub(r'<br\s*/?>', '\n', raw)
     t = re.sub(r'<[^>]+>', '', t)           # drop any other tags (e.g. <b>)
     return [html.unescape(x) for x in t.split('\n')]
+
+
+def title_group(tip, svg):
+    """Wrap rendered SVG in a <g> carrying the cell's tooltip as <title>, so the
+    hover text the .drawio holds survives into the SVG a browser opens."""
+    if not tip:
+        return svg
+    return f'<g><title>{esc(chr(10).join(label_lines(tip)))}</title>\n{svg}\n</g>'
 
 
 def shape_svg(v):
@@ -145,26 +156,39 @@ def shape_svg(v):
     return '\n'.join(out)
 
 
-def text_svg(x, y, w, h, lines, st, is_box):
+def text_svg(x, y, w, h, lines, st):
+    """Draw a cell's label, honouring align / verticalAlign / fontFamily the way
+    draw.io does. Every cell obeys them, not only the borderless container
+    boxes: a left-aligned stripe inside a filled card is the common case in the
+    interfaces diagram, and centring it would put the text somewhere draw.io
+    does not."""
     if not lines:
         return ''
     fc = st.get('fontColor', '#000000')
     fs = float(st.get('fontSize', 12))
+    fam = st.get('fontFamily')
+    fam_attr = f' font-family="{fam}"' if fam else ''
     bold = ' font-weight="700"' if st.get('fontStyle') in ('1', '3') else ''
     lh = fs * 1.25
-    out = []
-    if is_box and (st.get('verticalAlign') == 'top' or st.get('align') == 'left'):
-        tx = x + 12; ty = y + 6 + fs; anchor = 'start'
-        for i, ln in enumerate(lines):
-            out.append(f'<text x="{tx}" y="{ty+i*lh:.1f}" font-size="{fs}" fill="{fc}" '
-                       f'text-anchor="{anchor}"{bold}>{esc(ln)}</text>')
+    align = st.get('align', 'center')
+    valign = st.get('verticalAlign', 'middle')
+    if align == 'left':
+        tx = x + float(st.get('spacingLeft', 12)); anchor = 'start'
+    elif align == 'right':
+        tx = x + w - float(st.get('spacingRight', 12)); anchor = 'end'
     else:
-        cx = x + w / 2; cy = y + h / 2
-        y0 = cy - (len(lines) - 1) * lh / 2 + fs * 0.35
-        for i, ln in enumerate(lines):
-            out.append(f'<text x="{cx}" y="{y0+i*lh:.1f}" font-size="{fs}" fill="{fc}" '
-                       f'text-anchor="middle"{bold}>{esc(ln)}</text>')
-    return '\n'.join(out)
+        tx = x + w / 2; anchor = 'middle'
+    block = (len(lines) - 1) * lh
+    if valign == 'top':
+        y0 = y + float(st.get('spacingTop', 6)) + fs
+    elif valign == 'bottom':
+        y0 = y + h - float(st.get('spacingBottom', 6)) - block
+    else:
+        y0 = y + h / 2 - block / 2 + fs * 0.35
+    return '\n'.join(
+        f'<text x="{tx:.1f}" y="{y0+i*lh:.1f}" font-size="{fs}" fill="{fc}" '
+        f'text-anchor="{anchor}"{fam_attr}{bold}>{esc(ln)}</text>'
+        for i, ln in enumerate(lines))
 
 
 def arrowhead(x1, y1, x2, y2, color):
@@ -224,20 +248,21 @@ def render_svg(verts, edges, pad=30):
     nodes = [v for v in verts.values() if v not in boxes]
     for v in boxes:
         body.append(shape_svg(v))
-        body.append(text_svg(v['x'], v['y'], v['w'], v['h'], label_lines(v['label']), v['style'], True))
+        body.append(text_svg(v['x'], v['y'], v['w'], v['h'], label_lines(v['label']), v['style']))
     for e in edges:
         link = e.get('link', '')
         if link:
             body.append(f'<a xlink:href="{esc(link)}" href="{esc(link)}" target="_blank">')
-        body.append(edge_svg(e, verts))
+        body.append(title_group(e.get('tip', ''), edge_svg(e, verts)))
         if link:
             body.append('</a>')
     for v in nodes:
         link = v.get('link', '')
         if link:
             body.append(f'<a xlink:href="{esc(link)}" href="{esc(link)}" target="_blank">')
-        body.append(shape_svg(v))
-        body.append(text_svg(v['x'], v['y'], v['w'], v['h'], label_lines(v['label']), v['style'], False))
+        body.append(title_group(v.get('tip', ''), shape_svg(v) + '\n' +
+                                text_svg(v['x'], v['y'], v['w'], v['h'],
+                                         label_lines(v['label']), v['style'])))
         if link:
             body.append('</a>')
     body.append('</svg>')
