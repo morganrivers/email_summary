@@ -162,21 +162,18 @@ def log(msg):
 # custody it pulls in -- is deliberately not on this process's import graph.
 
 
-_BILLING = None
-
-
 def _portal_url(acct):
-    """Polar customer-portal link for the signed-in account, or None. Polar
-    credentials are optional to the web UI: a box without them still serves
-    every page, it just cannot mint a portal link."""
-    global _BILLING
-    if _BILLING is None:
-        try:
-            _BILLING = billing.PolarBilling()
-        except AssertionError as err:
-            log(f"polar portal unavailable: {err}")
-            return None
-    return _BILLING.portal_url(acct)
+    """Polar customer-portal link for the signed-in account, or None.
+
+    Asked of the daemon, because minting one is a call with the organization's
+    Polar token and that token reads every customer in the org. A box whose
+    daemon is down, or which has no Polar configured, still serves every page;
+    it just cannot mint a portal link."""
+    try:
+        return handoff.portal_url(acct.id)
+    except (handoff.HandoffUnavailable, handoff.RemoteRefusal) as err:
+        log(f"polar portal unavailable for {acct.id}: {err}")
+        return None
 
 
 def _valid_timezone(name):
@@ -1477,15 +1474,15 @@ def _page_settings(acct, saved=False, pending=None, error=None, notice=None,
 def _confirm_checkout(acct, checkout_id):
     """Settle entitlement for a buyer returning from Polar. Never raises: they
     have paid, and an exception here would show them an error page over a
-    successful payment."""
-    global _BILLING
-    if _BILLING is None:
-        try:
-            _BILLING = billing.PolarBilling()
-        except AssertionError as err:
-            return False, f"polar not configured: {err}"
+    successful payment.
+
+    The ownership test on `checkout_id` runs in the daemon, where the token is.
+    A daemon that is down is the same outcome as an unconfigured Polar and the
+    same page: the return template already tells a buyer whose flip is still in
+    flight to wait, which is exactly true here -- the reconcile and the
+    spooled webhook event both still settle them."""
     try:
-        return _BILLING.confirm_checkout(checkout_id, acct)
+        return handoff.confirm_checkout(acct.id, checkout_id)
     except Exception as err:
         return False, f"{type(err).__name__}: {err}"
 
@@ -1917,7 +1914,11 @@ class Handler(BaseHTTPRequestHandler):
                     "Your subscription is already active, so there is nothing "
                     "to buy. Use Manage subscription to change or cancel it."
                 )))
-            location, checkout_id = billing.checkout_url(acct.id, fallback="")
+            try:
+                location, checkout_id = handoff.checkout_url(acct.id, fallback="")
+            except (handoff.HandoffUnavailable, handoff.RemoteRefusal) as e:
+                log(f"checkout unavailable for {acct.id}: {e}")
+                location, checkout_id = "", None
             if not location:
                 return self._send(200, _page_billing(acct, error=(
                     "Checkout is unavailable right now. Please try again shortly."

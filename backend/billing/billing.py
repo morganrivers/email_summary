@@ -322,6 +322,16 @@ class PolarBilling:
         assert acct is not None, "confirm_checkout needs the signed-in account"
         if not checkout_id:
             return False, "no checkout id on the return"
+        if not polar_api.valid_id(checkout_id):
+            # A refusal by name and not an assert: this value came off a query
+            # string, so a bad one is a hostile or mistyped input rather than a
+            # bug of ours. It goes into the path of a request carrying an
+            # organization-wide token, and the reason it is refused here rather
+            # than left to the encoding in `polar_api._segment` is that the
+            # honest answer to a malformed id is "that is not a checkout",
+            # answered without spending an API call to hear Polar say so.
+            log(f"refusing malformed checkout id from {acct.id}")
+            return False, "that is not a checkout id"
         status, body = polar_api.get_checkout(checkout_id, self.token)
         if status != 200 or not isinstance(body, dict):
             log(f"get_checkout {checkout_id} failed: {status}")

@@ -161,7 +161,7 @@ REQUIRED = (
 REQUIRED_BY_ROLE = {
     "mail": (inference_configured, telegram_configured, polar_api_configured,
              google_oauth_configured),
-    "web": (session_configured, polar_api_configured),
+    "web": (session_configured,),
     "hook": (),
     "ingress": (),
     "egress": (),
@@ -178,9 +178,12 @@ assert set(REQUIRED_BY_ROLE) == set(roles.ROLES), (
 # exemption has to be argued for in writing here.
 #
 # No role is a Polar receiver. Entitlement inside the enclave is exactly
-# ``confirm_checkout()`` in ``web`` and the 3-hourly reconcile in ``mail``, both
-# of which read Polar's API rather than verify an event signature, so there is no
-# correct value of POLAR_WEBHOOK_SECRET to inject.
+# ``confirm_checkout()`` and the 3-hourly reconcile, both of which read Polar's
+# API rather than verify an event signature, so there is no correct value of
+# POLAR_WEBHOOK_SECRET to inject. Both run in ``mail``: the return page is
+# served by ``web``, but the call crosses on ``handoff.OP_CHECKOUT_CONFIRM``
+# because POLAR_API_TOKEN is organization-wide, which is also why ``web``'s row
+# above asks for no Polar token at all.
 ROLE_EXEMPT = (polar_webhook_configured,)
 
 assert set(REQUIRED) == set(ROLE_EXEMPT).union(*REQUIRED_BY_ROLE.values()), (

@@ -14,8 +14,18 @@ two.
 """
 
 import os
+import re
+import urllib.parse
 
 from backend import http_client
+
+# The shape of every Polar object id this client puts in a request path. Polar
+# mints UUIDs today, but the point is not the format: it is that an id is one
+# path segment and nothing else. Deliberately wider than a UUID so a future id
+# format does not break billing, and narrow enough that `/`, `?`, `#`, `..` and
+# whitespace are all out -- the three ids below are interpolated into a URL, and
+# one of them arrives in a query string the buyer's browser controls.
+ID = re.compile(r"\A[A-Za-z0-9_-]{1,128}\Z")
 
 PROD_BASE = "https://api.polar.sh"
 SANDBOX_BASE = "https://sandbox-api.polar.sh"
@@ -38,6 +48,28 @@ def api_base():
     sandbox token, took the 403 as "Polar is unavailable", and quietly handed
     the buyer a static link with no success URL."""
     return SANDBOX_BASE if sandbox_enabled() else PROD_BASE
+
+
+def valid_id(value):
+    """Whether `value` is usable as a Polar object id. The one definition, so
+    the caller refusing browser input and the client building the path agree
+    about what an id is."""
+    return isinstance(value, str) and bool(ID.match(value))
+
+
+def _segment(value, what):
+    """One percent-encoded path segment, asserted into shape first.
+
+    Both halves, and neither is redundant. The assert is the invariant: every
+    caller here is handed an id by Polar or by our own manifest, so a value
+    that is not one is our bug. The encoding is what makes the assert the only
+    thing standing between a malformed id and a request to some other endpoint
+    -- ``f"/v1/checkouts/{checkout_id}"`` with a `?` in it appends a query to a
+    call carrying an organization-wide token, and with a `../` in it names a
+    different resource entirely. Callers taking the value from outside refuse
+    it by name first; this is the floor under all of them."""
+    assert valid_id(value), f"{what} is not a Polar id"
+    return urllib.parse.quote(value, safe="")
 
 
 def _request(method, endpoint, payload=None, token=None):
@@ -67,7 +99,8 @@ def _request(method, endpoint, payload=None, token=None):
 
 def get_customer(customer_id, token):
     assert token, "backend API token required to read a customer"
-    return _request("GET", f"/v1/customers/{customer_id}", token=token)
+    return _request("GET", f"/v1/customers/{_segment(customer_id, 'customer_id')}",
+                    token=token)
 
 
 def create_checkout(product_id, success_url, customer_email, token, metadata=None):
@@ -96,10 +129,14 @@ def create_checkout(product_id, success_url, customer_email, token, metadata=Non
 
 def get_checkout(checkout_id, token):
     """Read a checkout back after the buyer returns, for its status and the
-    customer it created."""
+    customer it created.
+
+    The id reaches this call from `?checkout_id=` on the return page, so
+    `confirm_checkout` refuses one that is not `valid_id` before getting here
+    and `_segment` is the second check of the same fact."""
     assert token, "backend API token required to read a checkout"
-    assert checkout_id, "checkout_id required to read a checkout"
-    return _request("GET", f"/v1/checkouts/{checkout_id}", token=token)
+    return _request("GET", f"/v1/checkouts/{_segment(checkout_id, 'checkout_id')}",
+                    token=token)
 
 
 def create_customer_session(customer_id, token):
@@ -113,7 +150,11 @@ def create_customer_session(customer_id, token):
 
 
 def list_subscriptions(organization_id, token, page=1, limit=100):
+    """One page of the organization's subscriptions. The query is built with
+    `urlencode` rather than an f-string for the same reason the path segments
+    are quoted: an id is a value, not a fragment of URL syntax."""
     assert token, "backend API token required to list subscriptions"
-    ep = (f"/v1/subscriptions/?organization_id={organization_id}"
-          f"&page={page}&limit={limit}")
-    return _request("GET", ep, token=token)
+    assert valid_id(organization_id), "organization_id is not a Polar id"
+    query = urllib.parse.urlencode({"organization_id": organization_id,
+                                    "page": int(page), "limit": int(limit)})
+    return _request("GET", f"/v1/subscriptions/?{query}", token=token)

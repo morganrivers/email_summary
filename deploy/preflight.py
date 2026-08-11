@@ -52,7 +52,16 @@ def _mail_configured():
     account store, the shared Google OAuth app every token refresh is signed
     with, and custody. The enclave gates on the same OAuth pair through
     ``secrets_checks.REQUIRED``; this is the Hetzner half of it, so the box does
-    not check a strict subset of what the CVM fails closed on."""
+    not check a strict subset of what the CVM fails closed on.
+
+    Looser than ``secrets_checks.REQUIRED_BY_ROLE["mail"]``, and the difference
+    is not drift. The enclave's mail role additionally fails closed without an
+    inference key, the Telegram token and the Polar API token, because in there
+    no container receives Polar webhooks and the reconcile it runs is the only
+    path a renewal or a cancellation travels. On this box those are separate
+    units with their own entries in the table below, a Polar receiver exists,
+    and a box with no Polar configured at all drafts mail perfectly well -- so
+    requiring them here would skip the daemon over units it does not run."""
     return (_manifest_present() or secrets_checks.google_oauth_configured()
             or _custody_available() or _inference_attestable())
 
@@ -83,16 +92,22 @@ def _custody_available():
 
 
 def _web_configured():
-    """What the web UI needs by itself: the cookie key, and the co-signer it
-    asks for a data key when it renders a user's two documents.
+    """What the web UI needs by itself: the secrets of the enclave's `web` role,
+    and the co-signer it asks for a data key when it renders a user's two
+    documents.
 
-    Deliberately not the Google OAuth app and not an inference provider. The
-    consent URL, the code exchange and voice generation run in the daemon over
-    backend/custody/handoff.py, because this process is not allowed a mailbox
-    token or the client secret that would obtain one. A box missing either takes
-    the daemon out of this report, which is where the remedy is; the site itself
+    The secret half is `secrets_checks.REQUIRED_BY_ROLE["web"]` rather than a
+    list here, because this unit and that container are the same program with the
+    same needs, and two lists is how one of them ends up checking something the
+    other does not. Today that is the cookie key alone: the consent URL, the
+    code exchange, voice generation and the three Polar calls all run in the
+    daemon over backend/custody/handoff.py, because this process is allowed
+    neither a mailbox token, nor the client secret that would obtain one, nor
+    an organization-wide Polar token. A box missing any of those takes the
+    daemon out of this report, which is where the remedy is; the site itself
     stays up with everything except sign-in."""
-    return secrets_checks.session_configured() or _custody_available()
+    gaps = secrets_checks.missing("web")
+    return (gaps[0] if gaps else None) or _custody_available()
 
 
 def _definitely_absent(path):

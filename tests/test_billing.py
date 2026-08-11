@@ -367,6 +367,61 @@ def test_the_static_link_follows_the_sandbox_toggle(monkeypatch):
     assert checkout_id is None
 
 
+@pytest.mark.parametrize("bad", [
+    "co_1?expand=customer",          # a query appended to a tokened request
+    "co_1/../../v1/customers",       # a different resource entirely
+    "co_1#frag",
+    "co 1",
+    "",
+    "x" * 129,
+])
+def test_confirm_checkout_refuses_an_id_that_is_not_an_id(tmp_path, monkeypatch, bad):
+    """`?checkout_id=` is a query string the buyer's browser writes, and it was
+    interpolated straight into the path of a request carrying an
+    organization-wide Polar token. Refused before the call, so a malformed id
+    costs no round trip and reaches no endpoint."""
+    monkeypatch.setattr(account, "MANIFEST", _manifest(tmp_path, [
+        _entry("dan@x.com", status="inactive"),
+    ]))
+    seen = _checkout(monkeypatch, {"id": bad, "status": "succeeded"})
+    b = _billing(monkeypatch)
+    paid, detail = b.confirm_checkout(bad, account.account_for_email("dan@x.com"))
+
+    assert paid is False
+    assert "checkout id" in detail
+    assert seen == {}, "a malformed id still reached Polar"
+    assert account.get_account("dan@x.com") is None
+
+
+def test_the_client_refuses_every_id_it_puts_in_a_path(monkeypatch):
+    """The floor under the refusal above, for every caller rather than the one
+    that takes browser input. An id that is not one is our bug, so it asserts;
+    a well-formed one still reaches the endpoint it names."""
+    assert polar_api.valid_id("2b4a1e0c-0f3a-4d5b-8c7e-9a0b1c2d3e4f")
+    assert polar_api.valid_id("co_1")
+    for bad in ("co/1", "co?1", "co#1", "co 1", "", None, "x" * 129):
+        assert not polar_api.valid_id(bad)
+
+    seen = {}
+    monkeypatch.setattr(polar_api, "_request",
+                        lambda method, endpoint, payload=None, token=None:
+                        (seen.setdefault("endpoint", endpoint), (200, {}))[1])
+
+    polar_api.get_checkout("co_1", "tok")
+    assert seen.pop("endpoint") == "/v1/checkouts/co_1"
+    polar_api.get_customer("cus_1", "tok")
+    assert seen.pop("endpoint") == "/v1/customers/cus_1"
+    polar_api.list_subscriptions("org_1", "tok", page=2)
+    assert "organization_id=org_1" in seen.pop("endpoint")
+
+    for call, arg in ((polar_api.get_checkout, "co/1"),
+                      (polar_api.get_customer, "cus?x"),
+                      (polar_api.list_subscriptions, "org#1")):
+        with pytest.raises(AssertionError):
+            call(arg, "tok")
+    assert seen == {}, "a malformed id was turned into a request"
+
+
 def test_stamped_metadata_resolves_a_webhook_event(tmp_path, monkeypatch):
     """Polar copies checkout metadata onto the order, so the exact binding is
     available to the webhook too, ahead of the pay-email guess."""

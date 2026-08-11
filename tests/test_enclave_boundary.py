@@ -124,10 +124,10 @@ def test_each_role_is_handed_exactly_the_secrets_its_boot_gate_demands():
 def test_no_enclave_role_is_asked_for_the_polar_webhook_secret():
     """The one check no role can satisfy, named rather than quietly dropped.
 
-    No role is a Polar receiver: entitlement in the enclave is `confirm_checkout()`
-    in `web` plus the reconcile in `mail`, both of which read Polar's API. So
-    there is no correct value of POLAR_WEBHOOK_SECRET to inject, and a gate that
-    demanded one would be unsatisfiable by construction."""
+    No role is a Polar receiver: entitlement in the enclave is
+    `confirm_checkout()` plus the reconcile, both in `mail` and both reading
+    Polar's API. So there is no correct value of POLAR_WEBHOOK_SECRET to inject,
+    and a gate that demanded one would be unsatisfiable by construction."""
     assert secrets_checks.polar_webhook_configured in secrets_checks.ROLE_EXEMPT
     for role in ROLES:
         assert "POLAR_WEBHOOK_SECRET" not in _env_names(role)
@@ -218,11 +218,17 @@ def test_no_role_holds_a_secret_it_has_no_use_for():
     The inference keys are on the web list because that role no longer decides
     which providers exist. It asks the mail role over `handoff.OP_PROVIDERS` and
     gets catalog names back, so a key reappearing here is that round trip having
-    been quietly replaced by a local read."""
+    been quietly replaced by a local read.
+
+    `POLAR_` is on it for the same shape of reason and a wider blast radius:
+    POLAR_API_TOKEN is organization-wide, so the web role holding one made a
+    parsing bug there reach every customer in the billing org rather than this
+    deployment's own accounts. Its three billing calls cross over
+    `handoff.OP_CHECKOUT_URL`, `OP_CHECKOUT_CONFIRM` and `OP_PORTAL_URL`."""
     blocks = _service_blocks()
     forbidden = {
         "mail": ["SESSION_SECRET"],
-        "web": ["GOOGLE_OAUTH_CLIENT", "TELEGRAM_",
+        "web": ["GOOGLE_OAUTH_CLIENT", "TELEGRAM_", "POLAR_",
                 "DEEPSEEK_API_KEY", "NEARAI_API_KEY"],
         "hook": ["SESSION_SECRET", "GOOGLE_OAUTH_CLIENT", "TELEGRAM_",
                  "POLAR_", "DEEPSEEK_API_KEY", "NEARAI_API_KEY"],
@@ -266,6 +272,18 @@ def test_supplementary_groups_are_spelled_out_and_match_the_image():
         assert line, f"{role} states no group_add and would have no membership"
         assert set(re.findall(r"\d+", line.group(1))) == want, (
             f"{role} group_add does not match flake.nix")
+
+
+def test_no_role_is_provisioned_for_another_role_s_work():
+    """The partition read backwards. Without it
+    `test_each_role_is_handed_exactly_the_secrets_its_boot_gate_demands` passes
+    on a compose file that hands every container everything, which is the shape
+    this split replaced."""
+    assert set(secrets_checks.REQUIRED_BY_ROLE) == set(ROLES), "roles have drifted"
+    for role in ROLES:
+        others = set().union(*(_env_names(r) for r in ROLES if r != role))
+        assert not others <= _env_names(role), (
+            f"{role} is handed every other role's environment")
 
 
 def test_the_image_offers_no_role_that_starts_everything():
