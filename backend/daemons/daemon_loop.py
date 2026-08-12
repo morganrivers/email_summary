@@ -25,7 +25,8 @@ import sys
 import time
 import traceback
 
-from backend import audit, paths, secrets
+import execguard
+from backend import audit, intrusion, paths, procwatch, secrets
 from backend.accounts import account as account_mod
 from backend.billing import billing_queue
 from backend.billing.billing import PolarBilling
@@ -180,6 +181,29 @@ def wait_for_wake(fd, timeout=WAKE_POLL_SECONDS):
     return True
 
 
+def report_intrusions():
+    """Send every intrusion report any container has written, and clear them.
+
+    This role is the only one holding a Telegram token, which is why the roles
+    that find a process write a spool instead of sending anything themselves.
+    Wrapped rather than allowed to raise: an alert that cannot be delivered
+    must not stop the mail pass that follows it, and the entries are logged
+    here either way."""
+    try:
+        entries = intrusion.drain()
+    except Exception as err:
+        log(f"intrusion drain failed: {err}")
+        return
+    if not entries:
+        return
+    text = intrusion.summarize(entries)
+    log(text)
+    # The whole message goes in `context` and no exception is passed: there is
+    # no traceback to render here, and `notify_error` formats its second
+    # argument as one.
+    notify_error(f"enclave intrusion\n{text}")
+
+
 def main():
     ensure_fifo()
     fd, _keepalive = open_fifo_reader()
@@ -187,6 +211,11 @@ def main():
     # tier cannot complete a sign-in until this socket exists.
     handoff_server.start(log)
     log(f"daemon started; FIFO={FIFO_PATH} poll={WAKE_POLL_SECONDS}s")
+    # First, before any mail work: a report here means a container refused a
+    # process and exited, so the thing that wrote it is not running any more
+    # and this is the only pass that will find it. A restart loop in another
+    # container otherwise shows up as nothing at all on this side.
+    report_intrusions()
     # Bootstrap at startup: drain any queued pushes, then sweep all accounts
     # in case a push arrived while the daemon was down.
     try:
@@ -207,6 +236,7 @@ def main():
                 except FileNotFoundError:
                     pass
                 sys.exit(0)
+            report_intrusions()
             # Before the mail work, so an activation that arrived while the
             # last pass ran is in force for this one: an account flipped to
             # active is an account this sweep should process.
@@ -229,5 +259,8 @@ def main():
 
 
 if __name__ == "__main__":
+    execguard.lock_down(secrets.tee_required())
+    _role = procwatch.role_of(__spec__.name)
+    procwatch.start(_role, intrusion.reporter(_role))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     main()

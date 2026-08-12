@@ -23,7 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from standardwebhooks import Webhook
 
-from backend import site
+import execguard
+from backend import secrets, site
 from backend.billing.billing import log, webhook_secret
 from backend.billing.billing_queue import DeferredBilling
 
@@ -120,4 +121,5 @@ def main():
 
 
 if __name__ == "__main__":
+    execguard.lock_down(secrets.tee_required())
     main()

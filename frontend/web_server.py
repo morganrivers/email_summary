@@ -52,7 +52,8 @@ import urllib.parse
 import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from backend import audit, paths
+import execguard
+from backend import audit, intrusion, paths, procwatch
 from backend import secrets as app_secrets
 from backend import site
 from backend.accounts import account
@@ -2194,4 +2195,7 @@ def main():
 
 
 if __name__ == "__main__":
+    execguard.lock_down(app_secrets.tee_required())
+    _role = procwatch.role_of(__spec__.name)
+    procwatch.start(_role, intrusion.reporter(_role))
     main()

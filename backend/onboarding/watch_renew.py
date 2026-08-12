@@ -21,6 +21,8 @@ refreshed, so a renewal never rewinds the cursor and drops unprocessed history.
 import os
 import sys
 
+import execguard
+from backend import secrets
 from backend.accounts import account
 from backend.integrations.gmail_gcal import gmail_api
 
@@ -66,4 +68,5 @@ def main():
 
 
 if __name__ == "__main__":
+    execguard.lock_down(secrets.tee_required())
     main()

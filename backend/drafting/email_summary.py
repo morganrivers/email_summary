@@ -16,6 +16,7 @@ import datetime
 import sys
 import traceback
 
+import execguard
 from backend import paths, secrets
 from backend.accounts import account as account_mod
 from backend.drafting.agentic_drafter import new_fence
@@ -197,4 +198,5 @@ def main():
 
 
 if __name__ == "__main__":
+    execguard.lock_down(secrets.tee_required())
     main()

@@ -35,6 +35,7 @@ import os
 import sys
 from pathlib import Path
 
+import execguard
 from backend import paths, roles, secrets, secrets_checks
 from backend.tee.dstack_client import DstackClient, DstackError, DstackUnavailable
 
@@ -51,12 +52,13 @@ def _report_data_for_cert(cert_pem: str) -> bytes:
 def _write_attestation_record(info: dict, tls: dict, quote: dict) -> None:
     ATTEST_DIR.mkdir(parents=True, exist_ok=True)
     chain = tls.get("certificate_chain") or []
-    # Created 0600 rather than written and then chmodded. The compose file
-    # mounts this directory as a tmpfs at mode 0777 -- the runtime creates it as
-    # root and the container's process is not root -- so a default-mode create
-    # is a world-readable private key for as long as it takes to reach the
-    # chmod. paths.write_private is the same call in backend/custody/client.py,
-    # which writes the co-signer client key into this same directory.
+    # Created 0600 rather than written and then chmodded, which is a private
+    # key readable by anything in the container for as long as it takes to
+    # reach the chmod. The directory itself is a tmpfs the compose file mounts
+    # at 0700 owned by this role's uid; it used to be 0777, excused by there
+    # being no second process in the container, and this call is what did not
+    # depend on that excuse. paths.write_private is the same call in
+    # backend/custody/client.py, which writes the co-signer client key here.
     paths.write_private(ATTEST_DIR / "ra_tls.key", tls.get("key", ""))
     (ATTEST_DIR / "ra_tls.crt").write_text("\n".join(chain))
     record = {
@@ -282,4 +284,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    execguard.lock_down(secrets.tee_required())
     raise SystemExit(main(sys.argv[1:]))

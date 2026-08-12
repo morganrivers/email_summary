@@ -12,6 +12,8 @@ license-key reconcile swapped for a subscription reconcile. The per-customer
 decision lives in billing.PolarBilling.
 """
 
+import execguard
+from backend import secrets
 from backend.billing.billing import PolarBilling
 
 
@@ -22,4 +24,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # No procwatch: this is one of the mail container's scheduled jobs and the
+    # daemon beside it is what watches that container. The guard is still
+    # installed, because a scheduled job is a process an attacker would rather
+    # be inside than the one being watched.
+    execguard.lock_down(secrets.tee_required())
     main()

@@ -71,6 +71,44 @@ x-common: &common
   # compose-hash, so the receiver's image cannot silently gain the mail role's
   # custody stack.
   restart: always
+  # The sandbox every role gets, and the half of process containment that lives
+  # here. The other half is `execguard.py`, a seccomp filter each service
+  # installs in its own process, because the thing that actually denies `execve`
+  # is seccomp and this deploy path cannot carry a profile: dstack ships and
+  # measures `app-compose.json` alone, and `security_opt: seccomp=<path>` is
+  # resolved as a file by the compose client, so a profile referenced here is a
+  # file that does not exist in the guest. Inline JSON in that field is read as
+  # a path too -- checked against docker 29.1.3 rather than assumed. So the
+  # filter ships inside the measured image, and these lines cover the processes
+  # it is not installed in: the entrypoint shell, and supercronic and its
+  # children in `mail`.
+  #
+  # What each line is for, since a list of hardening flags is otherwise a list
+  # of things nobody can remove safely:
+  #
+  #   * `read_only` makes the image's own filesystem non-writable, so a payload
+  #     cannot land beside the code it wants to be mistaken for. /app is already
+  #     root-owned and these processes are not root; this is the same statement
+  #     for the rest of the rootfs, /nix/store included.
+  #   * `cap_drop: ALL` is belt to the numeric `user:` braces. A non-root uid
+  #     has no ambient capability anyway, and stating it means a future
+  #     `user: "0:0"` edit does not quietly grant fifteen of them.
+  #   * `no-new-privileges` stops a setuid binary from raising privilege across
+  #     an exec. It is also what `execguard.py` sets with `prctl` for its own
+  #     process, and there is no harm in the kernel hearing it twice.
+  #   * `pids_limit` is per role below. It bounds a fork bomb and a miner; it is
+  #     deliberately not the exec control, because `os.execv` in place creates
+  #     no new task and would pass any ceiling.
+  #
+  # `tmpfs` is per role rather than here: `mail` and `web` also mount
+  # /app/attestation and a service's own `tmpfs:` key replaces this one whole
+  # rather than adding to it. Every role's list is checked in
+  # tests/test_enclave_boundary.py.
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - "no-new-privileges:true"
   environment: &common-env
     # Fail-closed attestation gate; see backend/tee/tee_boot.py. Also what makes
     # backend/secrets.py read no file at all, which is why no service below
@@ -163,19 +201,32 @@ services:
       - state:/app/state
       # dstack guest-agent socket: in-enclave KMS unseal + on-demand attestation.
       - /var/run/dstack.sock:/var/run/dstack.sock
-      # RA-TLS material + boot attestation record written by tee_boot; tmpfs so
-      # the enclave-held private key never lands on the encrypted volume at
-      # rest. Per container, not shared: each role derives its own client
-      # certificate from GetTlsKey, so no private key crosses a container
-      # boundary. Mode 0777 because the tmpfs is created by the runtime as root
-      # and the container's single process is not; the private keys are created
-      # at 0600 by paths.write_private (never written and then narrowed, which
-      # on a 0777 directory is a world-readable key for two syscalls), and
-      # nothing else runs in here to read them.
-      - type: tmpfs
-        target: /app/attestation
-        tmpfs:
-          mode: 0777
+    # RA-TLS material and the boot attestation record written by tee_boot, on a
+    # tmpfs so the enclave-held private key never lands on the encrypted volume
+    # at rest. Per container, not shared: each role derives its own client
+    # certificate from GetTlsKey, so no private key crosses a container
+    # boundary.
+    #
+    # 0700 owned by this role's uid, and not the 0777 it used to be. The long
+    # `volumes:` syntax takes only `size` and `mode`, so the directory arrived
+    # owned by root and had to be world-writable for a non-root process to use
+    # it at all; the excuse written here was that nothing else runs in the
+    # container to read it. That is the assumption an intrusion breaks, and it
+    # is the one thing this file must never rest on. The service-level `tmpfs:`
+    # key takes `uid`/`gid` as tmpfs mount options, which is the whole fix --
+    # checked against docker 29.1.3, not assumed.
+    #
+    # `noexec` on both entries because these are the only writable paths in the
+    # container that are not a volume, and a writable path a payload can be
+    # executed from is the path it will be written to. /tmp is here for the same
+    # reason and because `read_only` above leaves the process nowhere else.
+    tmpfs:
+      - "/tmp:mode=1777,noexec,nosuid,nodev,size=64m"
+      - "/app/attestation:mode=0700,uid=10001,gid=10001,noexec,nosuid,nodev,size=4m"
+    # Room for the daemon, its handoff listener, its request threads, the
+    # watcher, supercronic and whatever the crontab is running. Bounds a fork
+    # bomb; see the anchor for why it is not the exec control.
+    pids_limit: 256
 
   # The product UI. Holds a data key for rendering an account's own documents
   # and so runs the attestation gate, but never a Google token: token.bin is
@@ -246,10 +297,16 @@ services:
       - database:/app/database
       - state:/app/state
       - /var/run/dstack.sock:/var/run/dstack.sock
-      - type: tmpfs
-        target: /app/attestation
-        tmpfs:
-          mode: 0777
+    # Owned by this role's uid, not the mail role's: the two containers each get
+    # their own tmpfs and each derives its own client certificate, so neither
+    # directory should be readable by the other's account even in the case where
+    # a future edit shares one.
+    tmpfs:
+      - "/tmp:mode=1777,noexec,nosuid,nodev,size=64m"
+      - "/app/attestation:mode=0700,uid=10002,gid=10002,noexec,nosuid,nodev,size=4m"
+    # A thread per request plus the watcher. Matches TasksMax in the box's
+    # deploy/hetzner/hardening.conf, which fronts the same server.
+    pids_limit: 128
 
   # Verifies the Pub/Sub OIDC JWT and appends an address to the wake spool. The
   # cheapest role to isolate and the most exposed: it is the process Google
@@ -286,6 +343,15 @@ services:
       - inner
     volumes:
       - state:/app/state
+    # No attestation directory: this role is deliberately given no guest-agent
+    # socket, so it runs no gate and derives no certificate. /tmp alone, because
+    # `read_only` leaves a process nowhere to put a temporary file and the
+    # stdlib will reach for one.
+    tmpfs:
+      - "/tmp:mode=1777,noexec,nosuid,nodev,size=64m"
+    # The process Google posts to, and the one that needs the least: a thread
+    # per request and the watcher.
+    pids_limit: 64
 
   # The only container allowed to open a connection to the internet, and the
   # same code the box runs as `egress-proxy.service`. An HTTP CONNECT proxy on
@@ -320,6 +386,12 @@ services:
     networks:
       - inner
       - edge
+    # No volume of any kind, so /tmp is the whole of this container's writable
+    # filesystem, and it is noexec.
+    tmpfs:
+      - "/tmp:mode=1777,noexec,nosuid,nodev,size=64m"
+    # A thread per tunnel, and every role's outbound traffic comes through here.
+    pids_limit: 128
 
   # The only container the outside world connects to, and what makes the
   # allowlist above enforcement for every role that holds anything.
@@ -362,6 +434,12 @@ services:
     ports:
       - "8790:8790"
       - "8787:8787"
+    # The container the open internet connects to, and the one with the least
+    # inside it to reach: no volume, and a noexec /tmp.
+    tmpfs:
+      - "/tmp:mode=1777,noexec,nosuid,nodev,size=64m"
+    # A thread per connection, for both published ports.
+    pids_limit: 128
 
 volumes:
   database:

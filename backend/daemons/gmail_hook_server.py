@@ -67,7 +67,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from google.auth import exceptions as google_auth_exceptions
 from google.auth import jwt as google_jwt
 
-from backend import http_client, paths, secrets, site
+import execguard
+from backend import http_client, intrusion, paths, procwatch, secrets, site
 from backend.daemons import wake_queue
 
 secrets.load()
@@ -350,4 +351,7 @@ def main():
 
 
 if __name__ == "__main__":
+    execguard.lock_down(secrets.tee_required())
+    _role = procwatch.role_of(__spec__.name)
+    procwatch.start(_role, intrusion.reporter(_role))
     main()

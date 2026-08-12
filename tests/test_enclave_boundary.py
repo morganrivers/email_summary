@@ -17,9 +17,12 @@ dependency to a list whose whole point is being the only list.
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from unittest import mock
+
+import pytest
 
 from backend import roles, secrets_checks
 
@@ -68,6 +71,51 @@ def _uncommented():
     write the rule in front of."""
     return "\n".join(line for line in COMPOSE.read_text().splitlines()
                      if not line.lstrip().startswith("#"))
+
+
+def _anchor():
+    """The `x-common` block every role merges. Read as its own block so a rule
+    can ask "does this role have it" and get the same answer whether the line
+    is in the anchor or in the service."""
+    text = COMPOSE.read_text()
+    return text.split("\nx-common:", 1)[1].split("\nservices:", 1)[0]
+
+
+def _list_under(block, key):
+    """The list items under `key:` in one block, unquoted.
+
+    Ends at the next line indented no further than the key, which is what keeps
+    a service's `tmpfs:` out of its `volumes:` when both are lists of strings
+    that begin with a slash. Comment lines are skipped, so the prose above each
+    of these keys cannot read as an entry under it."""
+    items, depth = [], None
+    for line in block.splitlines():
+        stripped = line.strip()
+        if depth is None:
+            found = re.match(r"^(\s*)%s:\s*$" % re.escape(key), line)
+            if found:
+                depth = len(found.group(1))
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        if len(line) - len(line.lstrip()) <= depth:
+            break
+        assert stripped.startswith("- "), (
+            f"{key} holds {stripped!r}, which this reader does not parse")
+        items.append(stripped[2:].strip().strip('"').strip("'"))
+    return items
+
+
+def _settings_for(role):
+    """The scalar `key: value` settings a role ends up with, its own winning
+    over the anchor's. Scalars only; lists are `_list_under`."""
+    pairs = {}
+    for block in (_anchor(), _service_blocks()[role]):
+        for line in block.splitlines():
+            found = re.match(r"^\s{2,4}([a-z_]+):\s+(\S+)\s*$", line)
+            if found:
+                pairs[found.group(1)] = found.group(2)
+    return pairs
 
 
 def _networks_of(block):
@@ -348,7 +396,10 @@ def test_the_only_host_path_any_role_mounts_is_the_guest_agent_socket():
     partition, so each one has to be a decision. Today there is one, and `hook`
     deliberately does not have it."""
     for role, block in _service_blocks().items():
-        for source in re.findall(r"^\s+-\s+(/\S+):", block, re.M):
+        for entry in _list_under(block, "volumes"):
+            source = entry.split(":", 1)[0]
+            if not source.startswith("/"):
+                continue
             assert source == "/var/run/dstack.sock", (
                 f"{role} bind-mounts {source} from the guest filesystem")
 
@@ -357,10 +408,94 @@ def test_no_role_asks_for_privilege_the_partition_would_not_survive():
     """Each of these is a one-line way back to the arrangement the split
     replaced -- a shared namespace, an ambient capability, or the host's own
     network stack, which would put every role back outside the proxy."""
-    text = COMPOSE.read_text()
+    text = _uncommented()
     for setting in ("privileged:", "cap_add:", "network_mode:", "pid:",
-                    "userns_mode:", "devices:", "security_opt:"):
+                    "userns_mode:", "devices:"):
         assert setting not in text, f"the compose file asks for {setting}"
+
+
+def test_security_opt_is_checked_by_value_and_not_forbidden_outright():
+    """`security_opt:` used to be on the list above, as a bare substring.
+
+    The intent was right -- `seccomp:unconfined` and `apparmor:unconfined` are
+    each a one-word way out of the runtime's own sandbox -- but banning the key
+    banned `no-new-privileges:true` with it, so the rule forbade the fix as
+    firmly as the breach and the only way to harden the file was to edit the
+    test that guards it. A control whose test cannot tell tightening from
+    loosening is a control nobody tightens. So the values are the subject."""
+    allowed = {"no-new-privileges:true"}
+    for name, block in list(_service_blocks().items()) + [("x-common", _anchor())]:
+        for value in _list_under(block, "security_opt"):
+            assert value in allowed, (
+                f"{name} sets security_opt {value!r}, which is not one of "
+                f"{sorted(allowed)}")
+
+
+def test_every_role_runs_in_the_same_sandbox():
+    """The lines that make a container hard to run a program in, checked per
+    role rather than trusted to the anchor: a service that stops merging
+    `*common` keeps its image and its secrets and silently loses these.
+
+    They are not the exec control -- `execguard.py` is, because seccomp is the
+    only thing that denies `execve` and this deploy path cannot carry a profile.
+    These cover what that filter is not installed in, and they are what makes a
+    payload that does get written have nowhere to be written to."""
+    for role in ROLES:
+        settings = _settings_for(role)
+        assert settings.get("read_only") == "true", (
+            f"{role} does not run on a read-only rootfs")
+        assert settings.get("pids_limit"), f"{role} has no pids_limit"
+        assert _list_under(_service_blocks()[role], "cap_drop") == ["ALL"] or \
+            _list_under(_anchor(), "cap_drop") == ["ALL"], (
+                f"{role} does not drop all capabilities")
+        assert "no-new-privileges:true" in (
+            _list_under(_service_blocks()[role], "security_opt")
+            + _list_under(_anchor(), "security_opt")), (
+                f"{role} does not set no-new-privileges")
+
+
+def test_every_writable_path_outside_a_volume_is_noexec():
+    """With `read_only` above, a container's writable paths are its volumes and
+    its tmpfs mounts. Docker's local volume driver takes no mount options, so
+    `database/` and `state/` cannot be made noexec and are not claimed to be --
+    `backend/procwatch.py` is what covers a payload run from one. Everything
+    here can be, and a writable path a payload can be executed from is the path
+    it will be written to."""
+    for role in ROLES:
+        entries = _list_under(_service_blocks()[role], "tmpfs")
+        assert entries, f"{role} has no tmpfs, so read_only leaves it no /tmp"
+        targets = [entry.split(":", 1)[0] for entry in entries]
+        assert "/tmp" in targets, f"{role} has no writable /tmp"
+        for entry in entries:
+            for option in ("noexec", "nosuid", "nodev"):
+                assert option in entry, f"{role} mounts {entry!r} without {option}"
+
+
+def test_the_attestation_tmpfs_is_private_to_the_role_that_writes_it():
+    """It held a client certificate's private key at mode 0777, excused by
+    there being no second process in the container to read it. That excuse is
+    exactly what an intrusion removes, and it is the assumption this file must
+    never rest on. The long `volumes:` tmpfs syntax takes only `size` and
+    `mode`, which is why the directory is declared in the service-level `tmpfs:`
+    key instead: that one takes `uid` and `gid`, so the mount is owned by the
+    role rather than by root and world-writable."""
+    owners = {"mail": 10001, "web": 10002}
+    assert "0777" not in _uncommented(), (
+        "a mode 0777 is back in the compose file")
+    for role in ROLES:
+        entries = {entry.split(":", 1)[0]: entry
+                   for entry in _list_under(_service_blocks()[role], "tmpfs")}
+        if role not in owners:
+            assert "/app/attestation" not in entries, (
+                f"{role} runs no attestation gate and should hold no key")
+            continue
+        entry = entries.get("/app/attestation")
+        assert entry, f"{role} runs the gate and has nowhere to put its key"
+        assert "mode=0700" in entry, f"{role} attestation tmpfs is not 0700"
+        assert f"uid={owners[role]}" in entry, (
+            f"{role} attestation tmpfs is not owned by its own uid")
+        assert f"gid={owners[role]}" in entry, (
+            f"{role} attestation tmpfs is not grouped to its own uid")
 
 
 def test_every_image_is_pinned_by_digest_or_is_the_pre_publish_placeholder():
@@ -430,6 +565,60 @@ def test_the_push_actually_writes_a_digest_into_every_service(tmp_path):
     for role, ref in pinned.items():
         assert ref == digest, (
             f"{role} was pinned to {ref!r}, which is not the digest it was given")
+
+
+@pytest.mark.skipif(not shutil.which("docker"), reason="needs a docker daemon")
+@pytest.mark.parametrize("role", ROLES)
+def test_the_tmpfs_options_do_what_the_file_says_they_do(tmp_path, role):
+    """The rules above read the compose file as text, which proves the lines are
+    written and not that docker honours them. This mounts each role's real tmpfs
+    entries in a throwaway container and reads /proc/mounts back.
+
+    Worth the docker dependency because the two claims being made are easy to
+    write and wrong: that `noexec` reaches a tmpfs declared this way, and that
+    `uid=`/`gid=` are accepted at all -- the long `volumes:` tmpfs syntax takes
+    neither, which is why /app/attestation sat at 0777 owned by root. Skipped
+    rather than failed without a daemon, since it checks the runtime's
+    behaviour rather than this repository's contents."""
+    entries = _list_under(_service_blocks()[role], "tmpfs")
+    compose = tmp_path / "docker-compose.yml"
+    targets = [entry.split(":", 1)[0] for entry in entries]
+    compose.write_text(
+        "services:\n"
+        "  probe:\n"
+        "    image: busybox:latest\n"
+        "    command: [\"sh\", \"-c\", \"cat /proc/mounts; stat -c '%%n %%a %%u %%g' %s\"]\n"
+        "    tmpfs:\n" % " ".join(sorted(set(targets)))
+        + "".join(f'      - "{entry}"\n' for entry in entries))
+    run = subprocess.run(
+        ["docker", "compose", "-f", str(compose), "run", "--rm", "probe"],
+        capture_output=True, text=True, timeout=180)
+    if run.returncode != 0:
+        pytest.skip(f"docker unavailable to this test: {run.stderr[-300:]}")
+    mounts = {line.split()[1]: line.split()[3].split(",")
+              for line in run.stdout.splitlines() if line.startswith("tmpfs ")}
+    # The mode, uid and gid are read off the directory rather than out of
+    # /proc/mounts: the kernel omits an option there when it matches the tmpfs
+    # default, so /tmp at the mode it asked for reports no mode at all. What is
+    # being claimed is the state of the directory anyway.
+    stated = {}
+    for line in run.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 4 and parts[0].startswith("/"):
+            stated[parts[0]] = (parts[1], parts[2], parts[3])
+    for entry in entries:
+        target, options = entry.split(":", 1)
+        assert target in mounts, f"{target} was not mounted at all"
+        for option in ("noexec", "nosuid", "nodev"):
+            assert option in mounts[target], (
+                f"docker did not apply {option} to {target}")
+        mode, uid, gid = stated[target]
+        for option in options.split(","):
+            key, _, value = option.partition("=")
+            got = {"mode": mode.lstrip("0"), "uid": uid, "gid": gid}.get(key)
+            if got is not None:
+                assert got == value.lstrip("0"), (
+                    f"{target} has {key}={got}, not the {value} it asked for")
 
 
 def test_no_role_that_holds_data_has_a_route_off_the_host():

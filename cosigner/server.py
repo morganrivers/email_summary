@@ -34,6 +34,7 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import execguard
 from cosigner import attest, audit, keys, policy, protocol, retention
 
 HOST = os.environ.get("COSIGNER_BIND", "127.0.0.1")
@@ -278,4 +279,11 @@ def main():
 
 
 if __name__ == "__main__":
+    # `required=False` and not `secrets.tee_required()`, because this package
+    # imports nothing from `backend/` but its alerts and because this service
+    # runs on the box and never in a CVM. The process holding the outer
+    # wrapping key is the one that should least be able to start another
+    # program, so it takes the filter on the same terms as everything else and
+    # says so in the log if the kernel refuses it.
+    execguard.lock_down(required=False)
     main()

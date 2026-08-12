@@ -43,7 +43,8 @@ import socket
 import socketserver
 import sys
 
-from backend import egress, site
+import execguard
+from backend import egress, procwatch, secrets, site
 from backend.daemons import relay
 
 HOST = os.environ.get("EGRESS_PROXY_BIND", "127.0.0.1")
@@ -214,4 +215,8 @@ def main():
 
 
 if __name__ == "__main__":
+    execguard.lock_down(secrets.tee_required())
+    # No reporter: this role mounts no volume, so its report is the container
+    # exiting and looping under `restart: always`. See backend/intrusion.py.
+    procwatch.start(procwatch.role_of(__spec__.name))
     main()

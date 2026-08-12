@@ -54,7 +54,8 @@ import socketserver
 import sys
 import threading
 
-from backend import roles
+import execguard
+from backend import procwatch, roles, secrets
 from backend.daemons import relay
 
 # 0.0.0.0 by default, unlike every other listener in this tree. This one is
@@ -140,4 +141,7 @@ def main():
 
 
 if __name__ == "__main__":
+    execguard.lock_down(secrets.tee_required())
+    # No reporter, for the reason egress has none: no volume to write one onto.
+    procwatch.start(procwatch.role_of(__spec__.name))
     main()
