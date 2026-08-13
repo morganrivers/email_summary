@@ -86,8 +86,22 @@ synced() { awk '{print $NF}' "$SYNC_LOG" | grep -qxF "$1"; }
 echo "==> Syncing systemd units: deploy/hetzner -> $REMOTE_HOST:$SYSTEMD_DIR"
 rsync "${RSYNC_FLAGS[@]}" \
     -e "ssh -i $SSH_KEY" \
-    "$UNIT_DIR/"*.service "$UNIT_DIR/"*.timer \
+    "$UNIT_DIR/"*.service \
     "$REMOTE_USER@$REMOTE_HOST:$SYSTEMD_DIR/"
+
+# Units this repo used to install and no longer does. Named one by one rather
+# than derived from "every *.timer the repo does not have", because
+# $SYSTEMD_DIR is not ours and an administrator's unrelated timer is not a stale
+# one of ours. The three below were the schedule; it is now a thread inside the
+# mail daemon (backend/daemons/scheduler.py), and a timer left enabled here
+# would run the same job a second time as a separate process.
+RETIRED_UNITS=(email-summary.timer gmail-watch.timer billing-poller.timer)
+echo "==> Removing retired units: ${RETIRED_UNITS[*]}"
+for unit in "${RETIRED_UNITS[@]}"; do
+    remote "if [ -e $SYSTEMD_DIR/$unit ]; then \
+        systemctl disable --now $unit || true; \
+        rm -f $SYSTEMD_DIR/$unit && echo \"removed $unit\"; fi"
+done
 
 # The services run as an unprivileged user, not root: two of them are public
 # HTTP servers sitting in front of every user's Gmail refresh token. The account
@@ -214,24 +228,21 @@ if synced 'requirements.txt'; then
     remote "cd $REMOTE_DIR && venv/bin/python -m pip install --quiet -r requirements.txt"
 fi
 # Services worth restarting are exactly the long-running units (an [Install]
-# section); oneshots are driven by their timers. Both lists come from the unit
-# files so adding a unit to deploy/hetzner is all it takes to deploy it.
+# section). The list comes from the unit files so adding a unit to
+# deploy/hetzner is all it takes to deploy it.
 mapfile -t ALL_SERVICES < <(grep -l '^\[Install\]' "$UNIT_DIR"/*.service | xargs -n1 basename)
-mapfile -t ALL_TIMERS < <(ls -1 "$UNIT_DIR"/*.timer | xargs -n1 basename)
 if [ -n "${SERVICES:-}" ]; then
     read -r -a ALL_SERVICES <<< "$SERVICES"
 fi
-if [ -n "${TIMERS:-}" ]; then
-    read -r -a ALL_TIMERS <<< "$TIMERS"
-fi
 
-# Every unit that gets a sandbox: the long-running services, plus the oneshot
-# behind each timer (oneshots have no [Install] and never appear in
-# ALL_SERVICES).
-SANDBOXED=("${ALL_SERVICES[@]}")
-for timer in "${ALL_TIMERS[@]}"; do
-    SANDBOXED+=("${timer%.timer}.service")
-done
+# Every unit that gets a sandbox: every .service file, whatever starts it. This
+# used to be the long-running services plus the oneshot behind each timer, which
+# meant a unit lost its sandbox the moment its timer went away -- and the three
+# scheduled jobs lost theirs when backend/daemons/scheduler.py replaced the
+# timers with a thread. Those units are still here as the sandboxed way to run
+# one of those jobs by hand, so the set is now "every unit", which cannot come
+# apart the same way.
+mapfile -t SANDBOXED < <(ls -1 "$UNIT_DIR"/*.service | xargs -n1 basename)
 
 echo "==> Installing sandbox drop-in for: ${SANDBOXED[*]}"
 HARDENING="$(cat "$UNIT_DIR/hardening.conf")"
@@ -299,12 +310,12 @@ remote "systemctl daemon-reload"
 # A unit whose secrets or deps are not provisioned yet is left alone rather than
 # restarted into a crash loop; deploy/preflight.py decides, using the same code
 # the services themselves run.
-echo "==> Preflight: ${ALL_SERVICES[*]} ${ALL_TIMERS[*]}"
+echo "==> Preflight: ${ALL_SERVICES[*]}"
 START=()
 if [ "$DRY_RUN" = "1" ]; then
-    remote "cd $REMOTE_DIR && venv/bin/python -m deploy.preflight ${ALL_SERVICES[*]} ${ALL_TIMERS[*]}"
+    remote "cd $REMOTE_DIR && venv/bin/python -m deploy.preflight ${ALL_SERVICES[*]}"
 else
-    PREFLIGHT="$(remote "cd $REMOTE_DIR && venv/bin/python -m deploy.preflight ${ALL_SERVICES[*]} ${ALL_TIMERS[*]}")"
+    PREFLIGHT="$(remote "cd $REMOTE_DIR && venv/bin/python -m deploy.preflight ${ALL_SERVICES[*]}")"
     echo "$PREFLIGHT"
     while read -r verdict unit rest; do
         case "$verdict" in

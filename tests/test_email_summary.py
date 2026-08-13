@@ -1,7 +1,7 @@
 """The daily summary timer: one sweep, every active account, nobody's mail in
 somebody else's chat.
 
-email-summary.timer is the one unit that touches every mailbox on the box in a
+The daily summary is the one scheduled job that touches every mailbox in a
 single process, which is what makes its per-account boundaries worth pinning:
 the mailbox comes from the account and the delivery comes from
 account.telegram. Both used to be ambient, and the failure was silent -- every

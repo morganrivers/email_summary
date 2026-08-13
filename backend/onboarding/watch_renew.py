@@ -10,7 +10,7 @@ the API call.
 
 renew_account is also called at onboarding for the one just-registered account,
 so registration and renewal share one code path. main() renews every active
-account and is what the weekly gmail-watch.timer runs.
+account and is what backend/daemons/scheduler.py calls once a week.
 
 On first registration lastHistoryId is set to the watch's current historyId so
 the daemon has a cursor to fetch from. On later renewals lastHistoryId is left

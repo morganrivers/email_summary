@@ -13,8 +13,10 @@ Two checks per unit:
     gate.
 
 The unit -> module mapping is read out of the unit files' ExecStart, so the
-.service file stays the only place a unit's entry point is named. A timer is
-checked through the service it triggers (systemd's same-basename default).
+.service file stays the only place a unit's entry point is named. There are no
+timers to resolve through any more: the schedule is a thread in the mail daemon
+(backend/daemons/scheduler.py) and the three units it replaced are checked like
+every other, as the entry point an operator may run by hand.
 
 Usage: python -m deploy.preflight [unit ...]   (default: every installed unit)
 Prints one line per unit, "OK <unit>" or "SKIP <unit>: <reason>", and exits 0
@@ -208,9 +210,7 @@ def unit_module(unit):
     `tools.reachability`, which reads the same `ExecStart=` lines out of the same
     files to decide what ships. Two copies would be two answers to one
     question."""
-    name = unit if unit.endswith((".service", ".timer")) else f"{unit}.service"
-    if name.endswith(".timer"):
-        name = f"{name[:-6]}.service"
+    name = unit if unit.endswith(".service") else f"{unit}.service"
     path = UNIT_DIR / name
     if not path.exists():
         return None
@@ -257,8 +257,7 @@ def check_unit(unit):
 
 
 def installed_units():
-    return sorted(p.name for p in UNIT_DIR.iterdir()
-                  if p.suffix in (".service", ".timer"))
+    return sorted(p.name for p in UNIT_DIR.iterdir() if p.suffix == ".service")
 
 
 def main(argv):

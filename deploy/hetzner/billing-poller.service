@@ -1,3 +1,7 @@
+# Not timer-driven. The schedule is backend/daemons/scheduler.py, a thread in
+# email-daemon.service; this unit is the sandboxed way to run the same job by
+# hand (`systemctl start billing-poller.service`). tests/test_scheduler.py asserts
+# this ExecStart against what the scheduler calls, so the two cannot drift.
 [Unit]
 Description=Reconcile Polar subscriptions into account plan_status (billing safety net)
 After=network-online.target

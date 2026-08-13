@@ -31,7 +31,7 @@ from backend.accounts import account as account_mod
 from backend.billing import billing_queue
 from backend.billing.billing import PolarBilling
 from backend.custody import handoff_server
-from backend.daemons import pipeline, wake_queue
+from backend.daemons import pipeline, scheduler, wake_queue
 from backend.integrations.telegram import notify_error
 
 secrets.load()
@@ -210,6 +210,12 @@ def main():
     # Before the sweep, not after: the sweep can run for minutes and the web
     # tier cannot complete a sign-in until this socket exists.
     handoff_server.start(log)
+    # The daily summary, the weekly watch renewal and the Polar reconcile, on a
+    # thread rather than in a scheduler process beside this one. See
+    # backend/daemons/scheduler.py: a child process is a process execguard's
+    # filter was never installed in, and this is the role that used to have
+    # three of them.
+    scheduler.start()
     log(f"daemon started; FIFO={FIFO_PATH} poll={WAKE_POLL_SECONDS}s")
     # First, before any mail work: a report here means a container refused a
     # process and exited, so the thing that wrote it is not running any more

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Daily per-account summary: fetch today's mail + calendar, summarise, send.
 
-Runs once a day from email-summary.timer and sweeps every active account. It
+Runs once a day and sweeps every active account. The schedule is
+backend/daemons/scheduler.py, a thread in the mail daemon;
+email-summary.service is the same entry point for an operator running it by
+hand. It
 used to be single-tenant in a way that could not be noticed from the outside:
 the fetch inherited the process environment (so it always read whichever mailbox
 an environment variable pointed at) and the Telegram send carried no target (so

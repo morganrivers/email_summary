@@ -79,9 +79,11 @@ x-common: &common
   # resolved as a file by the compose client, so a profile referenced here is a
   # file that does not exist in the guest. Inline JSON in that field is read as
   # a path too -- checked against docker 29.1.3 rather than assumed. So the
-  # filter ships inside the measured image, and these lines cover the processes
-  # it is not installed in: the entrypoint shell, and supercronic and its
-  # children in `mail`.
+  # filter ships inside the measured image, and these lines cover the one
+  # process it is not installed in: the entrypoint shell, which `exec`s the
+  # interpreter and is gone by the time the filter lands. They used to cover
+  # more, until the schedule moved off supercronic and onto a thread and every
+  # container became one process -- see backend/daemons/scheduler.py.
   #
   # What each line is for, since a list of hardening flags is otherwise a list
   # of things nobody can remove safely:
@@ -167,7 +169,8 @@ services:
       GOOGLE_OAUTH_CLIENT_SECRET: "${GOOGLE_OAUTH_CLIENT_SECRET:-}"
       # No POLAR_WEBHOOK_SECRET, here or anywhere: no role is a Polar receiver.
       # Entitlement in the enclave is exactly two things, `confirm_checkout()`
-      # in `web` and the 3-hourly reconcile in this role's crontab, and both
+      # in `web` and the 3-hourly reconcile this role's scheduler thread runs,
+      # and both
       # read Polar's API rather than verify an event signature. There is no
       # correct value to inject, which is why `secrets.ROLE_EXEMPT` names that
       # check rather than the boot gate demanding it of somebody.
@@ -223,10 +226,13 @@ services:
     tmpfs:
       - "/tmp:mode=1777,noexec,nosuid,nodev,size=64m"
       - "/app/attestation:mode=0700,uid=10001,gid=10001,noexec,nosuid,nodev,size=4m"
-    # Room for the daemon, its handoff listener, its request threads, the
-    # watcher, supercronic and whatever the crontab is running. Bounds a fork
-    # bomb; see the anchor for why it is not the exec control.
-    pids_limit: 256
+    # Room for the daemon and its threads: the handoff listener and its request
+    # threads, the process watcher, and the scheduler. Threads are tasks and the
+    # cgroup pids controller counts tasks, so this can never be 1 however few
+    # processes a container runs -- it bounds a fork bomb, and the anchor above
+    # says why it is not the exec control. Lower than it was, because the three
+    # scheduled jobs are no longer three processes with a shell each.
+    pids_limit: 64
 
   # The product UI. Holds a data key for rendering an account's own documents
   # and so runs the attestation gate, but never a Google token: token.bin is

@@ -34,6 +34,7 @@
     "backend/daemons/__init__.py"
     "backend/daemons/daemon_loop.py"
     "backend/daemons/pipeline.py"
+    "backend/daemons/scheduler.py"
     "backend/daemons/wake_queue.py"
     "backend/drafting/__init__.py"
     "backend/drafting/agentic_drafter.py"

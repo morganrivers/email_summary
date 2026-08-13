@@ -10,13 +10,17 @@ Server has no git repo. Never `scp` single files or edit remote files in place.
 ```bash
 ./deploy/deploy.sh              # rsync + daemon-reload + restart
 DRY_RUN=1 ./deploy/deploy.sh
-SERVICES="email-daemon.service" TIMERS="" ./deploy/deploy.sh
+SERVICES="email-daemon.service" ./deploy/deploy.sh
 ```
 
 `--delete-after` is authoritative, so `EXCLUDES` must track the server-only files
-below. Units are derived from `deploy/hetzner/`: each `.service` with `[Install]`,
-plus each `.timer`. `deploy/preflight.py` runs first and leaves a failing unit
-alone rather than restarting it into a crash loop.
+below. Units restarted are each `.service` with `[Install]`; every `.service`
+gets the sandbox drop-in whatever starts it. There are no timers: the schedule
+is `backend/daemons/scheduler.py`, a thread in the mail daemon, and the three
+`.service` units it replaced remain only as the sandboxed way to run one job by
+hand. `RETIRED_UNITS` in `deploy.sh` disables the timers it used to install.
+`deploy/preflight.py` runs first and leaves a failing unit alone rather than
+restarting it into a crash loop.
 
 Nothing runs as root. `hardening.conf` installs as a per-unit `10-hardening.conf`
 drop-in; exceptions go in `deploy/hetzner/<unit>.d/*.conf` numbered above it. Five
@@ -86,14 +90,20 @@ ones, so cutting a role's reach means moving code, never deferring an import.
 ## Runtime paths
 
 - `daemon_loop.py` — FIFO listener, `email-daemon`. Routes to `manual_draft` or
-  `draft_replies`, runs `handoff_server.start()` on a thread, drains billing.
+  `draft_replies`, runs `handoff_server.start()` and `scheduler.start()` on
+  threads, drains billing.
 - `gmail_hook_server.py` — Pub/Sub webhook (8787): verify OIDC JWT, spool the
   address, poke the FIFO. Never resolves addresses; an unparseable body wakes
   nothing (an address-less wake swept every account into `_sweep_refusal`).
 - `backend/spool.py` — the one append-and-drain protocol behind `wake_queue.py` and
   `billing_queue.py`. Billing acks on spool, retries with an attempt count, alerts
   on drop; the 3-hourly poller re-derives subscription status.
-- `email_summary.py` (05:00 UTC), `watch_renew.py` (weekly `users.watch`).
+- `daemons/scheduler.py` — `SCHEDULE` is the only statement of when the three
+  clock-driven jobs run: `email_summary.py` (05:00 UTC), `watch_renew.py`
+  (Mon 04:00 UTC, `users.watch`), `billing_poller.py` (every 3h). A thread in
+  the mail daemon in both deployments, replacing three systemd timers and a
+  crontab. `state/schedule.json` records the last run; a missed time runs at
+  the next tick, a missing marker seeds and does not.
 - `frontend/web_server.py` — product UI (8790), own uid. Anything needing a Google
   token or a Polar call goes to the daemon over `custody/handoff.py`. `/contact` is
   the one unauthenticated relay: per-IP bucket, length cap refused not truncated.

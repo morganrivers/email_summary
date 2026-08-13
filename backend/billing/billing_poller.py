@@ -1,5 +1,8 @@
-"""Periodic Polar -> account reconcile. Runs on the billing-poller.timer on the
-box and on the mail role's crontab in the enclave.
+"""Periodic Polar -> account reconcile, every three hours.
+
+Called by backend/daemons/scheduler.py on a thread in the mail daemon, in both
+deployments. billing-poller.service is the same entry point for an operator
+running it by hand.
 
 The buyer watching a checkout return page is settled synchronously by
 `PolarBilling.confirm_checkout`, and a webhook event is applied by the daemon
@@ -24,9 +27,10 @@ def main():
 
 
 if __name__ == "__main__":
-    # No procwatch: this is one of the mail container's scheduled jobs and the
-    # daemon beside it is what watches that container. The guard is still
-    # installed, because a scheduled job is a process an attacker would rather
-    # be inside than the one being watched.
+    # This block runs only when an operator starts the job by hand; the schedule
+    # calls main() in a process that already has both. No procwatch, because a
+    # hand-started job is a second process in whatever it is started in and
+    # would refuse itself; the guard is still installed, because it is a process
+    # an attacker would rather be inside than a watched one.
     execguard.lock_down(secrets.tee_required())
     main()

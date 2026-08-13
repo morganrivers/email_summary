@@ -47,24 +47,29 @@ MANIFEST_FILE = paths.REPO_ROOT / "deploy" / "phala" / "image_files.nix"
 ROLES = roles.ROLES
 
 # role -> the entry-point modules it starts, mirroring flake.nix's entrypoint:
-# the `case "$role"` branches plus, for mail, the crontab beside them and, for
-# the two data-holding roles, the attest-before-run gate they call. This is the
-# partition the flake cannot express as one grep, so it is stated here and the
-# union is asserted equal to reachability.enclave_roots() -- a `python -m` added
-# to the flake without a home here fails the render rather than shipping nowhere.
+# the `case "$role"` branches, plus, for the two data-holding roles, the
+# attest-before-run gate they call. This is the partition the flake cannot
+# express as one grep, so it is stated here and the union is asserted equal to
+# reachability.enclave_roots() -- a `python -m` added to the flake without a home
+# here fails the render rather than shipping nowhere.
+#
+# The three scheduled jobs were roots here while a crontab started them. They are
+# not started any more, they are called: backend/daemons/scheduler.py imports
+# them and the mail daemon runs it on a thread. They stay in mail's image for
+# that reason, reached rather than rooted, which is the same walk that decides
+# every other module -- and dropping them from this list is what keeps the union
+# equal to what the flake actually starts.
 #
 # `egress` has one root and no gate: it unseals nothing, so there is nothing for
 # a gate to release, and it is deliberately handed no guest-agent socket to run
 # one against. Its image is the proxy and the allowlist, which is the whole
 # reason it is a container rather than a thread in the mail daemon -- the process
 # holding the network must not be the one holding the API keys, and that is a
-# claim about address spaces, not only about uids.
+# claim about address spaces, not only about uids. The scheduled jobs are a
+# thread for the mirror-image reason: they hold what that daemon already holds.
 ROLE_ROOTS = {
     "mail": {
         "backend.daemons.daemon_loop",
-        "backend.drafting.email_summary",
-        "backend.onboarding.watch_renew",
-        "backend.billing.billing_poller",
         "backend.tee.tee_boot",
     },
     "web": {

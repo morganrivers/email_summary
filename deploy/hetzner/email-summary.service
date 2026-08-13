@@ -1,3 +1,7 @@
+# Not timer-driven. The schedule is backend/daemons/scheduler.py, a thread in
+# email-daemon.service; this unit is the sandboxed way to run the same job by
+# hand (`systemctl start email-summary.service`). tests/test_scheduler.py asserts
+# this ExecStart against what the scheduler calls, so the two cannot drift.
 [Unit]
 Description=Daily email summary -> Telegram
 After=network-online.target

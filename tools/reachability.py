@@ -444,8 +444,8 @@ def box_roots():
 
 
 def enclave_roots():
-    """What the measured image starts: the entrypoint's background processes
-    and the crontab beside them, both read out of flake.nix.
+    """What the measured image starts: the `python -m` in each of the
+    entrypoint's role branches, read out of flake.nix.
 
     Comments are stripped first. A file whose comments explain how the image is
     built talks about running modules, and a root read out of prose is a module

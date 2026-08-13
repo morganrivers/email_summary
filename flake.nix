@@ -87,14 +87,12 @@
               lib.elem rel files;
         };
 
-      # The schedule the box states in deploy/hetzner/*.timer, restated because
-      # a systemd timer and a crontab are two deployment formats and neither can
-      # read the other. Keep the cadences in step: the reconcile is 00/3 there.
-      crontab = pkgs.writeText "email-bot-crontab" ''
-        0 5 * * * cd /app && python -m backend.drafting.email_summary
-        0 4 * * 1 cd /app && python -m backend.onboarding.watch_renew
-        0 */3 * * * cd /app && python -m backend.billing.billing_poller
-      '';
+      # No crontab and no supercronic. The schedule this file used to restate
+      # from deploy/hetzner/*.timer -- two formats, neither able to read the
+      # other -- is now `backend/daemons/scheduler.py`, a thread in the mail
+      # daemon in both deployments. That deletes the duplicate cadence, and it
+      # deletes a process: supercronic started a shell per job, and a shell is a
+      # process execguard's seccomp filter was never installed in.
 
       # The three accounts the enclave's containers run as, and the two groups
       # they share. The names are `backend/paths.py`'s DATA_GROUP and
@@ -157,7 +155,7 @@
       # thing it replaced one compose edit away.
       entrypoint = pkgs.writeShellApplication {
         name = "email-bot-entrypoint";
-        runtimeInputs = [ venv pkgs.supercronic pkgs.coreutils ];
+        runtimeInputs = [ venv pkgs.coreutils ];
         text = ''
           cd /app
           role="''${1:-}"
@@ -184,24 +182,19 @@
 
           case "$role" in
             mail)
-              # The only role holding a Google token or decrypted mail. Runs the
-              # scheduled work too: the daily summary and the watch renewal read
-              # mailboxes, so they belong to this account and no other. The
-              # billing reconcile is here for the other reason -- it writes
-              # plan_status into the manifest, and this is the role that writes
-              # the manifest. No image starts a Polar receiver, so in the
-              # enclave this sweep and the checkout return page are the whole of
-              # entitlement, which is why it must not be dropped from the
-              # crontab to save a container an API call.
+              # The only role holding a Google token or decrypted mail. Carries
+              # the scheduled work too: the daily summary and the watch renewal
+              # read mailboxes, so they belong to this account and no other, and
+              # the billing reconcile writes plan_status into the manifest,
+              # which this is the role that writes. No image starts a Polar
+              # receiver, so in the enclave that sweep and the checkout return
+              # page are the whole of entitlement.
+              #
+              # It runs them on a thread (backend/daemons/scheduler.py) rather
+              # than under a scheduler process beside it, so this container is
+              # one process like the other four.
               gate
-              python -m backend.daemons.daemon_loop &
-              d=$!
-              supercronic /app/crontab &
-              c=$!
-              trap 'kill "$d" "$c" 2>/dev/null || true' TERM INT
-              wait -n
-              kill "$d" "$c" 2>/dev/null || true
-              exit 1
+              exec python -m backend.daemons.daemon_loop
               ;;
             web)
               # Holds a data key for document renders and so runs the gate, but
@@ -296,7 +289,6 @@
           fakeRootCommands = ''
             mkdir -p ./app ./etc
             cp -R ${mkAppCode files}/. ./app/
-            ${lib.optionalString (role == "mail") "cp ${crontab} ./app/crontab"}
             cp ${passwdFile} ./etc/passwd
             cp ${groupFile} ./etc/group
             chmod -R u+w ./app
@@ -310,7 +302,7 @@
               map (p: lib.nameValuePair "${p}/tcp" { }) rolePorts.${role}
             );
             Env = [
-              "PATH=${venv}/bin:${pkgs.supercronic}/bin:${pkgs.coreutils}/bin:${pkgs.bashInteractive}/bin"
+              "PATH=${venv}/bin:${pkgs.coreutils}/bin:${pkgs.bashInteractive}/bin"
               "SHELL=${pkgs.bashInteractive}/bin/bash"
               "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               "LANG=C.UTF-8"
