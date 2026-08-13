@@ -5,9 +5,12 @@ usage line, `deploy/phala/build_and_publish.sh`, `deploy/render_image_manifest`,
 `backend/secrets_checks.REQUIRED_BY_ROLE` and the boundary tests -- and a role
 added to five of them is a role that ships with no image, or no boot gate, or no
 push. So the names live here, once, and everything else either imports this or
-is asserted against it. The generated `deploy/phala/image_files.nix` is an
-attrset keyed by exactly these names, which is how `flake.nix` and the publish
-script derive the list without reading Python.
+is asserted against it. The first two of those six are gone entirely: there is
+no entrypoint script any more, and each service's `command:` in
+`docker-compose.yml` names the module it starts rather than a role. The
+generated `deploy/phala/image_files.nix` is an attrset keyed by exactly these
+names, which is how `flake.nix` and the publish script derive the list without
+reading Python.
 
 This module imports `site` and nothing else, deliberately: every enclave image
 carries what its role imports, and the role holding the network must not gain a
@@ -16,12 +19,12 @@ fan-out because it needed to know its own name.
 
 from backend import site
 
-# Every role `flake.nix`'s entrypoint accepts, in the order that file and
-# `docker-compose.yml` state them: the one that opens a mailbox, the two that
-# serve a person, then the two that hold only network position and no data at
-# all. The order is not decorative -- `tests/test_enclave_boundary.py` compares
-# it against the entrypoint's `case` branches, so a role added here and not
-# there fails rather than silently having no way to start.
+# Every role the enclave has, in the order `docker-compose.yml` states them:
+# the one that opens a mailbox, the two that serve a person, then the two that
+# hold only network position and no data at all. The order is not decorative --
+# `tests/test_enclave_boundary.py` compares this list against the services in
+# that file, so a role added here and given no service fails rather than
+# silently having no way to start.
 ROLES = ("mail", "web", "hook", "egress", "ingress")
 
 # The roles that hold account data or a key, and so must not also hold a route

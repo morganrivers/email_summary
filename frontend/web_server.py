@@ -63,6 +63,7 @@ from backend.drafting import personal_context, voice_dna
 from backend.integrations import llm_client, telegram
 from backend.integrations.gmail_gcal import oauth_app
 from backend.masking import pseudonymizer
+from backend.tee import tee_boot
 from frontend import session as sess
 
 app_secrets.load()
@@ -2197,5 +2198,10 @@ def main():
 if __name__ == "__main__":
     execguard.lock_down(app_secrets.tee_required())
     _role = procwatch.role_of(__spec__.name)
+    # This role holds a data key for rendering an account's own documents, so
+    # it gates for itself. See daemon_loop's block: one container's gate says
+    # nothing about another's, which is why each runs its own rather than
+    # sharing a one-shot.
+    tee_boot.gate_or_exit(_role)
     procwatch.start(_role, intrusion.reporter(_role))
     main()

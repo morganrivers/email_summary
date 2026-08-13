@@ -181,12 +181,37 @@ def test_no_enclave_role_is_asked_for_the_polar_webhook_secret():
         assert "POLAR_WEBHOOK_SECRET" not in _env_names(role)
 
 
-def test_the_gate_runs_per_role_and_the_entrypoint_says_which():
-    """A gate given no role cannot know what to require, so it refuses. The
-    entrypoint has to pass the compose `command:` through for that to work."""
-    flake = FLAKE.read_text()
-    assert 'python -m backend.tee.tee_boot "$role"' in flake, (
-        "the entrypoint runs the gate without naming the role")
+GATED_ROLES = {"mail": "backend/daemons/daemon_loop.py",
+               "web": "frontend/web_server.py"}
+UNGATED_ROLES = {"hook": "backend/daemons/gmail_hook_server.py",
+                 "egress": "backend/daemons/egress_proxy.py",
+                 "ingress": "backend/daemons/ingress_proxy.py"}
+
+
+def test_the_two_data_holding_roles_gate_themselves_before_they_serve():
+    """A gate given no role cannot know what to require, so it refuses. It used
+    to be a separate `python -m` in the entrypoint shell, which passed the
+    compose `command:` through; with no shell, each role calls it from its own
+    `__main__` and takes the role from the module that was started.
+
+    Asserted in the `__main__` block and not merely somewhere in the file: a
+    gate imported and never called is the failure this is looking for."""
+    for role, path in GATED_ROLES.items():
+        block = (REPO / path).read_text().split('if __name__ == "__main__":')[1]
+        assert "tee_boot.gate_or_exit(_role)" in block, (
+            f"{role} serves without attesting first")
+        assert "procwatch.role_of(__spec__.name)" in block, (
+            f"{role} gates against a role it did not derive from its own module")
+
+
+def test_the_three_ungated_roles_do_not_pretend_to_attest():
+    """`hook`, `egress` and `ingress` are deliberately handed no guest-agent
+    socket, so a gate here could only fail closed or no-op. They hold nothing to
+    release: no account, no secret, no key. A gate call in one of them would be
+    a container that cannot start rather than a container that is safer."""
+    for role, path in UNGATED_ROLES.items():
+        assert "gate_or_exit" not in (REPO / path).read_text(), (
+            f"{role} runs a gate it has no socket for")
 
 
 def test_every_role_names_this_deployments_hostnames():
@@ -334,14 +359,43 @@ def test_no_role_is_provisioned_for_another_role_s_work():
             f"{role} is handed every other role's environment")
 
 
-def test_the_image_offers_no_role_that_starts_everything():
+def test_every_service_starts_one_module_and_no_service_starts_everything():
     """The shape this replaced: four processes, one uid, one environment holding
-    every secret. Leaving a combined role in the entrypoint would leave that one
-    compose edit away, and the edit would still measure as a valid image."""
-    flake = FLAKE.read_text()
-    entry = flake.split("email-bot-entrypoint", 1)[1]
-    cases = re.findall(r"^\s{12}(\w+)\)", entry, re.M)
-    assert cases == list(ROLES), f"entrypoint roles are {cases}"
+    every secret. It used to be kept away by an entrypoint `case` with no
+    combined branch; now there is no dispatcher to add one to, and the argv is
+    here in the measured file.
+
+    One module per service, and the interpreter directly: a `command:` that ran
+    a shell would be back to a parent process `execguard.py`'s filter is not
+    installed in, whatever the shell went on to start."""
+    blocks = _service_blocks()
+    assert set(blocks) == set(ROLES), f"unexpected services: {sorted(blocks)}"
+    started = {}
+    for role, block in blocks.items():
+        found = re.findall(r'^\s+command:\s*(\[.*\])\s*$', block, re.M)
+        assert len(found) == 1, f"{role} has {len(found)} command: lines"
+        argv = re.findall(r'"([^"]*)"', found[0])
+        assert argv[:2] == ["python", "-m"] and len(argv) == 3, (
+            f"{role} does not start one module directly: {argv}")
+        started[role] = argv[2]
+    assert len(set(started.values())) == len(ROLES), (
+        f"two roles start the same module: {started}")
+
+
+def test_the_image_carries_no_shell_and_no_entrypoint_to_dispatch_with():
+    """`command:` above is the whole argv only while the image sets neither, and
+    the reason to want that is one process per container. The shell is gone from
+    `contents` for the same reason: it is the program a payload wants, and an
+    image that does not carry it cannot be made to run it."""
+    text = FLAKE.read_text()
+    assert "Entrypoint = [ ];" in text, "the image sets an Entrypoint again"
+    # Comments stripped, for the reason the security_opt rule below reads the
+    # parsed value: every rule here is explained in prose beside the thing it
+    # governs, and a check reading raw text cannot tell a rule from a breach.
+    code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+    assert "writeShellApplication" not in code, "an entrypoint script is back"
+    assert "bashInteractive" not in code, "the images carry a shell again"
+    assert "/bin/sh" not in code, "passwd promises a shell the image lacks"
 
 
 def test_nothing_mounts_the_decrypted_environment():
@@ -509,8 +563,10 @@ def test_every_image_is_pinned_by_digest_or_is_the_pre_publish_placeholder():
     The placeholder is allowed because it is what the tree carries before the
     first push, and `build_and_publish.sh --push` rewrites these exact lines;
     that script is checked here so what it targets cannot drift from what this
-    test reads. It keys its rewrite on the `command: ["<role>"]` line below the
-    image, which is what lets it re-pin a digest as readily as a first tag."""
+    test reads. It keys its rewrite on the image name itself, which carries the
+    role, and matches either form of reference -- which is what lets it re-pin a
+    digest as readily as a first tag. It used to key on the `command:` line
+    below, back when that line was the role name."""
     images = re.findall(r"^\s*image:\s*(\S+)", COMPOSE.read_text(), re.M)
     assert len(images) == len(ROLES), (
         f"expected one image reference per role, found {images}")

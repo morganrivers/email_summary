@@ -150,9 +150,9 @@ REQUIRED = (
 # container every variable, which is the partition undone, so the gate has to be
 # the thing that knows better.
 #
-# Names every role ``flake.nix``'s entrypoint accepts, including the three that
-# run no gate at all. ``hook`` verifies a Pub/Sub JWT and appends an address to a
-# spool, and its own WEBHOOK_AUD / PUBSUB_SERVICE_ACCOUNT are not secrets;
+# Names every role, including the three that run no gate at all. ``hook``
+# verifies a Pub/Sub JWT and appends an address to a spool, and its own
+# WEBHOOK_AUD / PUBSUB_SERVICE_ACCOUNT are not secrets;
 # ``ingress`` and ``egress`` are network position and deliberately none of the
 # keys. All three are named rather than omitted so this table answers for the
 # whole partition, and so a role later given a gate is not refused for being

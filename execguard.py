@@ -35,11 +35,12 @@ ignore the signal. Detection of the surviving case belongs to
 hard to reach.
 
 This is prevention that cannot be raced, and it does not replace the compose
-file's `read_only`, `cap_drop` and `noexec` mounts. Those cover the one process
-this module still does not run in: the entrypoint shell, which `exec`s the
-interpreter and is gone by the time the filter lands. It used to cover more --
-supercronic and a shell per scheduled job in the mail role -- until
-`backend/daemons/scheduler.py` made that role one process like the other four.
+file's `read_only`, `cap_drop` and `noexec` mounts. Those used to cover the
+processes this module was never installed in -- an entrypoint shell in every
+role, and supercronic with a shell per job in `mail`. There are none left: the
+images carry no shell, each `command:` is the interpreter, and the schedule is a
+thread. So those lines are now depth rather than coverage, including for the
+case this module cannot cover, which is failing to install at all.
 
 Called from each service's `if __name__ == "__main__":` block rather than from
 `main()` or from package import. A test imports `main()` and would inherit a

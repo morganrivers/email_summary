@@ -17,7 +17,7 @@ Free, open, 50,000+ profiles, vetted by YC. Onur's suggestion, and the most imme
 
 - Winter 2027 deadline was not published at time of writing. Third parties estimate autumn 2026, roughly mid-September to early November. Verify at ycombinator.com/apply. See [[Unverified and open questions]]
 - Applications are reviewed on a rolling basis and late ones are still read
-- A prior rejection does not block reapplication and reapplying is common
+- A prior rejection does not block reapplication and  reapplying is common
 
 ## Honest assessment
 

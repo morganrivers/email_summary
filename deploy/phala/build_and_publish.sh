@@ -87,9 +87,13 @@ build_role() {
 # forbid. \Q..\E for the same class of reason on the pattern side.
 pin_compose() {
   local role="$1" ref="$2"
+  # Keyed on the image name, which carries the role, and matching either form
+  # of reference so a re-push repins a digest as readily as a first tag. It used
+  # to key on the `command: ["<role>"]` line underneath; that line is the module
+  # a service starts now, not its role name.
   ROLE="$role" REF="$ref" perl -0pi -e '
     my ($role, $ref) = ($ENV{ROLE}, $ENV{REF});
-    s{image: \S+\n(\s*)command: \["\Q$role\E"\]}{image: $ref\n$1command: ["$role"]}
+    s{image:\s*\S*tee-email-bot-\Q$role\E(?::\S+|\@\S+)}{image: $ref}
   ' "$COMPOSE_FILE"
 }
 

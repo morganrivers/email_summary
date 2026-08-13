@@ -55,6 +55,7 @@ SKIP_DIRS = {"__pycache__", "venv", ".git", "tests", "docs", "database",
 
 UNIT_DIR = REPO_ROOT / "deploy" / "hetzner"
 FLAKE = REPO_ROOT / "flake.nix"
+COMPOSE = REPO_ROOT / "deploy" / "phala" / "docker-compose.yml"
 
 # The `python -m <module>` argument out of a unit file, and what one is allowed
 # to look like. Both are public because `deploy/preflight.py` reads the same
@@ -64,7 +65,12 @@ FLAKE = REPO_ROOT / "flake.nix"
 # question.
 EXEC_MODULE_RE = re.compile(r"^ExecStart=.*?\s-m\s+(\S+)", re.MULTILINE)
 MODULE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
-_NIX_MODULE = re.compile(r"python\s+-m\s+([A-Za-z_][\w.]*)")
+# A service's `command:` in the compose file, which is the enclave's whole argv:
+# the images set no Entrypoint and no Cmd. Anchored on `command:` rather than on
+# `python -m` anywhere, so a module named in a comment is not a root.
+_COMPOSE_MODULE = re.compile(
+    r'^\s*command:\s*\[\s*"python"\s*,\s*"-m"\s*,\s*"([A-Za-z_][\w.]*)"\s*\]',
+    re.MULTILINE)
 
 
 def check_module_name(module, source):
@@ -444,17 +450,22 @@ def box_roots():
 
 
 def enclave_roots():
-    """What the measured image starts: the `python -m` in each of the
-    entrypoint's role branches, read out of flake.nix.
+    """What the measured images start: one `command:` per service, read out of
+    docker-compose.yml.
 
-    Comments are stripped first. A file whose comments explain how the image is
-    built talks about running modules, and a root read out of prose is a module
+    This used to read flake.nix, because the images ran a shell there that
+    dispatched on a role name. There is no such shell: each `command:` is the
+    argv, and it is in the file whose hash is measured into RTMR3 -- so the
+    roots are now read from the same statement the enclave is attested against.
+
+    Comments are stripped first. A file whose comments explain the partition
+    talks about running modules, and a root read out of prose is a module
     shipped because someone described it."""
-    assert FLAKE.is_file(), f"no flake at {FLAKE}"
+    assert COMPOSE.is_file(), f"no compose file at {COMPOSE}"
     code = "\n".join(line.split("#", 1)[0]
-                     for line in FLAKE.read_text().splitlines())
-    roots = set(_NIX_MODULE.findall(code))
-    assert roots, "no `python -m <module>` found in flake.nix"
+                     for line in COMPOSE.read_text().splitlines())
+    roots = set(_COMPOSE_MODULE.findall(code))
+    assert roots, f"no `command: [\"python\", \"-m\", ...]` found in {COMPOSE}"
     return roots
 
 

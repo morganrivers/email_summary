@@ -185,7 +185,7 @@ def test_a_scheduled_job_is_not_an_entry_point_any_more():
     for job in scheduler.SCHEDULE:
         assert job.module not in mail, (
             f"{job.module} is still listed as something the mail role starts")
-    assert mail == {"backend.daemons.daemon_loop", "backend.tee.tee_boot"}
+    assert mail == {"backend.daemons.daemon_loop"}
 
 
 def test_the_jobs_still_ship_in_the_mail_image():

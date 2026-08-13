@@ -60,12 +60,10 @@
       # docstring.
       imageManifests = import ./deploy/phala/image_files.nix;
 
-      # The role names, derived rather than restated. That file is generated
-      # from `backend/roles.py` and keyed by exactly those names, so this is the
-      # same list the boot gate and the boundary tests read; spelling it again
-      # here is how a role comes to exist in four places and be missing from the
-      # fifth. `deploy/phala/build_and_publish.sh` reads it the same way.
-      roleNames = builtins.attrNames imageManifests;
+      # `images` below is keyed by the names in that file, which is generated
+      # from `backend/roles.py`, so the roles this flake builds are the roles
+      # that exist rather than a list restated here.
+      # `deploy/phala/build_and_publish.sh` reads the same file the same way.
 
       # One role's source tree: exactly the files its manifest names. Nix store
       # paths are content-addressed, so a file shared by two roles is stored and
@@ -119,10 +117,15 @@
       };
       sharedGids = { letterlock-data = 10010; letterlock-wake = 10011; };
 
+      # The shell field is /noshell in every row, root's included, and the path
+      # does not exist. Nothing reads it -- `grp.getgrnam` and `pwd` want the
+      # uid and the group -- but the image ships no shell, and a passwd file
+      # promising /bin/sh is a measured file making a false statement about what
+      # is in the image.
       passwdFile = pkgs.writeText "passwd" (''
-        root:x:0:0:root:/root:/bin/sh
+        root:x:0:0:root:/root:/noshell
       '' + lib.concatStrings (lib.mapAttrsToList (name: a: ''
-        letterlock-${name}:x:${toString a.uid}:${toString a.uid}::/app:/bin/sh
+        letterlock-${name}:x:${toString a.uid}:${toString a.uid}::/app:/noshell
       '') accounts));
 
       groupFile = pkgs.writeText "group" (''
@@ -135,105 +138,37 @@
             lib.filterAttrs (_: a: lib.elem group a.groups) accounts))}
       '') sharedGids));
 
-      # One entrypoint, four roles, and one image each -- per role, carrying only
-      # that role's reachable code. Which role a container plays is still a
-      # `command:` in docker-compose.yml, and that file (which now names a
-      # different image per service) is hashed into the dstack `compose-hash`
-      # extended into RTMR3 -- so which process runs as which account, which
-      # image it runs, and which secrets each is handed, is measured rather than
-      # merely configured. An operator who moves SESSION_SECRET to the mail
-      # container changes the measurement and `cosigner/attest.py` stops
-      # accepting the client certificate. The entrypoint is shared and identical
-      # across the four images; a branch for a role whose modules are absent
-      # from a given image simply never runs there, since `command:` selects it.
+      # No entrypoint script. There used to be one shell shared by every image,
+      # dispatching on a role name and running the attestation gate as a
+      # separate `python -m` before `exec`ing the service. Both halves moved
+      # into Python: docker-compose.yml's `command:` names the module directly,
+      # and the two data-holding roles call `tee_boot.gate_or_exit()` from their
+      # own `__main__` before they open anything.
+      #
+      # The point is what is left: `python` is pid 1 and the only process, so
+      # `execguard.py`'s seccomp filter -- which a process installs in itself
+      # and which cannot cover a parent that predates it -- covers the whole
+      # container. There is no shell in the image to cover.
+      #
+      # Which role a container plays is still a `command:` in
+      # docker-compose.yml, and that file is hashed into the dstack
+      # `compose-hash` extended into RTMR3 -- so which process runs as which
+      # account, which image it runs, and which secrets each is handed, is
+      # measured rather than merely configured. An operator who moves
+      # SESSION_SECRET to the mail container changes the measurement and
+      # `cosigner/attest.py` stops accepting the client certificate. What the
+      # `case` used to refuse -- an unknown role -- is now refused by there
+      # being no name to get wrong: a `command:` either is a module in that
+      # role's image or the container does not start.
       #
       # There is deliberately no role that starts everything. That was the shape
       # before this split: four processes, one uid, one environment holding
       # every secret, so a parsing bug in the web server was every mailbox in
-      # the enclave. The box stopped working that way in `01ba733`; this is the
-      # same change, and leaving the combined role in place would leave the
-      # thing it replaced one compose edit away.
-      entrypoint = pkgs.writeShellApplication {
-        name = "email-bot-entrypoint";
-        runtimeInputs = [ venv pkgs.coreutils ];
-        text = ''
-          cd /app
-          role="''${1:-}"
-
-          # Track F3 attest-before-run gate. Under TEE_REQUIRED it fails closed
-          # (exit -> restart:always retries) rather than touching mailboxes
-          # without proof the CVM runs the published, attested measurement.
-          # Every role that holds an account's data runs it for itself: these
-          # are separate containers now, so one container's gate says nothing
-          # about another's, and a shared one-shot would be a gate that passes
-          # for a process that never asked.
-          #
-          # The role is passed through because what a container must be
-          # provisioned with is a function of which container it is. The gate
-          # used to apply the whole-box set, which no role satisfies: `web` has
-          # no inference key and `mail` no SESSION_SECRET, both by design, so
-          # both crash-looped on first boot.
-          gate() {
-            if ! python -m backend.tee.tee_boot "$role"; then
-              echo "tee_boot gate failed; refusing to start $role" >&2
-              exit 1
-            fi
-          }
-
-          case "$role" in
-            mail)
-              # The only role holding a Google token or decrypted mail. Carries
-              # the scheduled work too: the daily summary and the watch renewal
-              # read mailboxes, so they belong to this account and no other, and
-              # the billing reconcile writes plan_status into the manifest,
-              # which this is the role that writes. No image starts a Polar
-              # receiver, so in the enclave that sweep and the checkout return
-              # page are the whole of entitlement.
-              #
-              # It runs them on a thread (backend/daemons/scheduler.py) rather
-              # than under a scheduler process beside it, so this container is
-              # one process like the other four.
-              gate
-              exec python -m backend.daemons.daemon_loop
-              ;;
-            web)
-              # Holds a data key for document renders and so runs the gate, but
-              # never a Google token: token.bin is 0600 to the mail uid and the
-              # operations needing one cross backend/custody/handoff.py.
-              gate
-              exec python -m frontend.web_server
-              ;;
-            hook)
-              # Verifies a Pub/Sub JWT and appends an address to the wake spool.
-              # No gate, because this role is deliberately not given the
-              # guest-agent socket and the gate needs it -- and it needs neither:
-              # it opens no account, holds no secret, and the address it spools
-              # is resolved by the mail role, which is gated.
-              exec python -m backend.daemons.gmail_hook_server
-              ;;
-            egress)
-              # The one container with a route off the host, and the reason the
-              # others do not need one. No gate: it opens no account, unseals
-              # nothing, and is deliberately given no guest-agent socket to run
-              # a gate with. docker-compose.yml puts it on both networks and
-              # every role that holds data on the internal one.
-              exec python -m backend.daemons.egress_proxy
-              ;;
-            ingress)
-              # The only container the outside world connects to, and what lets
-              # the two roles that used to publish ports stop doing so. A TCP
-              # forwarder: it parses nothing, holds nothing, and its routing
-              # table is fixed before it accepts anything. No gate, for the same
-              # reasons as egress.
-              exec python -m backend.daemons.ingress_proxy
-              ;;
-            *)
-              echo "usage: email-bot-entrypoint {${lib.concatStringsSep "|" roleNames}}" >&2
-              exit 2
-              ;;
-          esac
-        '';
-      };
+      # the enclave. That stopped being the arrangement in `01ba733`; this is
+      # the same change, and a shared dispatcher would put it one edit away
+      # again -- as well as pulling all five roles' imports into every image,
+      # since `deploy/render_image_manifest.py` counts a function-local import
+      # exactly like a top-level one.
 
       # `database` and `state` are named volumes mounted over these paths, shared
       # between containers. Docker seeds a named volume from the first container
@@ -275,16 +210,24 @@
         chmod ${if vol == "database" then "2770" else "2771"} ./app/${vol}
       '';
 
-      # One role's image: the shared entrypoint over that role's own code and
-      # data. No .gmail-mcp directory in any of them -- it existed to carry
+      # One role's image: the interpreter over that role's own code and data.
+      # No .gmail-mcp directory in any of them -- it existed to carry
       # gcp-oauth.keys.json, and under TEE_REQUIRED oauth_app refuses that file
       # and the boot gate refuses to start with one present.
+      #
+      # `contents` is the certificate bundle and nothing else. coreutils and
+      # bash were here for the entrypoint script; with that gone, an image with
+      # a shell in it is an image holding the one program `execguard.py` exists
+      # to stop a payload reaching. Nothing shipped starts a program --
+      # tests/test_image_manifest.py proves the absence of subprocess, os.exec*
+      # and os.fork across every measured file -- so there is nothing left to
+      # need them.
       mkImage =
         role: files:
         pkgs.dockerTools.buildLayeredImage {
           name = "tee-email-bot-${role}";
           tag = "latest";
-          contents = [ pkgs.cacert pkgs.coreutils pkgs.bashInteractive ];
+          contents = [ pkgs.cacert ];
           enableFakechroot = true;
           fakeRootCommands = ''
             mkdir -p ./app ./etc
@@ -297,13 +240,19 @@
           '';
           config = {
             WorkingDir = "/app";
-            Entrypoint = [ "${entrypoint}/bin/email-bot-entrypoint" ];
+            # No Entrypoint and no Cmd: docker-compose.yml's `command:` is the
+            # whole argv, so the module a container runs is stated in the file
+            # whose hash is measured into RTMR3 rather than baked in here where
+            # the compose file could not contradict it.
+            Entrypoint = [ ];
             ExposedPorts = lib.listToAttrs (
               map (p: lib.nameValuePair "${p}/tcp" { }) rolePorts.${role}
             );
             Env = [
-              "PATH=${venv}/bin:${pkgs.coreutils}/bin:${pkgs.bashInteractive}/bin"
-              "SHELL=${pkgs.bashInteractive}/bin/bash"
+              # The venv alone. `command:` says `python`, and this is what
+              # decides which one -- there is no other bin directory in the
+              # image to find a different answer in.
+              "PATH=${venv}/bin"
               "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               "LANG=C.UTF-8"
               "TZ=UTC"

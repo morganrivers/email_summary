@@ -21,6 +21,7 @@ role's imports pull in.
 import ast
 
 from deploy import render_image_manifest
+from tools import reachability
 
 ROLES = render_image_manifest.ROLES
 
@@ -108,8 +109,8 @@ def test_no_role_carries_more_of_the_cosigner_than_its_wire_contract():
 
 def test_the_egress_proxy_is_in_its_own_image_and_no_other():
     """It ships because the enclave now runs it, and it ships into exactly one
-    image -- the `egress` role in flake.nix, on the two networks
-    docker-compose.yml defines, with the mail role on the internal one alone.
+    image -- the `egress` role, on the two networks docker-compose.yml defines,
+    with the mail role on the internal one alone.
 
     The per-role split is what lets both halves of that be true at once. While
     the image was shared, running the proxy in the enclave meant an HTTP CONNECT
@@ -119,8 +120,10 @@ def test_the_egress_proxy_is_in_its_own_image_and_no_other():
     egress = set(render_image_manifest.render_paths("egress"))
     assert "backend/daemons/egress_proxy.py" in egress
     assert "backend/egress.py" in egress
-    assert "egress)" in render_image_manifest.paths.REPO_ROOT.joinpath(
-        "flake.nix").read_text()
+    # That the enclave starts it, read where it is now stated: the compose
+    # `command:`, in the file whose hash is measured. It used to be a branch of
+    # the entrypoint `case` in flake.nix.
+    assert "backend.daemons.egress_proxy" in reachability.enclave_roots()
     for role in ROLES:
         if role == "egress":
             continue

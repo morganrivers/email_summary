@@ -248,6 +248,25 @@ def run_gate(role: str = "") -> int:
     return 0
 
 
+def gate_or_exit(role: str) -> None:
+    """The gate as an entry point calls it: pass, or end the process.
+
+    The two data-holding roles call this from their own `__main__`, before they
+    open a socket or a mailbox. It used to be a separate `python -m` in the
+    entrypoint shell, whose nonzero exit the shell turned into its own; the
+    shell is gone, so the exit is made here instead of being inferred by a
+    caller that would have to remember to.
+
+    `SystemExit` and not a raise, because `run_gate` already reported the
+    reason: every fail-closed branch in it prints one, and re-wrapping the int
+    would put a second, less specific message in front of the first. Under
+    `restart: always` this is a crash loop with a legible cause, which is the
+    intended outcome for a container that cannot prove what it is."""
+    assert role, "the gate is asked per role and cannot be asked for none"
+    if run_gate(role) != 0:
+        sys.exit(1)
+
+
 def run_selftest() -> int:
     client = DstackClient()
     if not client.available():

@@ -23,6 +23,14 @@
 # runs `docker compose up` with no `--env-file` and no passthrough flag. So the
 # full set lives in the *compose process* environment, outside every container,
 # and a container receives exactly what its own `environment:` block names.
+# Each service's `command:` is the whole argv, because the images set no
+# Entrypoint and no Cmd. It used to be a role name passed to a shared shell
+# script that dispatched on it and `exec`ed the right module; the module is
+# named here directly now, so `python` is pid 1 and the only process in every
+# container. The role a container plays is still stated in this measured file,
+# and the check the shell's `case` performed -- refuse an unknown role -- is now
+# performed by the module either being in that role's image or not.
+#
 # Interpolation is the partition. Two rules follow:
 #
 #   * Never bind-mount /dstack/.host-shared into a container. `.decrypted-env`
@@ -79,11 +87,12 @@ x-common: &common
   # resolved as a file by the compose client, so a profile referenced here is a
   # file that does not exist in the guest. Inline JSON in that field is read as
   # a path too -- checked against docker 29.1.3 rather than assumed. So the
-  # filter ships inside the measured image, and these lines cover the one
-  # process it is not installed in: the entrypoint shell, which `exec`s the
-  # interpreter and is gone by the time the filter lands. They used to cover
-  # more, until the schedule moved off supercronic and onto a thread and every
-  # container became one process -- see backend/daemons/scheduler.py.
+  # filter ships inside the measured image, and it now covers every process in
+  # every container: the images carry no shell and no entrypoint script, each
+  # `command:` below is the interpreter itself, and the schedule that used to
+  # fork a shell per job is a thread (backend/daemons/scheduler.py). These
+  # lines are what stands between a payload and the filesystem regardless, and
+  # the backstop for the filter failing to install at all.
   #
   # What each line is for, since a list of hardening flags is otherwise a list
   # of things nobody can remove safely:
@@ -150,7 +159,7 @@ services:
     # a ${VAR} would let the operator swap the image and break the trust story.
     # The bare tag here is only a pre-publish placeholder.
     image: tee-email-bot-mail:latest
-    command: ["mail"]
+    command: ["python", "-m", "backend.daemons.daemon_loop"]
     user: "10001:10001"
     # The enclave's SupplementaryGroups=, and it has to be spelled out: a
     # numeric `user:` makes the runtime skip the /etc/group lookup that a
@@ -259,7 +268,7 @@ services:
   web:
     <<: *common
     image: tee-email-bot-web:latest
-    command: ["web"]
+    command: ["python", "-m", "frontend.web_server"]
     user: "10002:10002"
     # letterlock-data only. Not letterlock-wake: writing the wake spool starts a
     # drafting pass against an account of the writer's choosing and spends that
@@ -328,7 +337,7 @@ services:
   hook:
     <<: *common
     image: tee-email-bot-hook:latest
-    command: ["hook"]
+    command: ["python", "-m", "backend.daemons.gmail_hook_server"]
     user: "10003:10003"
     # letterlock-wake alone: the FIFO and the wake spool, and nothing else in
     # state/. Deliberately not letterlock-data, which is what keeps the account
@@ -380,7 +389,7 @@ services:
   egress:
     <<: *common
     image: tee-email-bot-egress:latest
-    command: ["egress"]
+    command: ["python", "-m", "backend.daemons.egress_proxy"]
     user: "10004:10004"
     environment:
       # Deliberately not *common-env: this container must not be pointed at
@@ -422,7 +431,7 @@ services:
   ingress:
     <<: *common
     image: tee-email-bot-ingress:latest
-    command: ["ingress"]
+    command: ["python", "-m", "backend.daemons.ingress_proxy"]
     user: "10005:10005"
     environment:
       # Deliberately not *common-env. It needs no secret and must not be pointed

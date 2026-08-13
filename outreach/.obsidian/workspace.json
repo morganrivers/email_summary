@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Evidence/Lawyers and AI confidentiality.md",
+                "file": "Organizations/Y Combinator.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Lawyers and AI confidentiality"
+              "title": "Y Combinator"
             }
           }
         ]
@@ -55,7 +55,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": " United States",
+                "query": "",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -190,8 +190,9 @@
       "edge-tts:Read note aloud": false
     }
   },
-  "active": "6e1fe98cdd92777f",
+  "active": "5bc98e39f6337370",
   "lastOpenFiles": [
+    "Evidence/Lawyers and AI confidentiality.md",
     "Evidence/Evidence.md",
     "Audiences/Audiences.md",
     "Audiences/Privacy-conscious technical users.md",
@@ -199,7 +200,6 @@
     "Evidence/Competitors and adjacent products.md",
     "Outreach Map.md",
     "Unverified and open questions.md",
-    "Evidence/Lawyers and AI confidentiality.md",
     "Organizations/Y Combinator.md",
     "Organizations/Sovereign Tech Agency.md",
     "Organizations/NLnet NGI Zero.md",

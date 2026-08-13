@@ -33,6 +33,7 @@ from backend.billing.billing import PolarBilling
 from backend.custody import handoff_server
 from backend.daemons import pipeline, scheduler, wake_queue
 from backend.integrations.telegram import notify_error
+from backend.tee import tee_boot
 
 secrets.load()
 
@@ -267,6 +268,12 @@ def main():
 if __name__ == "__main__":
     execguard.lock_down(secrets.tee_required())
     _role = procwatch.role_of(__spec__.name)
+    # Attest before anything opens a mailbox. This ran as its own `python -m`
+    # in the entrypoint shell until that shell was removed; in-process it is
+    # the same check at the same point, minus a process. The role comes from
+    # the module that was started rather than from an argument, so a gate
+    # cannot be asked about a container it is not in.
+    tee_boot.gate_or_exit(_role)
     procwatch.start(_role, intrusion.reporter(_role))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     main()
